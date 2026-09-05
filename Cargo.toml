@@ -2,4 +2,4 @@
 members = [
   "crates/*",
 ]
-resolver = 2
+resolver = "2"
