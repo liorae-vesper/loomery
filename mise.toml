@@ -9,6 +9,8 @@ rust = "1.98.1"
 description = "Verifies integrity of the repository and its dependencies"
 run = """
 cargo check
+cargo clippy -- -D warnings
+cargo fmt --check
 cargo deny check
 cargo package --workspace
 """
