@@ -1,0 +1,122 @@
+// hk.pkl — git hooks for the trellis workspace (https://hk.jdx.dev)
+//
+// Design notes:
+//  * Git runs `pre-commit` BEFORE the commit message exists (verified on git 2.55),
+//    so message-based WIP detection CANNOT live in pre-commit. The cargo quality
+//    gates therefore run in the `commit-msg` hook, where {{commit_msg_file}} holds
+//    the final message.
+//  * A commit whose message contains the word "wip" (case-insensitive, word-boundary)
+//    bypasses ALL cargo gates (rustfmt, cargo deny, clippy -D warnings).
+//  * Merge commits are forbidden for a linear history:
+//      - `pre-merge-commit` blocks `git merge` before it can create a merge commit
+//      - `commit-msg` rejects messages shaped like merge commits ("Merge ...")
+//      - `pre-push` refuses to push any range containing merge commits
+//  * While the workspace is still scaffolding (crates/ has no Cargo.toml yet), the
+//    cargo commands can't even parse, so the gates skip gracefully with a notice.
+//    Delete the `find crates` guard lines once real crates exist.
+amends "package://github.com/jdx/hk/releases/download/v1.57.0/hk@1.57.0#/Config.pkl"
+
+min_hk_version = "1.57.0"
+default_branch = "main"
+
+hooks {
+  // ── commit: quality gates + no merge-shaped messages ──────────────────────
+  ["commit-msg"] {
+    fix = false // check-only
+    steps {
+      ["cargo-quality"] {
+        // no glob: always runs once and gates the whole workspace
+        check = #"""
+if grep -qiE '\bwip\b' '{{commit_msg_file}}'; then
+  echo "[hk] WIP commit detected -- skipping rustfmt/cargo deny/clippy gates"
+  exit 0
+fi
+test -n "$(find crates -maxdepth 2 -name Cargo.toml 2>/dev/null | head -n 1)" \
+  || { echo "[hk] no crates yet (scaffolding) -- skipping cargo gates"; exit 0; }
+cargo fmt --check \
+  && cargo deny check \
+  && cargo clippy --workspace --all-targets -- -D warnings
+"""#
+      }
+      ["no-merge-commits"] {
+        check = #"""
+if grep -qE '^Merge ' '{{commit_msg_file}}'; then
+  echo "[hk] merge commits are forbidden -- keep a linear history (use rebase)" >&2
+  exit 1
+fi
+"""#
+      }
+    }
+  }
+
+  // ── merge: hard-block `git merge` from creating merge commits ─────────────
+  ["pre-merge-commit"] {
+    fix = false
+    steps {
+      ["no-merge-commits"] {
+        check = #"""
+echo "[hk] merge commits are not allowed in this repo -- linear history only" >&2
+echo "    instead use: git rebase <branch> | git pull --rebase | git merge --ff-only" >&2
+echo "    (this merge was rejected; run 'git merge --abort' to clean up if needed)" >&2
+exit 1
+"""#
+      }
+    }
+  }
+
+  // ── push: refuse to push merge commits that slipped through ───────────────
+  ["pre-push"] {
+    fix = false
+    steps {
+      ["no-merge-commits"] {
+        check = #"""
+base="$(git rev-parse --verify --quiet origin/main 2>/dev/null \
+          || git rev-parse --verify --quiet origin/master 2>/dev/null \
+          || true)"
+if [ -z "$base" ]; then
+  echo "[hk] no origin/main or origin/master -- skipping linear-history check"
+  exit 0
+fi
+if git rev-list --merges "$base"..HEAD | grep -q .; then
+  echo "[hk] refusing to push: merge commit(s) exist in $base..HEAD" >&2
+  echo "    rebase them away for a linear history (git rebase -i $base)" >&2
+  exit 1
+fi
+"""#
+      }
+    }
+  }
+
+  // ── manual: `hk check` (read-only) and `hk fix` ───────────────────────────
+  ["check"] {
+    fix = false
+    steps {
+      ["cargo-quality"] {
+        check = #"""
+test -n "$(find crates -maxdepth 2 -name Cargo.toml 2>/dev/null | head -n 1)" \
+  || { echo "[hk] no crates yet (scaffolding) -- skipping cargo gates"; exit 0; }
+cargo fmt --check \
+  && cargo deny check \
+  && cargo clippy --workspace --all-targets -- -D warnings
+"""#
+      }
+    }
+  }
+  ["fix"] {
+    fix = true
+    steps {
+      ["rustfmt"] {
+        check = #"""
+test -n "$(find crates -maxdepth 2 -name Cargo.toml 2>/dev/null | head -n 1)" \
+  || { echo "[hk] no crates yet (scaffolding) -- skipping cargo gates"; exit 0; }
+cargo fmt --check
+"""#
+        fix = #"""
+test -n "$(find crates -maxdepth 2 -name Cargo.toml 2>/dev/null | head -n 1)" \
+  || { echo "[hk] no crates yet (scaffolding) -- skipping cargo gates"; exit 0; }
+cargo fmt
+"""#
+      }
+    }
+  }
+}
