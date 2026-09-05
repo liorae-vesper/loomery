@@ -1,2 +1,14 @@
 [tools]
+"cargo:cargo-deny" = "latest"
+cocogitto = "latest"
+hk = "latest"
 rust = "1.98.1"
+
+
+[tasks.verify]
+description = "Verifies integrity of the repository and its dependencies"
+run = """
+cargo check
+cargo deny check
+cargo package --workspace
+"""

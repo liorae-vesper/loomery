@@ -1,0 +1,49 @@
+[graph]
+targets = []
+all-features = true
+
+# cargo-deny 0.20+ schema:
+# - `vulnerability` and `notice` advisory severities were removed; vulnerability and
+#   unsound advisories now ALWAYS fail the check (see https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html)
+# - `unmaintained`/`unsound` are now scopes: all | workspace | transitive | none
+[advisories]
+unmaintained = "all"  # Fail on any unmaintained crate (direct or transitive)
+unsound = "all"       # Fail on any unsound crate (direct or transitive)
+yanked = "deny"       # Deny yanked crate versions (common attack vector)
+
+[licenses]
+# cargo-deny 0.20+ denies EVERY license unless explicitly allowed below;
+# the old severity keys (unlicensed/copyleft/allow-osi-fsf-free/default) were removed.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8      # High threshold to verify license headers
+
+[bans]
+multiple-versions = "warn"      # Flag duplicate versions of the same dependency
+wildcards = "deny"              # Block wildcard version specifiers (e.g., "*")
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+deny = [
+    { name = "openssl", reason = "Prefer pure Rust implementations like rustls." },
+    { name = "md-5", reason = "Cryptographically broken hash function." },
+    { name = "sha1", reason = "Cryptographically weak hash function." },
+]
+
+[sources]
+unknown-registry = "deny"  # Block dependencies from untrusted registries
+unknown-git = "deny"       # Block random git dependencies missing explicit approval
+allow-git = []             # List specific git repos here if strictly required
+allow-registry = [
+    "https://github.com/rust-lang/crates.io-index" # Lock down to official crates.io
+]
+
