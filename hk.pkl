@@ -6,7 +6,12 @@
 //    gates therefore run in the `commit-msg` hook, where {{commit_msg_file}} holds
 //    the final message.
 //  * A commit whose message contains the word "wip" (case-insensitive, word-boundary)
-//    bypasses ALL cargo gates (rustfmt, cargo deny, clippy -D warnings).
+//    bypasses ALL gates: the cargo quality gates (rustfmt, cargo deny, clippy -D warnings)
+//    and the cocogitto conventional-commit verification. WIP is the informal escape hatch.
+//  * Every other commit message must conform to the Conventional Commits spec, enforced
+//    via `cog verify` (cocogitto 7). Merge-shaped and fixup!/squash!/amend! messages are
+//    passed through so the repo's own rules (no-merge-commits) report the friendlier error
+//    and `git rebase --autosquash` fixups are not blocked.
 //  * Merge commits are forbidden for a linear history:
 //      - `pre-merge-commit` blocks `git merge` before it can create a merge commit
 //      - `commit-msg` rejects messages shaped like merge commits ("Merge ...")
@@ -20,10 +25,19 @@ min_hk_version = "1.57.0"
 default_branch = "main"
 
 hooks {
-  // ── commit: quality gates + no merge-shaped messages ──────────────────────
   ["commit-msg"] {
     fix = false // check-only
     steps {
+      ["cog-verify"] {
+        // fail-fast: reject non-conventional messages before the slow cargo gates run
+        check = #"""
+if grep -qiE '\bwip\b' '{{commit_msg_file}}'; then
+  echo "[hk] WIP commit detected -- skipping cocogitto conventional-commit verification"
+  exit 0
+fi
+cog verify --file '{{commit_msg_file}}' --ignore-merge-commits --ignore-fixup-commits
+"""#
+      }
       ["cargo-quality"] {
         // no glob: always runs once and gates the whole workspace
         check = #"""
@@ -49,7 +63,6 @@ fi
     }
   }
 
-  // ── merge: hard-block `git merge` from creating merge commits ─────────────
   ["pre-merge-commit"] {
     fix = false
     steps {
@@ -64,7 +77,6 @@ exit 1
     }
   }
 
-  // ── push: refuse to push merge commits that slipped through ───────────────
   ["pre-push"] {
     fix = false
     steps {
@@ -87,7 +99,6 @@ fi
     }
   }
 
-  // ── manual: `hk check` (read-only) and `hk fix` ───────────────────────────
   ["check"] {
     fix = false
     steps {
