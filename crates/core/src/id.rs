@@ -1,17 +1,17 @@
 //! Identity type for the Trellis core.
 //!
 //! [`Id`] is the canonical identifier used across the domain — aggregates,
-//! organizations, causation/correlation keys. Values are UUIDv7 strings, and
-//! the string form *is* the wire form (JSON) and the debug form.
+//! organizations, causation/correlation keys. Values are `UUIDv7` strings, and
+//! the string form *is* the wire form (`JSON`) and the debug form.
 
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use uuid::Uuid;
 
-/// A UUIDv7-based identifier.
+/// A `UUIDv7`-based identifier.
 ///
-/// Canonical form is the hyphenated 36-character UUIDv7 string, which is also
-/// the serde wire form (a plain JSON string, see D4 in `docs/design.md`).
+/// Canonical form is the hyphenated 36-character `UUIDv7` string, which is also
+/// the serde wire form (a plain `JSON` string, see D4 in `docs/design.md`).
 ///
 /// **Determinism rule:** the pure core never generates ids. [`Id::new`] is a
 /// shell-side (or test-helper) convenience; the core receives ids injected
@@ -20,11 +20,12 @@ use uuid::Uuid;
 pub struct Id(String);
 
 impl Id {
-    /// Creates a new [`Id`] from a fresh UUIDv7 value.
+    /// Creates a new [`Id`] from a fresh `UUIDv7` value.
     ///
     /// Wall-clock based (v7 embeds a millisecond timestamp) and unique per
     /// call. The pure core must receive ids through
     /// the command envelope so replays stay deterministic.
+    #[must_use]
     pub fn new() -> Self {
         let uuid = Uuid::now_v7();
         Id(uuid.to_string())

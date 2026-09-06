@@ -27,6 +27,7 @@ pub struct DomainError<C> {
 
 impl<C> DomainError<C> {
     /// Builds a domain error with no underlying cause.
+    #[must_use]
     pub fn new(code: C, message: &str) -> Self {
         DomainError {
             code,
@@ -36,6 +37,7 @@ impl<C> DomainError<C> {
     }
 
     /// Builds a domain error with an underlying cause attached.
+    #[must_use]
     pub fn with_cause(code: C, message: &str, cause: Option<anyhow::Error>) -> Self {
         DomainError {
             code,
