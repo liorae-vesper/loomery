@@ -125,7 +125,7 @@ macros (their generated code refers to `::core` paths). Keep it that way.
 | `trellis_core::actor::Actor` | `{ kind: User \| System \| Saga, user_id, saga_name }` — who performed an action |
 | `trellis_core::timestamp::Timestamp` | ms-since-epoch UTC wrapper (injected; the core never reads the clock) |
 | `trellis_core::error::DomainError<C>` | Generic-over-code domain error: `{ code, message, cause }` — each domain area brings its own code enum; `cause: Option<anyhow::Error>` chains shell-side errors |
-| `trellis_core::versioning` | Frozen payloads + upcast registry, folded at apply time (P2) |
+| `trellis_core::versioning` | Upcast contract: per-aggregate **static chains** (closed `KnownPayload` enum + exhaustive match), `UpcastCode`, `Upcaster` fn alias (P2) |
 | `trellis_core::aggregate::Aggregate` | The trait: `execute`, `apply`, plus shared `process` and `fold` helpers |
 | `trellis_core::execution::Execution` / `trellis_core::execution::IntegrationEvent` | Result of a command: events + optional outbox integration events |
 | `trellis_core::dedup::DedupIndex` | The idempotency window (P3) folded into group state |
@@ -258,9 +258,12 @@ the envelope is the published form, version-guarded by `envelope_version` +
 `payload_version`.
 
 - **Versioning (P2):** never mutate a shipped payload struct; a change is a new
-  frozen version (`TaskCreatedV2`), registered in the event-type registry.
-  `apply` upcasts at fold time; stored bytes are never rewritten (append-only).
-  Snapshots are versioned too; stale snapshots are upcast on load.
+  frozen version (`TaskCreatedV2`). Each aggregate owns its chains as a closed
+  `KnownPayload` enum + exhaustive `upcast` match (`versioning` docs) — adding
+  a version is a compile-time forcing function: new variant ⇒ missing arm ≠
+  builds. `apply` upcasts at fold time; stored bytes are never rewritten
+  (append-only). Snapshots are versioned too; stale snapshots are upcast on
+  load.
 - **Writer gating:** new event types are written only once all replicas run a
   supporting version (cluster capability flag on the control group). Decode
   first, write second.
@@ -399,7 +402,9 @@ naming for the first outbox slice:**
 - [x] `trellis_core::envelope::Command` (injected carrier, mirrors `Event`; round-trip test)
 - [x] `trellis_core::actor::Actor` (`User \| System \| Saga`, serde round-trip + equality tests)
 - [x] `trellis_core::error::DomainError<C>` (generic over code enum; `cause` chains via `anyhow`; display/equality/source tests)
-- [ ] `trellis_core::versioning` (upcast registry)
+- [x] `trellis_core::versioning` (per-aggregate static chain contract:
+      `UpcastCode` + `Upcaster` + documented pattern; chains land with each
+      aggregate)
 - [ ] `trellis_core::aggregate::Aggregate` (trait + `process`/`fold`)
 - [ ] `trellis_core::execution::Execution` / `IntegrationEvent`
 - [x] `trellis_core::dedup::DedupIndex` — bounded FIFO idempotency window

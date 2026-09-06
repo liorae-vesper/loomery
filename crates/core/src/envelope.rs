@@ -66,10 +66,8 @@ pub struct Event {
 
 /// The canonical command form — the input to the pure core's `execute`.
 ///
-/// This is what the shell builds with **injected** ids and timestamps (the
-/// core never reads the clock or mints ids — D5): the [`Timestamp::now`]
-/// style helpers live in the shell, the values arrive here. The
-/// `causation_key` carries the client-supplied idempotency key and is what
+/// This is what the shell builds with **injected** ids and timestamps.
+/// The `causation_key` carries the client-supplied idempotency key and is what
 /// `DedupIndex` keys on.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Command {
