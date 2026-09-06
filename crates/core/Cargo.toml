@@ -1,5 +1,5 @@
 [package]
-name = "core"
+name = "trellis-core"
 version = "0.1.0"
 edition = "2024"
 description = "Pure, deterministic core of the Trellis event-sourced backend"
@@ -11,9 +11,11 @@ workspace = true
 [dependencies]
 anyhow = "1.0.104"
 chrono = { version = "0.4.45", features = ["serde"] }
+dashmap = "6.2.1"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"
 uuid = { version = "1.26.0", features = ["v7"] }
 
 [dev-dependencies]
+proptest = "1"
 serde_json = "1"

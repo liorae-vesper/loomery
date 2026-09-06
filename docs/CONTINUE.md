@@ -24,13 +24,13 @@ planned for Phases 1+.
   `rustfmt.toml`, `deny.toml` license/advisory policy, hk hooks, cog
   conventional commits, `mise run verify`). See `docs/guardrails.md`.
 - **Pure core — scaffolded, in progress** (`docs/design.md` §3, §8 tracker):
-  - `core::id::Id` — UUIDv7 newtype (`uuid 1.26`, `now_v7`), canonical string
+  - `trellis_core::id::Id` — UUIDv7 newtype (`uuid 1.26`, `now_v7`), canonical string
     form, `Deref<Target = str>`, `From<&str>`/`From<String>` for injected ids;
     shell-side `Id::new()`; serde round-trip + shape tests.
-  - `core::envelope` — `Event` (fields per §6 of `design.md`) with a
+  - `trellis_core::envelope` — `Event` (fields per §6 of `design.md`) with a
     nested, versioned `Payload { version, data }`; serde round-trip + exact
     wire-format snapshot tests (frozen payloads, D3).
-  - `core::timestamp::Timestamp` — injected i64 ms-since-epoch (D5);
+  - `trellis_core::timestamp::Timestamp` — injected i64 ms-since-epoch (D5);
     `From<i64>`/`as_millis()`/`Deref`, `now()` is shell-side only.
   - 18 unit tests passing (serde round-trips, wire-format snapshot, id
     shape/uniqueness, timestamp ordering + clock sanity, actor + command
@@ -38,7 +38,7 @@ planned for Phases 1+.
 
 ## Conventions (non-negotiable)
 
-- **Domain-first modules**: `core::task::Task`, never `core::domain::task`.
+- **Domain-first modules**: `trellis_core::task::Task`, never `trellis_core::domain::task`.
 - State is a struct per aggregate; commands/events are **typed serde structs**
   with a `kind`/`event_type` discriminator, JSON payloads inside envelopes.
 - `fn execute(state, command) -> Result<Execution, DomainError>` and
@@ -53,7 +53,7 @@ planned for Phases 1+.
   envelopes).
 - Processing a command does NOT record the dedup entry — the shell records it
   after the events are durably appended and applied (contract documented in
-  `core::aggregate`).
+  `trellis_core::aggregate`).
 - Validate untrusted input against bounded, compile-time schemas at the
   boundary (see D10 in `design.md`) — never build types from user strings.
 
@@ -90,7 +90,7 @@ Dev/test: `proptest` (property tests), `cargo-llvm-cov`, `cargo-audit`,
 See `docs/design.md` §5 and the roadmap tracker. Scope:
 
 1. **Finish the pure core** — `Command`
-   (done — `core::envelope::Command`), `Error`/`Code`,
+   (done — `trellis_core::envelope::Command`), `Error`/`Code`,
    `Versioning`, `Execution`/
    `IntegrationEvent`, `DedupIndex`, the `Aggregate` trait, then the six
    aggregates (Organization, User, Workspace, Task, OrganizationAssignment,
