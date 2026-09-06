@@ -6,8 +6,10 @@ description = "Pure, deterministic core of the Trellis event-sourced backend"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+anyhow = "1.0.104"
 chrono = { version = "0.4.45", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.20"
 uuid = { version = "1.26.0", features = ["v7"] }
 
 [dev-dependencies]
