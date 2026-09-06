@@ -121,7 +121,7 @@ The core is a set of structs, traits, and pure functions living in
 | `core::envelope::Command` | Command form: `execute` input, carries injected `occurred_at` + ids |
 | `core::actor::Actor` | `{ kind: User \| System \| Saga, user_id, saga_name }` — who performed an action |
 | `core::timestamp::Timestamp` | ms-since-epoch UTC wrapper (injected; the core never reads the clock) |
-| `core::error` / `core::error::Code` | `DomainError { code, message }`; machine-readable dotted codes |
+| `core::error::DomainError<C>` | Generic-over-code domain error: `{ code, message, cause }` — each domain area brings its own code enum; `cause: Option<anyhow::Error>` chains shell-side errors |
 | `core::versioning` | Frozen payloads + upcast registry, folded at apply time (P2) |
 | `core::aggregate::Aggregate` | The trait: `execute`, `apply`, plus shared `process` and `fold` helpers |
 | `core::execution::Execution` / `core::execution::IntegrationEvent` | Result of a command: events + optional outbox integration events |
@@ -395,7 +395,7 @@ naming for the first outbox slice:**
 - [x] `core::timestamp::Timestamp` (injected i64 ms, D5; `now()` shell-side)
 - [x] `core::envelope::Command` (injected carrier, mirrors `Event`; round-trip test)
 - [x] `core::actor::Actor` (`User \| System \| Saga`, serde round-trip + equality tests)
-- [ ] `core::error` / `Code`
+- [x] `core::error::DomainError<C>` (generic over code enum; `cause` chains via `anyhow`; display/equality/source tests)
 - [ ] `core::versioning` (upcast registry)
 - [ ] `core::aggregate::Aggregate` (trait + `process`/`fold`)
 - [ ] `core::execution::Execution` / `IntegrationEvent`
@@ -408,7 +408,7 @@ naming for the first outbox slice:**
 - [ ] Property tests (`proptest`: replay determinism, fold associativity,
       dedup window, random-commands-never-crash)
 
-**Phase 0 gate ⏳** — envelope round-trip ✓ (15 tests); DedupIndex eviction
+**Phase 0 gate ⏳** — envelope round-trip ✓ (18 tests); DedupIndex eviction
 + dedup-hit tests green; transition-matrix property tests green for all six
 aggregates; coverage floor met.
 

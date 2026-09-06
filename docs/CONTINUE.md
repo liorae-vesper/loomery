@@ -32,9 +32,9 @@ planned for Phases 1+.
     wire-format snapshot tests (frozen payloads, D3).
   - `core::timestamp::Timestamp` — injected i64 ms-since-epoch (D5);
     `From<i64>`/`as_millis()`/`Deref`, `now()` is shell-side only.
-  - 15 unit tests passing (serde round-trips, wire-format snapshot, id
+  - 18 unit tests passing (serde round-trips, wire-format snapshot, id
     shape/uniqueness, timestamp ordering + clock sanity, actor + command
-    round-trips).
+    round-trips, error display/equality/source).
 
 ## Conventions (non-negotiable)
 
@@ -46,8 +46,8 @@ planned for Phases 1+.
   of prior state** (re-add/re-assign safe).
 - `Aggregate` trait with shared `process` (dedup hit → `Replayed`; miss →
   execute) and `fold` (sequential apply) helpers — module/trait first.
-- Errors: `DomainError` + dotted-string codes (`core::error::Code`). Never
-  rename an existing code.
+- Errors: `DomainError<C>` + per-area code enums (machine-readable
+  discriminators). Never rename an existing code.
 - **The core never reads the clock or generates IDs** — timestamps/IDs are
   injected through the command envelope (test helpers build deterministic
   envelopes).
