@@ -24,6 +24,7 @@
 )]
 
 pub mod actor;
+pub mod dedup;
 pub mod envelope;
 pub mod error;
 pub mod id;

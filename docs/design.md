@@ -112,27 +112,30 @@ serves the read — otherwise the gateway forwards the request to the leader.
 ## 3. Crate layout (pure core)
 
 The core is a set of structs, traits, and pure functions living in
-`crates/core`, mirroring the domain model.
+`crates/core`, mirroring the domain model. The package is named
+**`trellis-core`** — a crate literally named `core` would shadow the standard
+library's `core` in rustdoc/doctests and in any downstream build using proc
+macros (their generated code refers to `::core` paths). Keep it that way.
 
 | Item (crate path) | Purpose |
 |---|---|
-| `core::id::Id` | UUIDv7 wrapper (canonical string form) — see [D4](#d4-uuid-representation) |
-| `core::envelope::EventEnvelope` | The wrapper for every committed event (see §6) |
-| `core::envelope::Command` | Command form: `execute` input, carries injected `occurred_at` + ids |
-| `core::actor::Actor` | `{ kind: User \| System \| Saga, user_id, saga_name }` — who performed an action |
-| `core::timestamp::Timestamp` | ms-since-epoch UTC wrapper (injected; the core never reads the clock) |
-| `core::error::DomainError<C>` | Generic-over-code domain error: `{ code, message, cause }` — each domain area brings its own code enum; `cause: Option<anyhow::Error>` chains shell-side errors |
-| `core::versioning` | Frozen payloads + upcast registry, folded at apply time (P2) |
-| `core::aggregate::Aggregate` | The trait: `execute`, `apply`, plus shared `process` and `fold` helpers |
-| `core::execution::Execution` / `core::execution::IntegrationEvent` | Result of a command: events + optional outbox integration events |
-| `core::dedup::DedupIndex` | The idempotency window (P3) folded into group state |
-| `core::org::Organization` | Organization aggregate |
-| `core::user::User` | User aggregate |
-| `core::workspace::Workspace` | Workspace aggregate |
-| `core::task::Task` | Task aggregate |
-| `core::membership::OrganizationAssignment` | Organization ↔ User membership |
-| `core::membership::WorkspaceMembership` | Workspace ↔ User membership with role |
-| `core::test_helpers` / `proptest` support | Deterministic envelope builder for tests |
+| `trellis_core::id::Id` | UUIDv7 wrapper (canonical string form) — see [D4](#d4-uuid-representation) |
+| `trellis_core::envelope::EventEnvelope` | The wrapper for every committed event (see §6) |
+| `trellis_core::envelope::Command` | Command form: `execute` input, carries injected `occurred_at` + ids |
+| `trellis_core::actor::Actor` | `{ kind: User \| System \| Saga, user_id, saga_name }` — who performed an action |
+| `trellis_core::timestamp::Timestamp` | ms-since-epoch UTC wrapper (injected; the core never reads the clock) |
+| `trellis_core::error::DomainError<C>` | Generic-over-code domain error: `{ code, message, cause }` — each domain area brings its own code enum; `cause: Option<anyhow::Error>` chains shell-side errors |
+| `trellis_core::versioning` | Frozen payloads + upcast registry, folded at apply time (P2) |
+| `trellis_core::aggregate::Aggregate` | The trait: `execute`, `apply`, plus shared `process` and `fold` helpers |
+| `trellis_core::execution::Execution` / `trellis_core::execution::IntegrationEvent` | Result of a command: events + optional outbox integration events |
+| `trellis_core::dedup::DedupIndex` | The idempotency window (P3) folded into group state |
+| `trellis_core::org::Organization` | Organization aggregate |
+| `trellis_core::user::User` | User aggregate |
+| `trellis_core::workspace::Workspace` | Workspace aggregate |
+| `trellis_core::task::Task` | Task aggregate |
+| `trellis_core::membership::OrganizationAssignment` | Organization ↔ User membership |
+| `trellis_core::membership::WorkspaceMembership` | Workspace ↔ User membership with role |
+| `trellis_core::test_helpers` / `proptest` support | Deterministic envelope builder for tests |
 
 ### 3.1 Core contracts
 
@@ -389,28 +392,31 @@ naming for the first outbox slice:**
 - [x] `mise run verify` — check + clippy -D warnings + fmt + deny + package
 
 ### Pure core (Phase 0)
-- [x] `core::id::Id` (UUIDv7 wrapper, serde round-trip + shape tests)
-- [x] `core::envelope::EventEnvelope` + `Payload` (serde round-trip +
+- [x] `trellis_core::id::Id` (UUIDv7 wrapper, serde round-trip + shape tests)
+- [x] `trellis_core::envelope::EventEnvelope` + `Payload` (serde round-trip +
       exact wire-format snapshot test)
-- [x] `core::timestamp::Timestamp` (injected i64 ms, D5; `now()` shell-side)
-- [x] `core::envelope::Command` (injected carrier, mirrors `Event`; round-trip test)
-- [x] `core::actor::Actor` (`User \| System \| Saga`, serde round-trip + equality tests)
-- [x] `core::error::DomainError<C>` (generic over code enum; `cause` chains via `anyhow`; display/equality/source tests)
-- [ ] `core::versioning` (upcast registry)
-- [ ] `core::aggregate::Aggregate` (trait + `process`/`fold`)
-- [ ] `core::execution::Execution` / `IntegrationEvent`
-- [ ] `core::dedup::DedupIndex`
-- [ ] `core::org::Organization`
-- [ ] `core::user::User`
-- [ ] `core::workspace::Workspace`
-- [ ] `core::task::Task`
-- [ ] `core::membership` (OrganizationAssignment / WorkspaceMembership)
+- [x] `trellis_core::timestamp::Timestamp` (injected i64 ms, D5; `now()` shell-side)
+- [x] `trellis_core::envelope::Command` (injected carrier, mirrors `Event`; round-trip test)
+- [x] `trellis_core::actor::Actor` (`User \| System \| Saga`, serde round-trip + equality tests)
+- [x] `trellis_core::error::DomainError<C>` (generic over code enum; `cause` chains via `anyhow`; display/equality/source tests)
+- [ ] `trellis_core::versioning` (upcast registry)
+- [ ] `trellis_core::aggregate::Aggregate` (trait + `process`/`fold`)
+- [ ] `trellis_core::execution::Execution` / `IntegrationEvent`
+- [x] `trellis_core::dedup::DedupIndex` — bounded FIFO idempotency window
+      (`dashmap` + `VecDeque`, deterministic eviction; unit + **proptest**
+      model-based and metadata-retention properties)
+- [ ] `trellis_core::org::Organization`
+- [ ] `trellis_core::user::User`
+- [ ] `trellis_core::workspace::Workspace`
+- [ ] `trellis_core::task::Task`
+- [ ] `trellis_core::membership` (OrganizationAssignment / WorkspaceMembership)
 - [ ] Property tests (`proptest`: replay determinism, fold associativity,
-      dedup window, random-commands-never-crash)
+      random-commands-never-crash) *(dedup window ✓ — model-based eviction
+      + re-insert-never-refreshes)*
 
-**Phase 0 gate ⏳** — envelope round-trip ✓ (18 tests); DedupIndex eviction
-+ dedup-hit tests green; transition-matrix property tests green for all six
-aggregates; coverage floor met.
+**Phase 0 gate ⏳** — envelope round-trip ✓ (24 tests incl. proptest);
+DedupIndex eviction + dedup-hit property tests ✓; transition-matrix property
+tests green for all six aggregates; coverage floor met.
 
 ### Shell (Phases 1–7)
 - [ ] Phase 1 control plane *(next — OpenRaft 0.9 spike)*
