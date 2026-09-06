@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! The envelope types — the published forms of domain commands and events.
 //!
 //! Every command that enters a Raft group is a [`Command`]; every committed

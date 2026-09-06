@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Injected timestamps for the Trellis core.
 //!
 //! [`Timestamp`] is a millisecond-since-epoch value. The pure core never

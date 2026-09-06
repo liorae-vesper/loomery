@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Actor identity — *who* performed an action.
 //!
 //! Every command and event is attributable to an [`Actor`]: a user (an

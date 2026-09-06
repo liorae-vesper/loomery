@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Domain errors — the pure core's `Result::Err` type.
 //!
 //! [`DomainError`] is generic over its **code** type `C`, so each part of the

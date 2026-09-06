@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! The pure, deterministic core of Trellis.
 //!
 //! This crate holds the domain model and the envelope machinery. It is

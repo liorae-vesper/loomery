@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Identity type for the Trellis core.
 //!
 //! [`Id`] is the canonical identifier used across the domain — aggregates,
