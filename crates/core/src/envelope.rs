@@ -19,7 +19,7 @@ pub type Key = Id;
 
 /// A frozen, versioned event payload.
 ///
-/// `data` is the serialized event value (a JSON string, D3); `version` is the
+/// `data` is the serialized event value (a `JSON` string, D3); `version` is the
 /// payload schema version so `apply` can upcast old events (P2). Old payloads
 /// must never be mutated — a schema change is a new version.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Serialize, Deserialize)]

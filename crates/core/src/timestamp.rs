@@ -10,7 +10,7 @@ use std::ops::Deref;
 /// A millisecond-since-epoch timestamp.
 ///
 /// Injected into command envelopes by the shell; the core treats it as
-/// opaque, ordered data. Serializes as a bare JSON number, keeping the
+/// opaque, ordered data. Serializes as a bare `JSON` number, keeping the
 /// wire format compact and deterministic.
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord, Hash, Clone, Deserialize, Serialize)]
 pub struct Timestamp(i64);
@@ -20,12 +20,14 @@ impl Timestamp {
     ///
     /// **Shell-side convenience only** — the pure core must use values
     /// injected through the command envelope so replays stay deterministic.
+    #[must_use]
     pub fn now() -> Self {
         let ms = chrono::Utc::now().timestamp_millis();
         Timestamp(ms)
     }
 
     /// Returns the millisecond value.
+    #[must_use]
     pub fn as_millis(&self) -> i64 {
         self.0
     }
