@@ -9,7 +9,6 @@
 //! See the architecture, contracts and decisions in `docs/design.md` at the
 //! repository root.
 
-#![warn(missing_docs)]
 // Strict lints (unwrap/expect/panicking slicing/overflowing math) are denied in
 // production code — test code may use them freely, via a single crate-level
 // escape hatch active only under `cfg(test)`.

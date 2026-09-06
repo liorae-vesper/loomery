@@ -29,3 +29,4 @@ string_slice = "deny"            # Blocks str[start..end] panics
 
 [workspace.lints.rust]
 unconditional_panic = "deny"
+missing_docs = "warn"
