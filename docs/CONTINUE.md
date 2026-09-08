@@ -44,8 +44,8 @@ planned for Phases 1+.
 - `fn execute(state, command) -> Result<Execution, DomainError>` and
   `fn apply(state, event) -> State`; **creation events build state regardless
   of prior state** (re-add/re-assign safe).
-- `Aggregate` trait with shared `process` (dedup hit → `Replayed`; miss →
-  execute) and `fold` (sequential apply) helpers — module/trait first.
+- `AggregatePlan` trait with shared `process` (dedup hit → `Replayed`; miss →
+  `prepare`) and `fold` (sequential apply) helpers — trait first.
 - Errors: `DomainError<C>` + per-area code enums (machine-readable
   discriminators). Never rename an existing code.
 - **The core never reads the clock or generates IDs** — timestamps/IDs are
