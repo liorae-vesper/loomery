@@ -120,18 +120,23 @@ mod tests {
     /// A minimal aggregate: one creation event, one mutation event. The
     /// type itself is the plan — no instance needed.
     struct Counter;
+    #[derive(PartialEq, Debug)]
+    struct CounterState(u32);
 
-    impl AggregatePlan<u32, EmptyCode> for Counter {
-        fn prepare(state: u32, _command: Command) -> Result<Execution, DomainError<EmptyCode>> {
-            if state > 0 {
+    impl AggregatePlan<CounterState, EmptyCode> for Counter {
+        fn prepare(
+            state: CounterState,
+            _command: Command,
+        ) -> Result<Execution, DomainError<EmptyCode>> {
+            if state.0 > 0 {
                 Err(DomainError::new(EmptyCode::OnlyOnce, "already created"))
             } else {
                 Ok(Execution {})
             }
         }
 
-        fn apply(state: u32, _event: Event) -> u32 {
-            state + 1
+        fn apply(state: CounterState, _event: Event) -> CounterState {
+            CounterState(state.0 + 1)
         }
     }
 
@@ -181,7 +186,7 @@ mod tests {
     #[test]
     fn miss_prepares_and_executes() {
         let registry = Registry::new(10);
-        let result = process::<_, _, Counter>(0, &registry, command());
+        let result = process::<_, _, Counter>(CounterState(0), &registry, command());
         assert!(matches!(result, Processed::Executed(_)));
     }
 
@@ -190,21 +195,88 @@ mod tests {
         let mut registry = Registry::new(10);
         registry.insert(Id::from("cause-1"), 42);
 
-        let result = process::<_, _, Counter>(0, &registry, command());
+        let result = process::<_, _, Counter>(CounterState(0), &registry, command());
         assert!(matches!(result, Processed::Replayed { index: 42 }));
     }
 
     #[test]
     fn rejection_surfaces_the_error() {
         let registry = Registry::new(10);
-        let result = process::<_, _, Counter>(1, &registry, command());
+        let result = process::<_, _, Counter>(CounterState(1), &registry, command());
         assert!(matches!(result, Processed::Error(_)));
     }
 
     #[test]
     fn fold_is_sequential_apply() {
         let events = [event(), event(), event()];
-        let state = fold::<_, _, Counter>(0, &events);
-        assert_eq!(state, 3);
+        let state = fold::<_, _, Counter>(CounterState(0), &events);
+        assert_eq!(state, CounterState(3));
+    }
+
+    // ---------------------------------------------------------------------
+    // Property tests: the aggregate algebra, held to its guarantees.
+
+    use proptest::prelude::*;
+
+    proptest! {
+        // fold is associative: replaying events in any chunking yields the
+        // same state — the identity replays and distributes over commits.
+        #[test]
+        fn fold_associativity_chunked(start in 0u32..128, a in 0usize..64, b in 0usize..64) {
+            let events = vec![event(); a + b];
+            let whole = fold::<_, _, Counter>(CounterState(start), &events);
+            let (left, right) = events.split_at(a);
+            let mid = fold::<_, _, Counter>(CounterState(start), left);
+            let split = fold::<_, _, Counter>(mid, right);
+            assert_eq!(whole, split);
+        }
+
+        // replay determinism: identical events produce identical state.
+        #[test]
+        fn fold_is_deterministic(start in 0u32..128, k in 0usize..128) {
+            let events = vec![event(); k];
+            let first = fold::<_, _, Counter>(CounterState(start), &events);
+            let second = fold::<_, _, Counter>(CounterState(start), &events);
+            assert_eq!(first, second);
+        }
+
+        // the counter's concrete algebra: k increments are exactly +k.
+        #[test]
+        fn fold_counts_events(start in 0u32..128, k in 0u32..128) {
+            let events = vec![event(); k as usize];
+            let state = fold::<_, _, Counter>(CounterState(start), &events);
+            assert_eq!(state, CounterState(start + k));
+        }
+
+        // prepare is the creation gate: only a fresh (zero) state is accepted.
+        #[test]
+        fn prepare_accepts_only_zero_state(n in 0u32..1000) {
+            let result = Counter::prepare(CounterState(n), command());
+            if let Err(e) = result {
+                assert_eq!(e.code, EmptyCode::OnlyOnce);
+            } else {
+                assert_eq!(n, 0);
+            }
+        }
+
+        // process classifies every command: a dedup hit replays with the
+        // recorded anchor index; a miss runs prepare (Executed or Error) —
+        // never anything else, never panics.
+        #[test]
+        fn process_dedup_classification(already_seen in any::<bool>(), index in 0usize..1000) {
+            let mut registry = Registry::new(16);
+            if already_seen {
+                registry.insert(Id::from("cause-1"), index);
+            }
+
+            let result = process::<_, _, Counter>(CounterState(0), &registry, command());
+            match result {
+                Processed::Replayed { index: got } => {
+                    assert!(already_seen);
+                    assert_eq!(got, index);
+                }
+                Processed::Executed(_) | Processed::Error(_) => assert!(!already_seen),
+            }
+        }
     }
 }
