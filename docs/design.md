@@ -140,15 +140,21 @@ macros (their generated code refers to `::core` paths). Keep it that way.
 ### 3.1 Core contracts
 
 ```rust
-fn prepare(state: Option<&State>, command: &Command)
-    -> Result<Execution, DomainError>;
+// Static associated functions — the plan is its *type* (module-style, like
+// Elixir's `mod.execute/2`); there is no instance to borrow.
+trait AggregatePlan<State, ErrorCode> {
+    fn prepare(state: State, command: Command)
+        -> Result<Execution, DomainError<ErrorCode>>;
 
-fn apply(state: Option<State>, event: &EventEnvelope) -> State;
+    fn apply(state: State, event: Event) -> State;
+}
 
-// shared: dedup hit -> Replayed; miss -> prepare
-fn process(state, dedup, command) -> ProcessOutcome;
+// shared: dedup hit -> Replayed; miss -> A::prepare
+fn process::<State, ErrorCode, A: AggregatePlan<State, ErrorCode>>(
+    state, registry, command) -> Processed<ErrorCode>;
 // fold = sequential apply
-fn fold(state, events: impl IntoIterator<Item = EventEnvelope>) -> State;
+fn fold::<State, ErrorCode, A: AggregatePlan<State, ErrorCode>>(
+    state, events: &[Event]) -> State;
 ```
 
 Critical-section contract: processing a command does **not** record the dedup

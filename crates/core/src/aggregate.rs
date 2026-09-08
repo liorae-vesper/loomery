@@ -8,6 +8,11 @@
 //! `apply` folds an [`Event`] into state. `process` composes the
 //! [`Registry`] dedup check with `prepare`; `fold` is the replay primitive.
 //!
+//! The plan is its **type**, not an instance: trait methods are static
+//! associated functions, dispatched through the type parameter `A` — the
+//! Rust mirror of Elixir's module dispatch (`mod.execute/2`). `self` is
+//! deliberately absent: a zero-data plan has no state worth borrowing.
+//!
 //! **Critical-section contract:** `process` does **not** record the dedup
 //! entry — the shell records it *after* the events are durably appended and
 //! applied, so a failed append needs no rollback.
@@ -28,7 +33,8 @@ pub struct Execution {}
 ///
 /// Implementations are plain data transformers: no I/O, no wall clock, no
 /// randomness (determinism is what makes replicated apply identical on
-/// every `OpenRaft` replica — `docs/design.md` §2.1).
+/// every `OpenRaft` replica — `docs/design.md` §2.1). Methods are **static**:
+/// the type is the plan, so implementors hold no instance data.
 pub trait AggregatePlan<State, ErrorCode> {
     /// Validates `command` against `state` and produces the events to append.
     ///
@@ -39,14 +45,14 @@ pub trait AggregatePlan<State, ErrorCode> {
     ///
     /// Returns `Err(DomainError)` when the command violates the aggregate's
     /// preconditions.
-    fn prepare(&self, state: State, command: Command) -> Result<Execution, DomainError<ErrorCode>>;
+    fn prepare(state: State, command: Command) -> Result<Execution, DomainError<ErrorCode>>;
 
     /// Folds `event` into `state`, yielding the new state.
     ///
     /// Given the same state and event, always yields the same state — the
     /// replay primitive. Creation events build state regardless of prior
     /// state (re-add/re-assign safe).
-    fn apply(&self, state: State, event: Event) -> State;
+    fn apply(state: State, event: Event) -> State;
 }
 
 /// The outcome of [`process`]: the command was executed, replayed from the
@@ -68,12 +74,11 @@ pub enum Processed<ErrorCode> {
 /// Composes the dedup check with command preparation.
 ///
 /// A hit on the command's `causation_key` yields [`Processed::Replayed`]
-/// (no re-execution); a miss runs [`AggregatePlan::prepare`].
+/// (no re-execution); a miss runs `A::prepare` on the plan type `A`.
 ///
 /// Does **not** record the dedup entry — see the module docs.
 #[must_use]
 pub fn process<State, ErrorCode, A: AggregatePlan<State, ErrorCode>>(
-    aggregate: &A,
     state: State,
     registry: &Registry,
     command: Command,
@@ -84,7 +89,7 @@ pub fn process<State, ErrorCode, A: AggregatePlan<State, ErrorCode>>(
         };
     }
 
-    match aggregate.prepare(state, command) {
+    match A::prepare(state, command) {
         Ok(execution) => Executed(execution),
         Err(error) => Error(error),
     }
@@ -92,33 +97,32 @@ pub fn process<State, ErrorCode, A: AggregatePlan<State, ErrorCode>>(
 
 /// Folds events into state, in order — the replay primitive.
 ///
-/// `fold(aggregate, state, events)` must equal applying each event
-/// sequentially: the algebraic guarantee every replica depends on.
+/// `fold::<A>(state, events)` must equal applying each event sequentially:
+/// the algebraic guarantee every replica depends on.
 #[must_use]
 pub fn fold<State, ErrorCode, A: AggregatePlan<State, ErrorCode>>(
-    aggregate: &A,
     state: State,
     events: &[Event],
 ) -> State {
     events
         .iter()
-        .fold(state, |state, event| aggregate.apply(state, event.clone()))
+        .fold(state, |state, event| A::apply(state, event.clone()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::actor::Actor;
+    use crate::envelope::Payload;
     use crate::id::Id;
+    use crate::timestamp::Timestamp;
 
-    /// A minimal aggregate: one creation event, one mutation event.
+    /// A minimal aggregate: one creation event, one mutation event. The
+    /// type itself is the plan — no instance needed.
     struct Counter;
 
     impl AggregatePlan<u32, EmptyCode> for Counter {
-        fn prepare(
-            &self,
-            state: u32,
-            _command: Command,
-        ) -> Result<Execution, DomainError<EmptyCode>> {
+        fn prepare(state: u32, _command: Command) -> Result<Execution, DomainError<EmptyCode>> {
             if state > 0 {
                 Err(DomainError::new(EmptyCode::OnlyOnce, "already created"))
             } else {
@@ -126,7 +130,7 @@ mod tests {
             }
         }
 
-        fn apply(&self, state: u32, _event: Event) -> u32 {
+        fn apply(state: u32, _event: Event) -> u32 {
             state + 1
         }
     }
@@ -143,12 +147,12 @@ mod tests {
             aggregate_id: Id::from("agg-1"),
             organization_id: Id::from("org-1"),
             workspace_id: None,
-            occurred_at: crate::timestamp::Timestamp::from(1_700_000_000_000),
+            occurred_at: Timestamp::from(1_700_000_000_000),
             causation_key: Id::from("cause-1"),
             correlation_id: Id::from("corr-1"),
-            actor: crate::actor::Actor::System,
+            actor: Actor::System,
             command_type: "counter.create".to_owned(),
-            payload: crate::envelope::Payload {
+            payload: Payload {
                 version: 1,
                 data: "{}".to_owned(),
             },
@@ -162,12 +166,12 @@ mod tests {
             aggregate_id: Id::from("agg-1"),
             organization_id: Id::from("org-1"),
             workspace_id: None,
-            occurred_at: crate::timestamp::Timestamp::from(1_700_000_000_000),
+            occurred_at: Timestamp::from(1_700_000_000_000),
             causation_key: Id::from("cause-1"),
             correlation_id: Id::from("corr-1"),
-            actor: crate::actor::Actor::System,
+            actor: Actor::System,
             event_type: "counter.incremented".to_owned(),
-            payload: crate::envelope::Payload {
+            payload: Payload {
                 version: 1,
                 data: "{}".to_owned(),
             },
@@ -177,7 +181,7 @@ mod tests {
     #[test]
     fn miss_prepares_and_executes() {
         let registry = Registry::new(10);
-        let result = process(&Counter, 0, &registry, command());
+        let result = process::<_, _, Counter>(0, &registry, command());
         assert!(matches!(result, Processed::Executed(_)));
     }
 
@@ -186,21 +190,21 @@ mod tests {
         let mut registry = Registry::new(10);
         registry.insert(Id::from("cause-1"), 42);
 
-        let result = process(&Counter, 0, &registry, command());
+        let result = process::<_, _, Counter>(0, &registry, command());
         assert!(matches!(result, Processed::Replayed { index: 42 }));
     }
 
     #[test]
     fn rejection_surfaces_the_error() {
         let registry = Registry::new(10);
-        let result = process(&Counter, 1, &registry, command());
+        let result = process::<_, _, Counter>(1, &registry, command());
         assert!(matches!(result, Processed::Error(_)));
     }
 
     #[test]
     fn fold_is_sequential_apply() {
         let events = [event(), event(), event()];
-        let state = fold(&Counter, 0, &events);
+        let state = fold::<_, _, Counter>(0, &events);
         assert_eq!(state, 3);
     }
 }
