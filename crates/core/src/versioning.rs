@@ -9,7 +9,7 @@
 //! both the `TryFrom` entry *and* the `upcast` arm land. Unknown pairs are a
 //! first-class error, never a silent pass-through.
 //!
-//! Stored bytes are never rewritten (append-only, `docs/design.md` §6):
+//! Stored bytes are never rewritten:
 //! frozen `V{n}` structs and their chains stay in the codebase forever so old
 //! events decode forever.
 //!
