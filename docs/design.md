@@ -22,7 +22,7 @@ workspaces, projects, tasks, documentation, and AI-assisted workflows. Its
 non-negotiable principles:
 
 1. **Append-only.** Never mutate; corrections are compensating events.
-2. **Pure core.** `execute`/`apply` are deterministic; all I/O in the shell.
+2. **Pure core.** `prepare`/`apply` are deterministic; all I/O in the shell.
 3. **One consensus group per organization** + a control group (users, orgs,
    router).
 4. **Genesis bootstrap.** Tenant groups are born with their first three events
@@ -50,7 +50,7 @@ execute(state, command) -> Result<Execution, DomainError>
 apply(state, event)     -> State
 ```
 
-- `execute` validates a command against state and produces the events to append
+- `prepare` validates a command against state and produces the events to append
   (optionally paired with outbox integration events), or returns an error. It is
   **pure** — no I/O, no wall clock, no randomness, no message passing.
 - `apply` folds an event into state; given the same state and event it always
@@ -121,12 +121,12 @@ macros (their generated code refers to `::core` paths). Keep it that way.
 |---|---|
 | `trellis_core::id::Id` | UUIDv7 wrapper (canonical string form) — see [D4](#d4-uuid-representation) |
 | `trellis_core::envelope::EventEnvelope` | The wrapper for every committed event (see §6) |
-| `trellis_core::envelope::Command` | Command form: `execute` input, carries injected `occurred_at` + ids |
+| `trellis_core::envelope::Command` | Command form: `prepare` input, carries injected `occurred_at` + ids |
 | `trellis_core::actor::Actor` | `{ kind: User \| System \| Saga, user_id, saga_name }` — who performed an action |
 | `trellis_core::timestamp::Timestamp` | ms-since-epoch UTC wrapper (injected; the core never reads the clock) |
 | `trellis_core::error::DomainError<C>` | Generic-over-code domain error: `{ code, message, cause }` — each domain area brings its own code enum; `cause: Option<anyhow::Error>` chains shell-side errors |
 | `trellis_core::versioning` | Upcast contract: per-aggregate **static chains** (closed `KnownPayload` enum + exhaustive match), `UpcastCode`, `Upcaster` fn alias (P2) |
-| `trellis_core::aggregate::Aggregate` | The trait: `execute`, `apply`, plus shared `process` and `fold` helpers |
+| `trellis_core::aggregate::AggregatePlan` | The trait: `prepare`, `apply`, plus shared `process` and `fold` helpers |
 | `trellis_core::execution::Execution` / `trellis_core::execution::IntegrationEvent` | Result of a command: events + optional outbox integration events |
 | `trellis_core::dedup::DedupIndex` | The idempotency window (P3) folded into group state |
 | `trellis_core::org::Organization` | Organization aggregate |
@@ -140,12 +140,12 @@ macros (their generated code refers to `::core` paths). Keep it that way.
 ### 3.1 Core contracts
 
 ```rust
-fn execute(state: Option<&State>, command: &Command)
+fn prepare(state: Option<&State>, command: &Command)
     -> Result<Execution, DomainError>;
 
 fn apply(state: Option<State>, event: &EventEnvelope) -> State;
 
-// shared: dedup hit -> Replayed; miss -> execute
+// shared: dedup hit -> Replayed; miss -> prepare
 fn process(state, dedup, command) -> ProcessOutcome;
 // fold = sequential apply
 fn fold(state, events: impl IntoIterator<Item = EventEnvelope>) -> State;
@@ -189,7 +189,7 @@ core receives values through the command envelope. Tracked in
 
 ### Phase 0 — Pure core foundation
 `Id`, `Timestamp`, `Actor`, `Error`/`ErrorCode`, `Event`/`Command`
-(serde_json), versioning/upcast machinery, the `Aggregate` trait, `DedupIndex`,
+(serde_json), versioning/upcast machinery, the `AggregatePlan` trait, `DedupIndex`,
 and the first aggregates (Organization, User, Workspace, Task,
 OrganizationAssignment, WorkspaceMembership) with `proptest` property tests.
 
@@ -405,7 +405,9 @@ naming for the first outbox slice:**
 - [x] `trellis_core::versioning` (per-aggregate static chain contract:
       `UpcastCode` + `Upcaster` + documented pattern; chains land with each
       aggregate)
-- [ ] `trellis_core::aggregate::Aggregate` (trait + `process`/`fold`)
+- [x] `trellis_core::aggregate::AggregatePlan` (`prepare`/`apply` trait +
+      `process`/`fold` free fns; dedup-on-`causation_key`; 4 unit tests;
+      `Execution {}` placeholder — real `trellis_core::execution` lands next)
 - [ ] `trellis_core::execution::Execution` / `IntegrationEvent`
 - [x] `trellis_core::dedup::DedupIndex` — bounded FIFO idempotency window
       (`dashmap` + `VecDeque`, deterministic eviction; unit + **proptest**

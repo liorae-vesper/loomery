@@ -14,10 +14,13 @@ use dashmap::mapref::one::Ref;
 use std::collections::VecDeque;
 
 /// Dedup metadata for a recorded id.
+///
+/// Leaked through [`Registry::lookup`]'s guard return type, so it is `pub`
+/// — but its fields stay private; callers read them through the `Ref` deref.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     /// Log index of the first event the recorded command produced.
-    first_log_index: usize,
+    pub(crate) first_log_index: usize,
 }
 
 /// A bounded, deterministic idempotency window keyed by command id.
