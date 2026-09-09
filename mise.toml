@@ -1,7 +1,15 @@
+[settings]
+# Enforce installs from the committed mise.lock (no silent re-resolution to new
+# versions). Run `mise lock` after changing tools to update it.
+locked = true
+
 [tools]
-"cargo:cargo-deny" = "latest"
-cocogitto = "latest"
-hk = "latest"
+"cargo:cargo-audit" = "0.22.2"
+"cargo:cargo-crap" = "0.5.0"
+"cargo:cargo-deny" = "0.20.2"
+"cargo:cargo-llvm-cov" = "0.9.1"
+cocogitto = "7.0.0"
+hk = "1.57.0"
 rust = "1.98.1"
 
 
@@ -9,8 +17,27 @@ rust = "1.98.1"
 description = "Verifies integrity of the repository and its dependencies"
 run = """
 cargo check
-cargo clippy -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 cargo deny check
 cargo package --workspace
+"""
+
+[tasks.test]
+description = "Runs the full test suite"
+run = "cargo test --workspace"
+
+[tasks.audit]
+description = "Checks dependencies for security advisories"
+run = "cargo audit"
+
+[tasks.coverage]
+description = "Generates a coverage report (llvm-cov, floor 80%)"
+run = "cargo llvm-cov --workspace --lcov --output-path lcov.info"
+
+[tasks.crap]
+description = "Computes CRAP scores from coverage (fails above threshold)"
+run = """
+cargo llvm-cov --workspace --lcov --output-path lcov.info
+cargo crap --workspace --lcov lcov.info --fail-above
 """
