@@ -2,18 +2,70 @@
 
 //! The aggregate contract — the pure core's command/event behaviour.
 //!
-//! An [`AggregatePlan`] is pure and deterministic: `prepare` validates a
-//! [`Command`] against the current state and produces an [`Execution`]
-//! (nothing is executed — the plan *prepares*; the shell commits it), and
-//! `apply` folds an [`Event`] into state. `process` composes the
-//! [`Registry`] dedup check with `prepare`; `fold` is the replay primitive.
+//! # What an aggregate is
 //!
-//! The plan is its **type**, not an instance: trait methods are static
-//! associated functions, dispatched through the type parameter `A` — the
-//! Rust mirror of Elixir's module dispatch (`mod.execute/2`). `self` is
-//! deliberately absent: a zero-data plan has no state worth borrowing.
+//! An [`AggregatePlan`] is the **pure logic** for one domain shape (a task,
+//! a workspace, …): `prepare` validates a [`Command`] against the current
+//! state and produces an [`Execution`]; `apply` folds an [`Event`] into
+//! state. Nothing executes — the plan *prepares*; the shell commits through
+//! consensus and every replica folds.
 //!
-//! **Critical-section contract:** `process` does **not** record the dedup
+//! The plan is its **type**, not an instance: methods are static associated
+//! functions dispatched through the type parameter `A` (the Rust mirror of
+//! Elixir's `mod.execute/2`), with no borrowable `self`. One plan type
+//! serves **many states** — every stream (per organization / per aggregate
+//! instance) folds its own `State` through the same [`AggregatePlan`].
+//!
+//! # Where the data comes from
+//!
+//! `prepare` receives exactly two things, and everything else must be
+//! derivable from them:
+//!
+//! - **`state`** — the *truth*: everything the aggregate already learned
+//!   from its own events (folded on every replica). Never re-read from a
+//!   store, never fetched — it arrives as a value.
+//! - **`command`** — the *intent* plus **injected metadata**: what the user
+//!   wants (payload fields), and the ids / `occurred_at` / `actor` /
+//!   `causation_key` the shell mints at the boundary. The core never mints
+//!   or reads these itself (D5).
+//!
+//! **External data** (blocking-but-pure work, cross-group facts) is
+//! pre-computed at the **edge by the shell and delivered inside the command
+//! payload** — e.g. an `argon2` password hash, a rate read once at the
+//! gateway (#7 edge pre-computation). The core never *gathers*: it
+//! *receives*. Cross-aggregate or control-group data must ride in the
+//! command too (no core-side reads of other groups — the no-2PC rule,
+//! D10-style).
+//!
+//! # How to use it (Shape A — full state, focused destructuring)
+//!
+//! 1. Define the plan as a zero-sized marker and its state as a data
+//!    struct: `struct Task; struct TaskState { … }`.
+//! 2. `impl AggregatePlan<TaskState, TaskCode> for Task`.
+//! 3. In `prepare`, match on `command.command_type` and destructure **only**
+//!    the state fields that command needs: `let TaskState { status, … } =
+//!    &state;` — the “50-field state” shrinks to the fields in scope.
+//!    Validate → derive the *result* data → build the events. The events
+//!    **are** the resulted data: everything the system must remember about
+//!    this command is frozen into their payloads, nothing is recomputed or
+//!    fetched later.
+//! 4. In `apply`, a pure fold: `State { field: new_value, ..state }`
+//!    struct-update copies everything except the touched field.
+//!
+//! The **shell** owns everything else: loading state, edge pre-computation,
+//! building the [`Command`], calling [`process`], committing via consensus,
+//! and recording the dedup entry **after** durable append+apply.
+//!
+//! # What the core must never do
+//!
+//! - No I/O, no wall clock, no randomness, no message passing.
+//! - No reads of other aggregates or the control group — cross-group data
+//!   comes through the command.
+//! - Nothing that could diverge between replicas: the committed command is
+//!   re-`prepare`d on **every** replica, so purity is what keeps replicas
+//!   agreeing (and what makes replays from a snapshot deterministic).
+//!
+//! **Critical-section contract:** [`process`] does **not** record the dedup
 //! entry — the shell records it *after* the events are durably appended and
 //! applied, so a failed append needs no rollback.
 
@@ -65,8 +117,29 @@ pub struct Execution {
 pub trait AggregatePlan<State, ErrorCode> {
     /// Validates `command` against `state` and produces the events to append.
     ///
-    /// `state` is the aggregate's current state; commands that mutate it are
-    /// rejected with a [`DomainError`]. Does **not** execute anything.
+    /// # Data in
+    ///
+    /// - `state` — the aggregate's current truth (per stream, folded from
+    ///   its own events).
+    /// - `command` — user intent + injected metadata (ids, `occurred_at`,
+    ///   `actor`, `causation_key`) + edge-precomputed externals in the
+    ///   payload (e.g. `argon2` hashes — see module docs).
+    ///
+    /// # Discipline (Shape A)
+    ///
+    /// ```ignore
+    /// match command.command_type.as_str() {
+    ///     "task.rename" => {
+    ///         // destructure only what THIS command touches
+    ///         let TaskState { title, status, .. } = &state;
+    ///         // validate … then derive the RESULT and freeze it into events
+    ///     }
+    ///     // …
+    /// }
+    /// ```
+    ///
+    /// The events carry the full resulted data — nothing is recomputed or
+    /// re-fetched after commit.
     ///
     /// # Errors
     ///
@@ -76,9 +149,14 @@ pub trait AggregatePlan<State, ErrorCode> {
 
     /// Folds `event` into `state`, yielding the new state.
     ///
-    /// Given the same state and event, always yields the same state — the
-    /// replay primitive. Creation events build state regardless of prior
-    /// state (re-add/re-assign safe).
+    /// Pure and total: given the same state and event it always yields the
+    /// same state — the replay primitive. Creation events build state
+    /// regardless of prior state (re-add/re-assign safe). Prefer struct
+    /// update syntax so untouched fields flow through:
+    ///
+    /// ```ignore
+    /// TaskState { status: EventStatus::Done, ..state }
+    /// ```
     fn apply(state: State, event: Event) -> State;
 }
 
