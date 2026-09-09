@@ -22,12 +22,39 @@ use crate::dedup::Registry;
 use crate::envelope::{Command, Event};
 use crate::error::DomainError;
 
+/// The content type of an outbound (integration) event payload.
+#[derive(Debug)]
+pub enum ContentType {
+    /// Plain text payload.
+    Text,
+    /// JSON payload.
+    JSON,
+}
+
+/// An outbound integration event — emitted *beside* the domain events and
+/// published by the shell after commit (the outbox payload, D8/D11).
+#[derive(Debug)]
+pub struct OutboundEvent {
+    /// The NATS subject / integration channel (e.g. `trellis.email.invitation`).
+    pub subject: &'static str,
+    /// The payload's content type.
+    pub content_type: ContentType,
+    /// The serialized payload bytes.
+    pub payload: Vec<u8>,
+}
+
 /// The result of a successful [`AggregatePlan::prepare`]: the events to
-/// append (and, later, optional outbox integration events).
-///
-/// Placeholder while [`trellis_core::execution`] lands — the shell commits
-/// this result through consensus, then folds the produced events.
-pub struct Execution {}
+/// append through consensus, plus optional outbound integration events.
+#[derive(Debug)]
+pub struct Execution {
+    /// The domain events to commit via the log — these get folded into state
+    /// on every replica.
+    pub events: Vec<Event>,
+    /// Optional outbound integration events (emails, notifications…), kept
+    /// off the consensus hot path — the outbox tailer publishes these after
+    /// commit (no direct network calls from the consensus loop).
+    pub outbound_events: Vec<OutboundEvent>,
+}
 
 /// The pure command/event behaviour of one aggregate.
 ///
@@ -131,7 +158,14 @@ mod tests {
             if state.0 > 0 {
                 Err(DomainError::new(EmptyCode::OnlyOnce, "already created"))
             } else {
-                Ok(Execution {})
+                Ok(Execution {
+                    events: vec![event()],
+                    outbound_events: vec![OutboundEvent {
+                        subject: "trellis.counter.incremented",
+                        content_type: ContentType::JSON,
+                        payload: b"{}".to_vec(),
+                    }],
+                })
             }
         }
 
@@ -188,6 +222,22 @@ mod tests {
         let registry = Registry::new(10);
         let result = process::<_, _, Counter>(CounterState(0), &registry, command());
         assert!(matches!(result, Executed(_)));
+    }
+
+    #[test]
+    fn prepare_returns_planned_events_and_outbound() {
+        let execution = Counter::prepare(CounterState(0), command()).unwrap();
+
+        // one planned domain event, folded on every replica after commit
+        assert_eq!(execution.events.len(), 1);
+        assert_eq!(execution.events[0].event_type, "counter.incremented");
+
+        // one outbound integration event for the shell's outbox (D8/D11)
+        assert_eq!(execution.outbound_events.len(), 1);
+        let outbound = &execution.outbound_events[0];
+        assert_eq!(outbound.subject, "trellis.counter.incremented");
+        assert!(matches!(outbound.content_type, ContentType::JSON));
+        assert_eq!(outbound.payload, b"{}");
     }
 
     #[test]

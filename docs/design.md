@@ -127,7 +127,7 @@ macros (their generated code refers to `::core` paths). Keep it that way.
 | `trellis_core::error::DomainError<C>` | Generic-over-code domain error: `{ code, message, cause }` — each domain area brings its own code enum; `cause: Option<anyhow::Error>` chains shell-side errors |
 | `trellis_core::versioning` | Upcast contract: per-aggregate **static chains** (closed `KnownPayload` enum + exhaustive match), `UpcastCode`, `Upcaster` fn alias (P2) |
 | `trellis_core::aggregate::AggregatePlan` | The trait: `prepare`, `apply`, plus shared `process` and `fold` helpers |
-| `trellis_core::execution::Execution` / `trellis_core::execution::IntegrationEvent` | Result of a command: events + optional outbox integration events |
+| `trellis_core::aggregate::Execution` (+ `OutboundEvent`, `ContentType`) | Result of a command: domain events to commit + optional outbound integration events (D8/D11) |
 | `trellis_core::dedup::DedupIndex` | The idempotency window (P3) folded into group state |
 | `trellis_core::org::Organization` | Organization aggregate |
 | `trellis_core::user::User` | User aggregate |
@@ -412,9 +412,11 @@ naming for the first outbox slice:**
       `UpcastCode` + `Upcaster` + documented pattern; chains land with each
       aggregate)
 - [x] `trellis_core::aggregate::AggregatePlan` (`prepare`/`apply` trait +
-      `process`/`fold` free fns; dedup-on-`causation_key`; 4 unit tests;
-      `Execution {}` placeholder — real `trellis_core::execution` lands next)
-- [ ] `trellis_core::execution::Execution` / `IntegrationEvent`
+      `process`/`fold` free fns; dedup-on-`causation_key`; property + unit
+      tests)
+- [x] `trellis_core::aggregate::Execution` — real result type: `events` to
+      commit + `outbound_events` (subject/content-type/payload); carried by
+      `Executed(Execution)`; covered by unit test (35 total)
 - [x] `trellis_core::dedup::DedupIndex` — bounded FIFO idempotency window
       (`dashmap` + `VecDeque`, deterministic eviction; unit + **proptest**
       model-based and metadata-retention properties)
