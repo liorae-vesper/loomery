@@ -73,7 +73,7 @@ pub enum Processed<ErrorCode> {
 
 /// Composes the dedup check with command preparation.
 ///
-/// A hit on the command's `causation_key` yields [`Processed::Replayed`]
+/// A hit on the command's `causation_key` yields [`Replayed`]
 /// (no re-execution); a miss runs `A::prepare` on the plan type `A`.
 ///
 /// Does **not** record the dedup entry — see the module docs.
@@ -187,7 +187,7 @@ mod tests {
     fn miss_prepares_and_executes() {
         let registry = Registry::new(10);
         let result = process::<_, _, Counter>(CounterState(0), &registry, command());
-        assert!(matches!(result, Processed::Executed(_)));
+        assert!(matches!(result, Executed(_)));
     }
 
     #[test]
@@ -196,14 +196,14 @@ mod tests {
         registry.insert(Id::from("cause-1"), 42);
 
         let result = process::<_, _, Counter>(CounterState(0), &registry, command());
-        assert!(matches!(result, Processed::Replayed { index: 42 }));
+        assert!(matches!(result, Replayed { index: 42 }));
     }
 
     #[test]
     fn rejection_surfaces_the_error() {
         let registry = Registry::new(10);
         let result = process::<_, _, Counter>(CounterState(1), &registry, command());
-        assert!(matches!(result, Processed::Error(_)));
+        assert!(matches!(result, Error(_)));
     }
 
     #[test]
@@ -271,11 +271,11 @@ mod tests {
 
             let result = process::<_, _, Counter>(CounterState(0), &registry, command());
             match result {
-                Processed::Replayed { index: got } => {
+                Replayed { index: got } => {
                     assert!(already_seen);
                     assert_eq!(got, index);
                 }
-                Processed::Executed(_) | Processed::Error(_) => assert!(!already_seen),
+                Executed(_) | Error(_) => assert!(!already_seen),
             }
         }
     }
