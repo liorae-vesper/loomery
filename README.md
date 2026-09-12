@@ -69,7 +69,8 @@ Trellis follows Gary Bernhardt's **Functional Core, Imperative Shell** pattern.
 ```
 trellis/
 ├── crates/
-│   └── core/          # trellis-core — the pure, deterministic domain core
+│   ├── core/          # trellis-core — the pure, deterministic domain core
+│   └── genesis/       # trellis-genesis — the deterministic bootstrap script
 ├── docs/              # design docs, research notes, and guardrails
 ├── deny.toml          # cargo-deny policy (licenses, advisories, bans)
 ├── hk.pkl             # pre-commit hooks (commit message lint + quality gates)
@@ -77,10 +78,13 @@ trellis/
 └── rustfmt.toml
 ```
 
-The core crate currently provides `Id` (UUIDv7), `Timestamp`, `Actor`,
-`EventEnvelope`/`Command`, `DomainError`, the `AggregatePlan` trait
-(`prepare`/`apply`), the `DedupIndex` idempotency window, and versioning/upcast
-machinery.
+The core crate currently provides `Id` (canonical UUID: minted `v7` or derived
+`v5`), `Key` (derived `UUIDv5` identity — causation keys, event ids, intent
+fingerprints), `Timestamp`, `Actor`, `Event`/`Command`, `DomainError`, the
+`AggregatePlan` trait (`prepare`/`apply`), the `Registry` idempotency window,
+and versioning/upcast machinery. See D12 in `docs/design.md` for the identity
+model. The genesis crate builds on it: the bootstrap's three commands with
+derived identity, plus crash-resume progress read back from the log.
 
 ---
 
