@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Causation and idempotency key types for the Trellis core.
+//! Causation, idempotency and derived-identity keys for the Trellis core.
+//!
+//! [`Key`] is the *derived* half of identity (D12): a `UUIDv5` computed from a
+//! namespace plus data, so every replica, resumer and client computes the same
+//! value from the same inputs. Minted identity lives in [`crate::id::Id`].
 
+use crate::id::{Id, InvalidId, parse_canonical};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use thiserror::Error;
-use uuid::{Uuid, Variant, Version};
+use uuid::{Uuid, Version};
 
 /// A deterministic, namespace-scoped identifier derived by `UUIDv5` hashing.
 ///
@@ -36,14 +42,22 @@ use uuid::{Uuid, Variant, Version};
 ///   has two spellings and a `UUIDv7` [`Id`] cannot be smuggled in where a
 ///   `Key` is expected.
 ///
+/// Derived *entity* ids go through this type too: `Id::from(Key::new(
+/// NAMESPACE, data))` is the same id on every replica and after every crash
+/// (D12). Use it when the entity's identity is a function of the intent —
+/// "the default workspace of org X" — and mint an [`Id::new`] only when each
+/// attempt is genuinely a new thing.
+///
 /// The fallible direction is `TryFrom`, so there is no `From<&str>` or
 /// `From<String>` for `Key`; [`String::from`] converts a `Key` back to its
-/// canonical text.
+/// canonical text. Deserialization goes through the same validation: a `JSON`
+/// envelope carrying a `UUIDv7` — or an alias spelling — where a `Key`
+/// belongs fails to decode instead of smuggling it into a `_key` field.
 ///
 /// # Examples
 ///
 /// ```
-/// use trellis_core::id::Key;
+/// use trellis_core::key::Key;
 /// use uuid::Uuid;
 ///
 /// let namespace = Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);
@@ -61,6 +75,7 @@ use uuid::{Uuid, Variant, Version};
 /// );
 /// ```
 #[derive(Clone, PartialEq, PartialOrd, Debug, Eq, Hash, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String")]
 pub struct Key(String);
 
 impl Key {
@@ -83,25 +98,16 @@ impl Key {
         Key(uuid.to_string())
     }
 
-    /// Validates `value` as a canonical `UUIDv5` and returns the parsed UUID.
+    /// Parses `value` and checks the two rules specific to a [`Key`]: the
+    /// canonical spelling and variant every id must have (shared with
+    /// [`Id::parse`]), plus version 5.
     ///
     /// Private: the public contract is [`TryFrom`].
-    fn parse_canonical(value: &str) -> Result<Uuid, InvalidKey> {
-        let uuid = Uuid::parse_str(value).map_err(|_| InvalidKey::NotAUuid)?;
-
-        // Exactly one spelling per key. Uppercase, braces, URNs and the
-        // 32-character simple form all parse as the same UUID, but admitting
-        // them would let two spellings name one key.
-        if uuid.to_string() != value {
-            return Err(InvalidKey::NotCanonical);
-        }
+    fn parse_v5(value: &str) -> Result<Uuid, InvalidKey> {
+        let uuid = parse_canonical(value)?;
 
         if uuid.get_version() != Some(Version::Sha1) {
             return Err(InvalidKey::WrongVersion(uuid.get_version_num()));
-        }
-
-        if uuid.get_variant() != Variant::RFC4122 {
-            return Err(InvalidKey::WrongVariant);
         }
 
         Ok(uuid)
@@ -115,19 +121,12 @@ impl Key {
 /// response is a needless liability.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum InvalidKey {
-    /// The input is not a UUID in any accepted textual form.
-    #[error("key is not a UUID")]
-    NotAUuid,
-    /// The input is a UUID, but not in the canonical lowercase hyphenated
-    /// form (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
-    #[error("key is not in canonical lowercase hyphenated form")]
-    NotCanonical,
+    /// The input is not a canonical UUID at all (see [`InvalidId`]).
+    #[error(transparent)]
+    NotAnId(#[from] InvalidId),
     /// The input is canonical, but not a version 5 (`SHA-1` derived) UUID.
     #[error("key must be a UUIDv5, got version {0}")]
     WrongVersion(usize),
-    /// The input is canonical, but its variant bits are not `RFC 4122`.
-    #[error("key must use the RFC 4122 variant")]
-    WrongVariant,
 }
 
 impl TryFrom<&str> for Key {
@@ -144,7 +143,7 @@ impl TryFrom<&str> for Key {
     /// # Examples
     ///
     /// ```
-    /// use trellis_core::id::Key;
+    /// use trellis_core::key::Key;
     /// use uuid::Uuid;
     ///
     /// let namespace = Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);
@@ -159,7 +158,7 @@ impl TryFrom<&str> for Key {
     /// assert!(Key::try_from("018f2c3d-4e5f-7071-8293-a4b5c6d7e8f9").is_err());
     /// ```
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let uuid = Key::parse_canonical(value)?;
+        let uuid = Key::parse_v5(value)?;
         Ok(Key(uuid.to_string()))
     }
 }
@@ -175,7 +174,7 @@ impl TryFrom<String> for Key {
     /// As [`TryFrom<&str>`](Key::try_from): [`InvalidKey`] for anything that
     /// is not a canonical `UUIDv5`.
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Key::parse_canonical(&value)?;
+        Key::parse_v5(&value)?;
         // `value` is proven canonical, so it can be adopted as-is.
         Ok(Key(value))
     }
@@ -192,6 +191,25 @@ impl From<&Key> for String {
     /// Returns a copy of the canonical `UUIDv5` text.
     fn from(key: &Key) -> Self {
         key.0.clone()
+    }
+}
+
+impl fmt::Display for Key {
+    /// Writes the canonical `UUIDv5` text.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<Key> for Id {
+    /// Adopts a derived [`Key`] as an entity [`Id`].
+    ///
+    /// Both wrap the same canonical UUID text; this is the bridge for
+    /// *derived* entity identity (D12):
+    /// `Id::from(Key::new(NAMESPACE, data))` is the same id on every replica,
+    /// resumer and client, unlike a minted [`Id::new`].
+    fn from(key: Key) -> Self {
+        Id::from(key.0)
     }
 }
 
@@ -281,7 +299,11 @@ mod tests {
     #[test]
     fn key_try_from_rejects_a_non_uuid() {
         for input in ["", "not-a-key", "0b70f891-312b-5838-88f7-bbbf6acc462"] {
-            assert_eq!(Key::try_from(input), Err(InvalidKey::NotAUuid), "{input}");
+            assert_eq!(
+                Key::try_from(input),
+                Err(InvalidKey::NotAnId(InvalidId::NotAUuid)),
+                "{input}"
+            );
         }
     }
 
@@ -300,7 +322,7 @@ mod tests {
         for alias in aliases {
             assert_eq!(
                 Key::try_from(alias.as_str()),
-                Err(InvalidKey::NotCanonical),
+                Err(InvalidKey::NotAnId(InvalidId::NotCanonical)),
                 "{alias}"
             );
         }
@@ -313,9 +335,9 @@ mod tests {
             Key::try_from("018f2c3d-4e5f-7071-8293-a4b5c6d7e8f9"),
             Err(InvalidKey::WrongVersion(7))
         );
-        // The nil UUID reports version 0.
+        // Version nibble `0` with RFC 4122 variant bits reports version 0.
         assert_eq!(
-            Key::try_from("00000000-0000-0000-0000-000000000000"),
+            Key::try_from("018f2c3d-4e5f-0071-8293-a4b5c6d7e8f9"),
             Err(InvalidKey::WrongVersion(0))
         );
     }
@@ -326,7 +348,13 @@ mod tests {
         // difference from the frozen key in the golden test above.
         assert_eq!(
             Key::try_from("0b70f891-312b-5838-0871-bbbf6acc4629"),
-            Err(InvalidKey::WrongVariant)
+            Err(InvalidKey::NotAnId(InvalidId::WrongVariant))
+        );
+        // The nil UUID is version 0 *and* NCS variant; the variant is what
+        // rejects it first.
+        assert_eq!(
+            Key::try_from("00000000-0000-0000-0000-000000000000"),
+            Err(InvalidKey::NotAnId(InvalidId::WrongVariant))
         );
     }
 
@@ -336,7 +364,37 @@ mod tests {
         let expected = Uuid::new_v5(&NS, b"org:42").to_string();
 
         assert_eq!(String::from(&key), expected);
-        assert_eq!(String::from(key), expected);
+        assert_eq!(String::from(key.clone()), expected);
+        assert_eq!(key.to_string(), expected); // Display
+    }
+
+    #[test]
+    fn deserialization_enforces_the_v5_invariant() {
+        // The invariant holds at the wire boundary too, not only in `TryFrom`:
+        // a `UUIDv7` cannot be smuggled into a `Key` field through JSON.
+        let v7 = "\"018f2c3d-4e5f-7071-8293-a4b5c6d7e8f9\"";
+        assert!(serde_json::from_str::<Key>(v7).is_err());
+
+        // Aliases are rejected as well — one key, one spelling.
+        let alias = format!("\"{}\"", Key::new(&NS, "a").to_string().to_uppercase());
+        assert!(serde_json::from_str::<Key>(&alias).is_err());
+
+        // The canonical form round-trips.
+        let canonical = format!("\"{}\"", Key::new(&NS, "a"));
+        assert_eq!(
+            serde_json::from_str::<Key>(&canonical).unwrap(),
+            Key::new(&NS, "a")
+        );
+    }
+
+    #[test]
+    fn key_becomes_a_derived_entity_id() {
+        let key = Key::new(&NS, "org:42");
+        let id = Id::from(key.clone());
+
+        // Same canonical text, and it survives strict id parsing.
+        assert_eq!(&*id, key.to_string().as_str());
+        assert_eq!(Id::parse(&id).unwrap(), id);
     }
 
     // ---------------------------------------------------------------------
@@ -418,7 +476,7 @@ mod tests {
             prop_assume!(upper != canonical);
             prop_assert_eq!(
                 Key::try_from(upper.as_str()),
-                Err(InvalidKey::NotCanonical)
+                Err(InvalidKey::NotAnId(InvalidId::NotCanonical))
             );
             prop_assert_eq!(Key::try_from(canonical).unwrap(), key);
         }
