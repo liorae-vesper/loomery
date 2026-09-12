@@ -32,3 +32,11 @@ pub mod id;
 pub mod key;
 pub mod timestamp;
 pub mod versioning;
+
+/// The `Uuid` type this crate's API speaks in — [`key::Key::new`] takes a
+/// namespace `&Uuid`.
+///
+/// Re-exported so callers declare namespaces with *this* version of the
+/// `uuid` crate instead of adding their own dependency and risking two
+/// incompatible copies in one graph.
+pub use uuid::Uuid;
