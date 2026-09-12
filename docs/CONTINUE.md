@@ -35,12 +35,16 @@ planned for Phases 1+.
     wire-format snapshot tests (frozen payloads, D3).
   - `trellis_core::timestamp::Timestamp` — injected i64 ms-since-epoch (D5);
     `From<i64>`/`as_millis()`/`Deref`, `now()` is shell-side only.
-  - `crates/genesis` (`trellis-genesis`) — deterministic bootstrap identity:
-    `Step`, `step_key`, `default_workspace_id` derived under a generation
-    namespace + golden tests. Commands not built yet.
-  - 76 unit tests + 3 doctests passing (serde round-trips, wire-format
+  - `crates/genesis` (`trellis-genesis`) — the bootstrap script: derived
+    identity (`step_key`, `bootstrap_correlation_key`, `default_workspace_id`,
+    `owner_membership_id`, `command_id`), the three commands at their ①②③ wire
+    names, and `Bootstrap::{command, next_command, progress}` — progress is
+    read from the committed events by causation key, so a resumed run knows
+    what already happened. Worker loop (Raft client) still to come.
+  - 92 unit tests + 3 doctests passing (serde round-trips, wire-format
     snapshot, id/key derivation + validation, dedup window, timestamp ordering,
-    actor/command round-trips, error display/equality/source, genesis ids).
+    actor/command round-trips, error display/equality/source, genesis plan +
+    crash-resume ordering).
 
 ## Conventions (non-negotiable)
 

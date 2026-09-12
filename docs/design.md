@@ -506,8 +506,12 @@ tests green for all six aggregates; coverage floor met.
   - [ ] Control group on OpenRaft (`RaftLogStorage`/`RaftStateMachine` +
         `RaftNetwork` over tonic): `shell::control`
   - [ ] Router read model + RYW `X-Min-Index` hold
-  - [ ] Genesis bootstrap worker (deterministic ①②③, uuid_v5-style causation,
-        crash-resume idempotency)
+  - [x] Genesis script (`crates/genesis`): the deterministic ①②③ plan —
+        derived keys/ids, commands, and progress read back from the committed
+        events by causation key
+  - [ ] Genesis bootstrap worker: the loop around the script (Raft client,
+        propose/wait, crash-resume wiring, leader membership) — the script
+        itself is done
   - [ ] Outbox slice: `shell::outbox` publisher + `async-nats` transport (D8/D11)
   - [ ] Saga-runner seed + `InvitationSaga` (acceptance → assignment + membership)
   - [ ] axum gateway: command plane, causation minting, edge pre-compute
