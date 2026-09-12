@@ -26,10 +26,17 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.8      # High threshold to verify license headers
+# The allowlist is deliberately broader than today's dependency tree, so an unused
+# entry is expected rather than a finding (`allow` keeps it out of the report).
+unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"      # Flag duplicate versions of the same dependency
 wildcards = "deny"              # Block wildcard version specifiers (e.g., "*")
+# Workspace-internal crates are depended on as version-less path deps on purpose
+# (`trellis-core = { workspace = true }`); a path dep is not a registry wildcard,
+# so allow it while still rejecting real `*` requirements.
+allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
@@ -38,6 +45,14 @@ deny = [
     { name = "openssl", reason = "Prefer pure Rust implementations like rustls." },
     { name = "md-5", reason = "Cryptographically broken hash function." },
     { name = "sha1", reason = "Cryptographically weak hash function." },
+]
+
+# Known, accepted duplicate: `syn` 2 is pulled in only for Windows targets
+# (`windows-implement`/`windows-interface` via chrono's `iana-time-zone`), while
+# everything else is on `syn` 3. Nothing in this workspace ships for Windows today,
+# so the second copy is not actionable.
+skip = [
+    { name = "syn", version = "=2.0.119" },
 ]
 
 [sources]
