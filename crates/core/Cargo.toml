@@ -1,9 +1,10 @@
 [package]
 name = "trellis-core"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
 description = "Pure, deterministic core of the Trellis event-sourced backend"
-license = "MPL-2.0"
 
 [lints]
 workspace = true
