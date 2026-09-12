@@ -9,7 +9,8 @@
 //! see `docs/design.md` §6.
 
 use crate::actor::Actor;
-use crate::id::{Id, Key};
+use crate::id::Id;
+use crate::key::Key;
 use crate::timestamp::Timestamp;
 use serde::{Deserialize, Serialize};
 

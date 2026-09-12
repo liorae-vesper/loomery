@@ -8,7 +8,7 @@
 //! order** (a FIFO queue), not hash-map order — so every replica folds the
 //! index identically and the window stays deterministic.
 
-use crate::id::Key;
+use crate::key::Key;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
 use std::collections::VecDeque;
