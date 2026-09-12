@@ -15,12 +15,34 @@ use std::collections::VecDeque;
 
 /// Dedup metadata for a recorded key.
 ///
-/// Leaked through [`Registry::lookup`]'s guard return type, so it is `pub`
-/// — but its fields stay private; callers read them through the `Ref` deref.
+/// Leaked through [`Registry::lookup`]'s guard return type, so it is `pub` —
+/// but its fields stay private and are read through the accessors below (the
+/// shell is a different crate and cannot see `pub(crate)` fields).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     /// Log index of the first event the recorded command produced.
     pub(crate) first_log_index: usize,
+    /// Fingerprint of the recorded command's intent.
+    pub(crate) fingerprint: Key,
+}
+
+impl Entry {
+    /// Log index of the first event the recorded command produced.
+    #[must_use]
+    pub fn first_log_index(&self) -> usize {
+        self.first_log_index
+    }
+
+    /// Fingerprint of the recorded command's intent
+    /// ([`Command::fingerprint`](crate::envelope::Command::fingerprint)).
+    ///
+    /// A hit whose fingerprint differs from the incoming command's is a
+    /// **reused idempotency key on a different request**: answer a conflict,
+    /// never replay the recorded result (D12).
+    #[must_use]
+    pub fn fingerprint(&self) -> &Key {
+        &self.fingerprint
+    }
 }
 
 /// A bounded, deterministic idempotency window keyed by the command's
@@ -59,6 +81,12 @@ impl Registry {
 
     /// Records `key`, evicting the oldest recorded key once the window is full.
     ///
+    /// `fingerprint` is the recorded command's intent fingerprint
+    /// ([`Command::fingerprint`](crate::envelope::Command::fingerprint)):
+    /// recording it is what lets a later hit be checked for *key reuse* — the
+    /// same `causation_key` arriving with a different intent — instead of
+    /// blindly replaying the first result.
+    ///
     /// Recording an already-recorded key is a no-op (idempotent) — the shell
     /// checks [`lookup`](Registry::lookup) first and treats a hit as a
     /// dedup replay instead of re-executing.
@@ -66,7 +94,7 @@ impl Registry {
     /// Takes `&mut self`: the FIFO frontier is plain data, mutated in place
     /// during the fold (unlike `lookup`, which stays `&self` for concurrent
     /// shell reads via `dashmap`).
-    pub fn insert(&mut self, key: Key, first_log_index: usize) {
+    pub fn insert(&mut self, key: Key, fingerprint: Key, first_log_index: usize) {
         if self.entries.contains_key(&key) {
             return;
         }
@@ -79,7 +107,13 @@ impl Registry {
         }
 
         self.window.push_back(key.clone());
-        self.entries.insert(key, Entry { first_log_index });
+        self.entries.insert(
+            key,
+            Entry {
+                first_log_index,
+                fingerprint,
+            },
+        );
     }
 }
 
@@ -95,26 +129,34 @@ mod tests {
         Key::new(&KEY_NS, &format!("id-{n}"))
     }
 
+    /// The intent fingerprint recorded alongside `key(n)`.
+    fn fingerprint(n: u8) -> Key {
+        Key::new(&KEY_NS, &format!("intent-{n}"))
+    }
+
     #[test]
     fn records_and_lookup_hits() {
         let mut reg = Registry::new(10);
 
         assert!(reg.lookup(&key(1)).is_none());
 
-        reg.insert(key(1), 7);
+        reg.insert(key(1), fingerprint(1), 7);
         let hit = reg.lookup(&key(1)).unwrap();
         assert_eq!(hit.first_log_index, 7);
+        assert_eq!(hit.first_log_index(), 7);
+        // The recorded intent survives, so reuse can be detected later.
+        assert_eq!(hit.fingerprint(), &fingerprint(1));
     }
 
     #[test]
     fn evicts_oldest_when_window_is_full() {
         let mut reg = Registry::new(2);
 
-        reg.insert(key(1), 1);
-        reg.insert(key(2), 2);
+        reg.insert(key(1), fingerprint(1), 1);
+        reg.insert(key(2), fingerprint(2), 2);
         assert!(reg.lookup(&key(1)).is_some());
 
-        reg.insert(key(3), 3);
+        reg.insert(key(3), fingerprint(3), 3);
 
         assert!(reg.lookup(&key(1)).is_none()); // oldest, evicted
         assert!(reg.lookup(&key(2)).is_some());
@@ -126,7 +168,7 @@ mod tests {
         let mut reg = Registry::new(3);
 
         for n in 1..=100 {
-            reg.insert(key(n), usize::from(n));
+            reg.insert(key(n), fingerprint(n), usize::from(n));
         }
 
         assert_eq!(reg.window.len(), 3);
@@ -139,11 +181,14 @@ mod tests {
     fn re_inserting_a_recorded_id_is_a_no_op() {
         let mut reg = Registry::new(2);
 
-        reg.insert(key(1), 1);
-        reg.insert(key(1), 999); // same key: should not refresh or duplicate
-        reg.insert(key(2), 2);
+        reg.insert(key(1), fingerprint(1), 1);
+        // Same key: neither the index nor the recorded intent is refreshed.
+        reg.insert(key(1), fingerprint(9), 999);
+        reg.insert(key(2), fingerprint(2), 2);
 
-        assert!(reg.lookup(&key(1)).is_some());
+        let hit = reg.lookup(&key(1)).unwrap();
+        assert_eq!(hit.first_log_index(), 1);
+        assert_eq!(hit.fingerprint(), &fingerprint(1));
         assert_eq!(reg.window.len(), 2);
     }
 
@@ -176,7 +221,7 @@ mod tests {
                 if reg.lookup(&id).is_some() {
                     continue;
                 }
-                reg.insert(id, first_log_index);
+                reg.insert(id, fingerprint(raw), first_log_index);
 
                 seen.insert(raw);
                 if !model.contains(&raw) {
@@ -195,6 +240,7 @@ mod tests {
             for raw in &model {
                 let hit = reg.lookup(&key(*raw)).unwrap();
                 assert_eq!(hit.first_log_index, usize::from(*raw));
+                assert_eq!(hit.fingerprint(), &fingerprint(*raw));
             }
 
             // Every id that was seen but NOT a model survivor is a miss:
@@ -217,11 +263,11 @@ mod tests {
             let mut reg = Registry::new(max_entries);
             let id = key(raw);
 
-            reg.insert(id.clone(), usize::from(raw));
-            reg.insert(id.clone(), usize::from(raw) + 1000); // bogus retry
+            reg.insert(id.clone(), fingerprint(raw), usize::from(raw));
+            reg.insert(id.clone(), fingerprint(raw), usize::from(raw) + 1000);
 
             let hit = reg.lookup(&id).unwrap();
-            assert_eq!(hit.first_log_index, usize::from(raw));
+            assert_eq!(hit.first_log_index(), usize::from(raw));
             assert_eq!(reg.window.len(), 1);
         }
     }

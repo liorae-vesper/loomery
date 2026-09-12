@@ -232,6 +232,11 @@ mod tests {
         Key::new(&KEY_NS, data)
     }
 
+    /// The intent fingerprint a command's `causation_key` is recorded with.
+    fn fingerprint(data: &str) -> Key {
+        Key::new(&KEY_NS, &format!("intent-{data}"))
+    }
+
     /// A minimal aggregate: one creation event, one mutation event. The
     /// type itself is the plan — no instance needed.
     struct Counter;
@@ -331,7 +336,7 @@ mod tests {
     #[test]
     fn hit_replays_with_the_anchor_index() {
         let mut registry = Registry::new(10);
-        registry.insert(key("cause-1"), 42);
+        registry.insert(key("cause-1"), fingerprint("cause-1"), 42);
 
         let result = process::<_, _, Counter>(CounterState(0), &registry, command());
         assert!(matches!(result, Replayed { index: 42 }));
@@ -404,7 +409,7 @@ mod tests {
         fn process_dedup_classification(already_seen in any::<bool>(), index in 0usize..1000) {
             let mut registry = Registry::new(16);
             if already_seen {
-                registry.insert(key("cause-1"), index);
+                registry.insert(key("cause-1"), fingerprint("cause-1"), index);
             }
 
             let result = process::<_, _, Counter>(CounterState(0), &registry, command());
