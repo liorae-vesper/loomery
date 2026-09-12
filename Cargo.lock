@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "trellis-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -583,6 +583,13 @@ dependencies = [
  "serde_json",
  "thiserror",
  "uuid",
+]
+
+[[package]]
+name = "trellis-genesis"
+version = "0.0.1"
+dependencies = [
+ "trellis-core",
 ]
 
 [[package]]

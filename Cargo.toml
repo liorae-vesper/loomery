@@ -1,8 +1,18 @@
 [workspace]
+resolver = "2"
 members = [
   "crates/*",
 ]
-resolver = "2"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+
+[workspace.dependencies]
+trellis-core = { path = "crates/core"}
+trellis-genesis = {path = "crates/genesis"}
 
 [workspace.lints.clippy]
 # Standard groups

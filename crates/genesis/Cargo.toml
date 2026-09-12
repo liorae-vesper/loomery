@@ -1,0 +1,13 @@
+[package]
+name = "trellis-genesis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Genesis crate, initializes the system when first deployed."
+
+[dependencies]
+trellis-core = { workspace = true }
+
+[lints]
+workspace = true
