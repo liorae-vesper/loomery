@@ -11,7 +11,6 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 | Coverage report/floor | `cargo llvm-cov` via `cargo-llvm-cov` (floor: 80%) |
 | Dependency advisories | `cargo audit` |
 | License allowlist + bans | `cargo deny check` (`deny.toml`) |
-| Packaging | `cargo package --workspace` |
 | Pre-commit hooks | `hk` (commit-msg + check/fix hooks) |
 | Commit message lint | `cog verify` (conventional commits, cocogitto) |
 | Combined dev gate | `mise run verify` (see `mise.toml`) |
@@ -40,7 +39,7 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
    - While a crate has no `Cargo.toml` yet, the cargo gates skip gracefully.
 2. **`mise run verify`** is the one-command local gate (also runs in the
    `hk check` hook): `cargo check`, clippy with `-D warnings`, fmt check,
-   `cargo deny check`, `cargo package --workspace`.
+   `cargo deny check`.
 3. **`hk fix`** runs `cargo fmt` to auto-format.
 4. **CI** — not yet wired (`.github/workflows` is a TODO). When added, run the
    full `mise run verify` job plus `cargo test`, coverage, and `cargo audit`.
@@ -55,8 +54,6 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 
 - Dependencies are governed by `cargo-deny` and must keep the license
   allowlist green (`cargo deny check licenses`).
-- `cargo package --workspace` verifies every crate is publishable — catches
-  missing READMEs, un-pinned deps, and broken workspace metadata early.
 - Toolchain is pinned via `mise` (`rust 1.98.1`, edition 2024); `cargo`
   commands should run through `mise exec --` if rust isn't on PATH.
 
