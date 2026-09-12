@@ -254,7 +254,7 @@ perf budget load tests.
 Every committed event is wrapped in an envelope (`Event`, §3). Fields:
 `envelope_version`, `id`, `aggregate_id`, `organization_id` (= group id),
 `workspace_id` (optional), `actor`, `occurred_at` (injected), `causation_key`
-(dedup key), `correlation_key` (derived workflow/saga correlation), `event_type`
+(dedup key), `correlation_key` (saga/workflow correlation), `event_type`
 (string name), `payload` (a versioned
 `Payload { version, data }`, `data` being the event value as a JSON string),
 `actor` (the [`Actor`] that emitted it — user, system, or saga).
@@ -417,6 +417,13 @@ naming for the first outbox slice:**
   entry, so the resume re-runs `prepare`; with a freshly minted entity id that
   retry is a *different* creation (a duplicate workspace, or a retry that can
   never succeed), while a derived id is recognizable from the state itself.
+- **Two keys, two jobs.** `causation_key` is the *intent*: one per command,
+  so a retry is a replay. `correlation_key` is the *workflow*: one per saga
+  instance, shared by every command and event it produces and derived from the
+  workflow's business identity (an invitation id, an organization) — never
+  from per-attempt state, so a resumed runner re-derives it and consumers group
+  a workflow's events by it. Per-attempt tracing is observability's job, not
+  the envelope's.
 - **Idempotency-key reuse is a conflict, not a replay.**
   `Command::fingerprint` hashes the intent; the shell records it with the dedup
   entry and answers `409` when a `causation_key` returns with a different
