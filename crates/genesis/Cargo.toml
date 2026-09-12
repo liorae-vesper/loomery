@@ -7,7 +7,10 @@ publish.workspace = true
 description = "Genesis crate, initializes the system when first deployed."
 
 [dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 trellis-core = { workspace = true }
+thiserror = "2.0.20"
 
 [lints]
 workspace = true

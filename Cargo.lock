@@ -589,6 +589,9 @@ dependencies = [
 name = "trellis-genesis"
 version = "0.0.1"
 dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
  "trellis-core",
 ]
 
