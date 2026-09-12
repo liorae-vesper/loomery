@@ -19,6 +19,13 @@
 //! the retry would be a *different* command, so the group would either grow a
 //! second default workspace or reject the retry forever.
 //!
+//! The three identities have three different jobs (D12):
+//!
+//! - [`step_key`] — the *intent* of one command (①, ② or ③); a retry is a replay.
+//! - [`bootstrap_correlation_key`] — the *workflow*, shared by all three steps,
+//!   so the whole bootstrap can be grouped by it.
+//! - [`default_workspace_id`] — the *entity* the workflow creates.
+//!
 //! Two rules keep this sound:
 //!
 //! - **The generation lives in the namespace, never in the derived data.** A
@@ -119,6 +126,21 @@ pub fn step_key(organization_id: &Id, step: Step) -> Key {
     )
 }
 
+/// The correlation key of the whole bootstrap workflow for `organization_id`.
+///
+/// One value shared by all three steps, derived from the workflow's *business*
+/// identity (the organization) rather than from per-attempt state — so the
+/// worker re-derives it after a crash, and any consumer groups an
+/// organization's genesis events by it. Contrast [`step_key`], which separates
+/// the three intents of that one workflow.
+#[must_use]
+pub fn bootstrap_correlation_key(organization_id: &Id) -> Key {
+    Key::new(
+        &GENESIS_NAMESPACE_V1,
+        &format!("{organization_id}:bootstrap"),
+    )
+}
+
 /// The id of the default workspace genesis creates for `organization_id`.
 ///
 /// A *derived* entity id: the workspace is a function of its organization
@@ -209,6 +231,28 @@ mod tests {
         assert_eq!(Id::parse(&id).unwrap(), id);
     }
 
+    #[test]
+    fn the_bootstrap_correlation_is_one_key_for_the_whole_workflow() {
+        let organization = org();
+        let correlation = bootstrap_correlation_key(&organization);
+
+        // The workflow's identity is stable across attempts and shared by ①②③.
+        assert_eq!(correlation, bootstrap_correlation_key(&organization));
+        // Another organization is another workflow.
+        assert_ne!(correlation, bootstrap_correlation_key(&other_org()));
+    }
+
+    #[test]
+    fn the_correlation_is_not_any_of_the_step_keys() {
+        let organization = org();
+        let correlation = bootstrap_correlation_key(&organization);
+
+        for step in Step::ALL {
+            assert_ne!(correlation, step_key(&organization, step), "{step:?}");
+            assert_ne!(correlation, default_workspace_key(&organization));
+        }
+    }
+
     /// The derivation is an identity contract: ids derived by an earlier
     /// attempt must stay derivable forever. These values are frozen.
     #[test]
@@ -222,6 +266,10 @@ mod tests {
         assert_eq!(
             default_workspace_id(&organization).to_string(),
             "369c41d9-6b9f-5fab-a0d6-eca73b7fe5b7"
+        );
+        assert_eq!(
+            bootstrap_correlation_key(&organization).to_string(),
+            "7656f657-5a4f-51d8-b4fd-8962113d3b28"
         );
     }
 
