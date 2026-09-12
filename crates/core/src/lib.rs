@@ -29,5 +29,6 @@ pub mod dedup;
 pub mod envelope;
 pub mod error;
 pub mod id;
+pub mod key;
 pub mod timestamp;
 pub mod versioning;

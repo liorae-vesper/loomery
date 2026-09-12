@@ -219,7 +219,8 @@ mod tests {
     use super::*;
     use crate::actor::Actor;
     use crate::envelope::Payload;
-    use crate::id::{Id, Key};
+    use crate::id::Id;
+    use crate::key::Key;
     use crate::timestamp::Timestamp;
     use uuid::Uuid;
 
