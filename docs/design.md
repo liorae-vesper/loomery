@@ -253,7 +253,7 @@ perf budget load tests.
 Every committed event is wrapped in an envelope (`Event`, §3). Fields:
 `envelope_version`, `id`, `aggregate_id`, `organization_id` (= group id),
 `workspace_id` (optional), `actor`, `occurred_at` (injected), `causation_key`
-(dedup key), `correlation_id` (trace), `event_type` (string name), `payload` (a versioned
+(dedup key), `correlation_key` (trace), `event_type` (string name), `payload` (a versioned
 `Payload { version, data }`, `data` being the event value as a JSON string),
 `actor` (the [`Actor`] that emitted it — user, system, or saga).
 

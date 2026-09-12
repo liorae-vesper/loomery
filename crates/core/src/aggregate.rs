@@ -219,8 +219,17 @@ mod tests {
     use super::*;
     use crate::actor::Actor;
     use crate::envelope::Payload;
-    use crate::id::Id;
+    use crate::id::{Id, Key};
     use crate::timestamp::Timestamp;
+    use uuid::Uuid;
+
+    /// A stable namespace for the deterministic test keys below.
+    const KEY_NS: Uuid = Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);
+
+    /// A deterministic dedup/correlation key for the tests.
+    fn key(data: &str) -> Key {
+        Key::new(&KEY_NS, data)
+    }
 
     /// A minimal aggregate: one creation event, one mutation event. The
     /// type itself is the plan — no instance needed.
@@ -265,8 +274,8 @@ mod tests {
             organization_id: Id::from("org-1"),
             workspace_id: None,
             occurred_at: Timestamp::from(1_700_000_000_000),
-            causation_key: Id::from("cause-1"),
-            correlation_id: Id::from("corr-1"),
+            causation_key: key("cause-1"),
+            correlation_key: key("corr-1"),
             actor: Actor::System,
             command_type: "counter.create".to_owned(),
             payload: Payload {
@@ -284,8 +293,8 @@ mod tests {
             organization_id: Id::from("org-1"),
             workspace_id: None,
             occurred_at: Timestamp::from(1_700_000_000_000),
-            causation_key: Id::from("cause-1"),
-            correlation_id: Id::from("corr-1"),
+            causation_key: key("cause-1"),
+            correlation_key: key("corr-1"),
             actor: Actor::System,
             event_type: "counter.incremented".to_owned(),
             payload: Payload {
@@ -321,7 +330,7 @@ mod tests {
     #[test]
     fn hit_replays_with_the_anchor_index() {
         let mut registry = Registry::new(10);
-        registry.insert(Id::from("cause-1"), 42);
+        registry.insert(key("cause-1"), 42);
 
         let result = process::<_, _, Counter>(CounterState(0), &registry, command());
         assert!(matches!(result, Replayed { index: 42 }));
@@ -394,7 +403,7 @@ mod tests {
         fn process_dedup_classification(already_seen in any::<bool>(), index in 0usize..1000) {
             let mut registry = Registry::new(16);
             if already_seen {
-                registry.insert(Id::from("cause-1"), index);
+                registry.insert(key("cause-1"), index);
             }
 
             let result = process::<_, _, Counter>(CounterState(0), &registry, command());

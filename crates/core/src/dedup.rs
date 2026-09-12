@@ -2,18 +2,18 @@
 
 //! The idempotency window — the dedup store of the pure core.
 //!
-//! A bounded FIFO index over processed command ids ([`Registry`]): `insert`
+//! A bounded FIFO index over processed causation keys ([`Registry`]): `insert`
 //! records a hit, `lookup` answers the dedup check, and the oldest entries
 //! evict once the window exceeds `max_entries`. Eviction follows **insertion
 //! order** (a FIFO queue), not hash-map order — so every replica folds the
 //! index identically and the window stays deterministic.
 
-use crate::id::Id;
+use crate::id::Key;
 use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
 use std::collections::VecDeque;
 
-/// Dedup metadata for a recorded id.
+/// Dedup metadata for a recorded key.
 ///
 /// Leaked through [`Registry::lookup`]'s guard return type, so it is `pub`
 /// — but its fields stay private; callers read them through the `Ref` deref.
@@ -23,15 +23,16 @@ pub struct Entry {
     pub(crate) first_log_index: usize,
 }
 
-/// A bounded, deterministic idempotency window keyed by command id.
+/// A bounded, deterministic idempotency window keyed by the command's
+/// `causation_key`.
 ///
 /// The only dedup store of the core (P3): the shell records the causation
 /// key *after* the events are durably appended and applied, so a `lookup`
 /// hit means the command was already processed.
 pub struct Registry {
     max_entries: usize,
-    window: VecDeque<Id>,
-    entries: DashMap<Id, Entry>,
+    window: VecDeque<Key>,
+    entries: DashMap<Key, Entry>,
 }
 
 impl Registry {
@@ -46,27 +47,27 @@ impl Registry {
         }
     }
 
-    /// Returns the dedup metadata for `id`, if it was recorded.
+    /// Returns the dedup metadata for `key`, if it was recorded.
     ///
     /// The returned guard borrows the registry — drop it (or clone the
     /// [`Entry`]) before taking another concurrent lookup, or use the
     /// `dashmap::mapref::one::Ref` deref to read the metadata directly.
     #[must_use]
-    pub fn lookup(&self, id: &Id) -> Option<Ref<'_, Id, Entry>> {
-        self.entries.get(id)
+    pub fn lookup(&self, key: &Key) -> Option<Ref<'_, Key, Entry>> {
+        self.entries.get(key)
     }
 
-    /// Records `id`, evicting the oldest recorded id once the window is full.
+    /// Records `key`, evicting the oldest recorded key once the window is full.
     ///
-    /// Recording an already-recorded id is a no-op (idempotent) — the shell
+    /// Recording an already-recorded key is a no-op (idempotent) — the shell
     /// checks [`lookup`](Registry::lookup) first and treats a hit as a
     /// dedup replay instead of re-executing.
     ///
     /// Takes `&mut self`: the FIFO frontier is plain data, mutated in place
     /// during the fold (unlike `lookup`, which stays `&self` for concurrent
     /// shell reads via `dashmap`).
-    pub fn insert(&mut self, id: Id, first_log_index: usize) {
-        if self.entries.contains_key(&id) {
+    pub fn insert(&mut self, key: Key, first_log_index: usize) {
+        if self.entries.contains_key(&key) {
             return;
         }
 
@@ -77,27 +78,31 @@ impl Registry {
             self.entries.remove(&oldest);
         }
 
-        self.window.push_back(id.clone());
-        self.entries.insert(id, Entry { first_log_index });
+        self.window.push_back(key.clone());
+        self.entries.insert(key, Entry { first_log_index });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
-    fn id(n: u8) -> Id {
-        Id::from(format!("id-{n}"))
+    /// A stable namespace for the deterministic test keys below.
+    const KEY_NS: Uuid = Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);
+
+    fn key(n: u8) -> Key {
+        Key::new(&KEY_NS, &format!("id-{n}"))
     }
 
     #[test]
     fn records_and_lookup_hits() {
         let mut reg = Registry::new(10);
 
-        assert!(reg.lookup(&id(1)).is_none());
+        assert!(reg.lookup(&key(1)).is_none());
 
-        reg.insert(id(1), 7);
-        let hit = reg.lookup(&id(1)).unwrap();
+        reg.insert(key(1), 7);
+        let hit = reg.lookup(&key(1)).unwrap();
         assert_eq!(hit.first_log_index, 7);
     }
 
@@ -105,15 +110,15 @@ mod tests {
     fn evicts_oldest_when_window_is_full() {
         let mut reg = Registry::new(2);
 
-        reg.insert(id(1), 1);
-        reg.insert(id(2), 2);
-        assert!(reg.lookup(&id(1)).is_some());
+        reg.insert(key(1), 1);
+        reg.insert(key(2), 2);
+        assert!(reg.lookup(&key(1)).is_some());
 
-        reg.insert(id(3), 3);
+        reg.insert(key(3), 3);
 
-        assert!(reg.lookup(&id(1)).is_none()); // oldest, evicted
-        assert!(reg.lookup(&id(2)).is_some());
-        assert!(reg.lookup(&id(3)).is_some());
+        assert!(reg.lookup(&key(1)).is_none()); // oldest, evicted
+        assert!(reg.lookup(&key(2)).is_some());
+        assert!(reg.lookup(&key(3)).is_some());
     }
 
     #[test]
@@ -121,24 +126,24 @@ mod tests {
         let mut reg = Registry::new(3);
 
         for n in 1..=100 {
-            reg.insert(id(n), usize::from(n));
+            reg.insert(key(n), usize::from(n));
         }
 
         assert_eq!(reg.window.len(), 3);
-        assert!(reg.lookup(&id(97)).is_none()); // evicted long ago
-        assert!(reg.lookup(&id(98)).is_some());
-        assert!(reg.lookup(&id(100)).is_some());
+        assert!(reg.lookup(&key(97)).is_none()); // evicted long ago
+        assert!(reg.lookup(&key(98)).is_some());
+        assert!(reg.lookup(&key(100)).is_some());
     }
 
     #[test]
     fn re_inserting_a_recorded_id_is_a_no_op() {
         let mut reg = Registry::new(2);
 
-        reg.insert(id(1), 1);
-        reg.insert(id(1), 999); // same key: should not refresh or duplicate
-        reg.insert(id(2), 2);
+        reg.insert(key(1), 1);
+        reg.insert(key(1), 999); // same key: should not refresh or duplicate
+        reg.insert(key(2), 2);
 
-        assert!(reg.lookup(&id(1)).is_some());
+        assert!(reg.lookup(&key(1)).is_some());
         assert_eq!(reg.window.len(), 2);
     }
 
@@ -164,7 +169,7 @@ mod tests {
             let mut seen: std::collections::HashSet<u8> = std::collections::HashSet::new();
 
             for raw in ids {
-                let id = Id::from(format!("id-{raw}"));
+                let id = key(raw);
                 let first_log_index = usize::from(raw);
 
                 // Shell semantics: dedup check first, execute only on a miss.
@@ -188,7 +193,7 @@ mod tests {
 
             // Every model survivor is a hit; every hit's metadata is intact.
             for raw in &model {
-                let hit = reg.lookup(&Id::from(format!("id-{raw}"))).unwrap();
+                let hit = reg.lookup(&key(*raw)).unwrap();
                 assert_eq!(hit.first_log_index, usize::from(*raw));
             }
 
@@ -196,7 +201,7 @@ mod tests {
             // eviction removed exactly the ids the model dropped.
             for raw in &seen {
                 if !model.contains(raw) {
-                    assert!(reg.lookup(&Id::from(format!("id-{raw}"))).is_none());
+                    assert!(reg.lookup(&key(*raw)).is_none());
                 }
             }
         }
@@ -210,7 +215,7 @@ mod tests {
             max_entries in 1usize..=10,
         ) {
             let mut reg = Registry::new(max_entries);
-            let id = Id::from(format!("id-{raw}"));
+            let id = key(raw);
 
             reg.insert(id.clone(), usize::from(raw));
             reg.insert(id.clone(), usize::from(raw) + 1000); // bogus retry
