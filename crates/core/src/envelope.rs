@@ -9,15 +9,12 @@
 //! see `docs/design.md` §6.
 
 use crate::actor::Actor;
-use crate::id::Id;
+use crate::id::{Id, Key};
 use crate::timestamp::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Envelope and payload version numbers.
 pub type Version = u16;
-
-/// A dedup / correlation key. Same representation as [`Id`].
-pub type Key = Id;
 
 /// A frozen, versioned event payload.
 ///
@@ -31,7 +28,6 @@ pub struct Payload {
     /// Serialized data.
     pub data: String,
 }
-
 /// The canonical wrapper for every committed domain event.
 ///
 /// This is the published form used by the outbox and all saga/projector
@@ -52,10 +48,10 @@ pub struct Event {
     pub workspace_id: Option<Id>,
     /// A timestamp when this event occurred.
     pub occurred_at: Timestamp,
-    /// The idempotency key, to avoid event duplication.
+    /// The idempotency key ([`Key`]), to avoid event duplication.
     pub causation_key: Key,
-    /// Correlated id, from the outer shell plane.
-    pub correlation_id: Key,
+    /// Correlated key ([`Key`]), from the outer shell plane.
+    pub correlation_key: Key,
     /// The actor that emitted this event (user, system, or saga).
     pub actor: Actor,
     /// The type of event.
@@ -83,10 +79,10 @@ pub struct Command {
     pub workspace_id: Option<Id>,
     /// The injected timestamp this command occurred at.
     pub occurred_at: Timestamp,
-    /// The idempotency key, to avoid command duplication.
+    /// The idempotency key ([`Key`]), to avoid command duplication.
     pub causation_key: Key,
-    /// Correlated id, from the outer shell plane.
-    pub correlation_id: Key,
+    /// Correlated key ([`Key`]), from the outer shell plane.
+    pub correlation_key: Key,
     /// The actor issuing this command (user, system, or saga).
     pub actor: Actor,
     /// The type of command.
@@ -98,6 +94,17 @@ pub struct Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
+
+    /// A stable namespace for the deterministic test keys below. Real keys are
+    /// minted shell-side; here it just has to never change, so the wire
+    /// snapshot stays byte-exact.
+    const KEY_NS: Uuid = Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);
+
+    /// A deterministic dedup/correlation key for the tests.
+    fn key(data: &str) -> Key {
+        Key::new(&KEY_NS, data)
+    }
 
     /// A fully populated envelope with deterministic values, so wire-format
     /// tests are byte-exact and replay-stable.
@@ -109,8 +116,8 @@ mod tests {
             organization_id: Id::from("org-123"),
             workspace_id: Some(Id::from("ws-123")),
             occurred_at: Timestamp::from(1_700_000_000_000),
-            causation_key: Id::from("cause-123"),
-            correlation_id: Id::from("corr-123"),
+            causation_key: key("cause-123"),
+            correlation_key: key("corr-123"),
             actor: Actor::System,
             event_type: "task.created".to_owned(),
             payload: Payload {
@@ -139,8 +146,8 @@ mod tests {
             organization_id: Id::from("org-123"),
             workspace_id: None,
             occurred_at: Timestamp::from(1_700_000_000_000),
-            causation_key: Id::from("client-key-1"),
-            correlation_id: Id::from("corr-123"),
+            causation_key: key("client-key-1"),
+            correlation_key: key("corr-123"),
             actor: Actor::User {
                 id: Id::from("user-1"),
             },
@@ -164,7 +171,7 @@ mod tests {
         let json = serde_json::to_string(&env).unwrap();
         assert_eq!(
             json,
-            r#"{"envelope_version":1,"id":"evt-123","aggregate_id":"agg-123","organization_id":"org-123","workspace_id":"ws-123","occurred_at":1700000000000,"causation_key":"cause-123","correlation_id":"corr-123","actor":"System","event_type":"task.created","payload":{"version":1,"data":"{\"title\":\"build the trellis\"}"}}"#
+            r#"{"envelope_version":1,"id":"evt-123","aggregate_id":"agg-123","organization_id":"org-123","workspace_id":"ws-123","occurred_at":1700000000000,"causation_key":"55cd88a7-c96a-5a8c-8a40-76bcf3db16ef","correlation_key":"df4a50ac-a82d-59f6-b0fe-36c72641334a","actor":"System","event_type":"task.created","payload":{"version":1,"data":"{\"title\":\"build the trellis\"}"}}"#
         );
     }
 }
