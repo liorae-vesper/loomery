@@ -119,8 +119,9 @@ macros (their generated code refers to `::core` paths). Keep it that way.
 
 | Item (crate path) | Purpose |
 |---|---|
-| `trellis_core::id::Id` | UUIDv7 wrapper (canonical string form) — see [D4](#d4-uuid-representation) |
-| `trellis_core::envelope::EventEnvelope` | The wrapper for every committed event (see §6) |
+| `trellis_core::id::Id` | Canonical UUID id — minted `UUIDv7` or derived `UUIDv5` (canonical string form) — see [D4](#d4-uuid-representation), [D12](#d12-identity-minted-intents-and-derived-entities) |
+| `trellis_core::key::Key` | Derived identity (`UUIDv5`): causation/dedup keys, event ids, derived entity ids (`Id::from(key)`) — see [D12](#d12-identity-minted-intents-and-derived-entities) |
+| `trellis_core::envelope::Event` | The wrapper for every committed event (see §6) |
 | `trellis_core::envelope::Command` | Command form: `prepare` input, carries injected `occurred_at` + ids |
 | `trellis_core::actor::Actor` | `{ kind: User \| System \| Saga, user_id, saga_name }` — who performed an action |
 | `trellis_core::timestamp::Timestamp` | ms-since-epoch UTC wrapper (injected; the core never reads the clock) |
@@ -128,7 +129,7 @@ macros (their generated code refers to `::core` paths). Keep it that way.
 | `trellis_core::versioning` | Upcast contract: per-aggregate **static chains** (closed `KnownPayload` enum + exhaustive match), `UpcastCode`, `Upcaster` fn alias (P2) |
 | `trellis_core::aggregate::AggregatePlan` | The trait: `prepare`, `apply`, plus shared `process` and `fold` helpers |
 | `trellis_core::aggregate::Execution` (+ `OutboundEvent`, `ContentType`) | Result of a command: domain events to commit + optional outbound integration events (D8/D11) |
-| `trellis_core::dedup::DedupIndex` | The idempotency window (P3) folded into group state |
+| `trellis_core::dedup::Registry` | The idempotency window (P3) folded into group state; entries carry the intent fingerprint |
 | `trellis_core::org::Organization` | Organization aggregate |
 | `trellis_core::user::User` | User aggregate |
 | `trellis_core::workspace::Workspace` | Workspace aggregate |
@@ -253,7 +254,8 @@ perf budget load tests.
 Every committed event is wrapped in an envelope (`Event`, §3). Fields:
 `envelope_version`, `id`, `aggregate_id`, `organization_id` (= group id),
 `workspace_id` (optional), `actor`, `occurred_at` (injected), `causation_key`
-(dedup key), `correlation_key` (trace), `event_type` (string name), `payload` (a versioned
+(dedup key), `correlation_key` (derived workflow/saga correlation), `event_type`
+(string name), `payload` (a versioned
 `Payload { version, data }`, `data` being the event value as a JSON string),
 `actor` (the [`Actor`] that emitted it — user, system, or saga).
 
@@ -262,6 +264,16 @@ events (used by the outbox + all saga/projector consumers). The OpenRaft log
 stores machine structures opaquely (log entries are `serde_json` values/D3);
 the envelope is the published form, version-guarded by `envelope_version` +
 `payload_version`.
+
+**Identity (D12).** Envelope identity is never minted inside the core: the
+committed command is re-`prepare`d on *every* replica, so anything random would
+diverge. `occurred_at`, `actor` and the keys arrive injected; `Event::id` is
+**derived** from the command's `causation_key` and the event's index
+(`Command::event_id`), which is also what keeps a rebuilt retry proposing the
+same events. `Command::fingerprint` hashes the intent (type, payload, scope —
+not the per-attempt fields) and is recorded beside the dedup entry so a reused
+idempotency key on a different request is answered with a conflict rather than
+replayed.
 
 - **Versioning (P2):** never mutate a shipped payload struct; a change is a new
   frozen version (`TaskCreatedV2`). Each aggregate owns its chains as a closed
@@ -385,6 +397,55 @@ naming for the first outbox slice:**
 - Outbox envelope fields per event follow `Event` (deterministic ids —
   re-publishes are byte-identical).
 **Status: DECIDED (carried over)**
+
+### D12 — Identity: minted intents and derived entities
+**Decision — one source of nondeterminism per intent; derive everything else:**
+- **Mint once per intent, never per attempt.** The shell mints the
+  `causation_key` (or validates a client-supplied one) together with the
+  per-attempt envelope `id`, and persists them in the envelope, so a retry
+  re-uses them instead of inventing a second command.
+- **Derive what must be reproducible.** `Key` (`UUIDv5`, RFC 4122 §4.3) covers
+  causation/dedup keys, *event ids* (`Command::event_id(index)` =
+  `v5(causation_key, index)`) and entity ids whose identity is a function of
+  the intent — genesis: "the default workspace of org X" =
+  `Id::from(Key::new(GENESIS_NAMESPACE_V1, …))`.
+- **Event ids derive from `causation_key`, not from `Command::id`:** the id of
+  an *attempt* changes when a crashed shell rebuilds its envelope, whereas the
+  id of the *intent* does not.
+- **The window this closes:** the shell records the dedup entry *after* durable
+  append + apply. A crash in between leaves a committed event with no dedup
+  entry, so the resume re-runs `prepare`; with a freshly minted entity id that
+  retry is a *different* creation (a duplicate workspace, or a retry that can
+  never succeed), while a derived id is recognizable from the state itself.
+- **Idempotency-key reuse is a conflict, not a replay.**
+  `Command::fingerprint` hashes the intent; the shell records it with the dedup
+  entry and answers `409` when a `causation_key` returns with a different
+  fingerprint (a client reusing a key for another request).
+- **Untrusted strings are parsed, not adopted.** `Id::parse` (canonical UUID,
+  any version) and `Key::try_from` (canonical **`UUIDv5`** only) are the entry
+  points for outside data; `Id::from(&str)` stays for ids already known
+  canonical. `uuid` is re-exported as `trellis_core::Uuid` so namespace
+  constants cannot drift into a second `uuid` version.
+- **Naming follows the rule.** `*_id` holds an `Id` — an *entity* identity,
+  minted or derived-then-adopted (`Id::from(key)`); `*_key` holds a `Key` — a
+  deterministic derivation (causation, intent fingerprint, workflow
+  correlation). The `Key` invariant is enforced on **every** entry point,
+  including `serde` deserialization, so a `UUIDv7` cannot be smuggled into a
+  `_key` field through JSON. `Id` stays permissive on purpose: production ids
+  are canonical UUIDs, while fixtures and injected test ids may be
+  human-readable strings (`Id::parse` is what rejects those at the boundary).
+- **Costs accepted.** Derived ids are not time-ordered (no `v7` index
+  locality) and are *guessable* by anyone who knows the tuple: derive from a
+  server-known scope (the organization), never from a value the caller picks,
+  and never treat a `Key` as a capability.
+- **The derivation tuple is a contract.** Include the tenant, exclude mutable
+  data (names, status), and version *generations in the namespace* — a script
+  version inside the hashed data would make a binary upgraded mid-provisioning
+  derive different ids and duplicate its own work.
+- **Where randomness stays:** secrets and capabilities (invitation tokens,
+  share links, sessions) are not ids — they are random or HMAC'd values.
+**Status: DECIDED (scaffold — `id::Id::parse`, `key::Key`, `Command::event_id`,
+`Command::fingerprint`, `dedup::Entry::fingerprint`, genesis derivation)**
 
 ---
 

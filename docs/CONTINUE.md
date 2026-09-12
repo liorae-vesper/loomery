@@ -24,17 +24,23 @@ planned for Phases 1+.
   `rustfmt.toml`, `deny.toml` license/advisory policy, hk hooks, cog
   conventional commits, `mise run verify`). See `docs/guardrails.md`.
 - **Pure core — scaffolded, in progress** (`docs/design.md` §3, §8 tracker):
-  - `trellis_core::id::Id` — UUIDv7 newtype (`uuid 1.26`, `now_v7`), canonical string
-    form, `Deref<Target = str>`, `From<&str>`/`From<String>` for injected ids;
-    shell-side `Id::new()`; serde round-trip + shape tests.
+  - `trellis_core::id::Id` — canonical UUID id: minted `UUIDv7` (shell-side
+    `Id::new()`) or derived `UUIDv5`; `Id::parse` validates ids arriving from
+    outside, `From<&str>` adopts ids already known canonical.
+  - `trellis_core::key::Key` — derived identity (`UUIDv5`): causation keys,
+    `Command::event_id(index)`, `Command::fingerprint`, and derived entity ids
+    (`Id::from(key)`); strict `TryFrom` validation (see D12).
   - `trellis_core::envelope` — `Event` (fields per §6 of `design.md`) with a
     nested, versioned `Payload { version, data }`; serde round-trip + exact
     wire-format snapshot tests (frozen payloads, D3).
   - `trellis_core::timestamp::Timestamp` — injected i64 ms-since-epoch (D5);
     `From<i64>`/`as_millis()`/`Deref`, `now()` is shell-side only.
-  - 18 unit tests passing (serde round-trips, wire-format snapshot, id
-    shape/uniqueness, timestamp ordering + clock sanity, actor + command
-    round-trips, error display/equality/source).
+  - `crates/genesis` (`trellis-genesis`) — deterministic bootstrap identity:
+    `Step`, `step_key`, `default_workspace_id` derived under a generation
+    namespace + golden tests. Commands not built yet.
+  - 76 unit tests + 3 doctests passing (serde round-trips, wire-format
+    snapshot, id/key derivation + validation, dedup window, timestamp ordering,
+    actor/command round-trips, error display/equality/source, genesis ids).
 
 ## Conventions (non-negotiable)
 
@@ -48,9 +54,11 @@ planned for Phases 1+.
   `prepare`) and `fold` (sequential apply) helpers — trait first.
 - Errors: `DomainError<C>` + per-area code enums (machine-readable
   discriminators). Never rename an existing code.
-- **The core never reads the clock or generates IDs** — timestamps/IDs are
-  injected through the command envelope (test helpers build deterministic
-  envelopes).
+- **The core never reads the clock or generates IDs** — timestamps and
+  per-attempt ids are **injected** through the command envelope, and everything
+  that must be reproducible (causation keys, event ids, genesis entity ids) is
+  **derived** from the intent with `Key` (`UUIDv5`). Mint once per intent, never
+  per attempt — see D12 in `design.md`.
 - Processing a command does NOT record the dedup entry — the shell records it
   after the events are durably appended and applied (contract documented in
   `trellis_core::aggregate`).
