@@ -56,13 +56,14 @@ pub struct Event {
     pub occurred_at: Timestamp,
     /// The idempotency key ([`Key`]), to avoid event duplication.
     pub causation_key: Key,
-    /// The logical operation (saga/workflow) this event belongs to ([`Key`]).
+    /// The saga/workflow this event belongs to ([`Key`]).
     ///
-    /// Derived like every `Key`, so the same operation re-derives the same
-    /// value on every replica, producer and consumer — which is what lets a
-    /// saga resume, or a consumer group recognize the operation's events. A
-    /// per-attempt *trace* id is a different thing, and observability's
-    /// business, not the envelope's.
+    /// One value per saga instance, shared by every command and event it
+    /// produces and derived from the workflow's business identity — an
+    /// invitation, an organization — never from per-attempt state. A resumed
+    /// saga runner re-derives it, and consumers group a workflow's events by
+    /// it. The *intent* of one command is [`Event::causation_key`]; a
+    /// per-attempt trace id is observability's business, not the envelope's.
     pub correlation_key: Key,
     /// The actor that emitted this event (user, system, or saga).
     pub actor: Actor,
@@ -104,7 +105,7 @@ pub struct Command {
     pub occurred_at: Timestamp,
     /// The idempotency key ([`Key`]), to avoid command duplication.
     pub causation_key: Key,
-    /// The logical operation this command belongs to ([`Key`]) — see
+    /// The saga/workflow this command belongs to ([`Key`]) — see
     /// [`Event::correlation_key`].
     pub correlation_key: Key,
     /// The actor issuing this command (user, system, or saga).
