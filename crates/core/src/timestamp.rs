@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Injected timestamps for the Trellis core.
+//! Injected timestamps for the Loomery core.
 //!
 //! [`Timestamp`] is a millisecond-since-epoch value. The pure core never
 //! reads the clock — timestamps arrive through the command envelope — so

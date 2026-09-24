@@ -1,13 +1,13 @@
 ---
 
-> **Research note for the Trellis project.** Informs decisions D1 + D2 (OpenRaft
+> **Research note for the Loomery project.** Informs decisions D1 + D2 (OpenRaft
 > consensus + storage). Replacements/observations verified against the OpenRaft
 > 0.9 example implementations and upgrade guides at the time of writing —
 > re-verify against the crate's own docs before relying on specifics.
 
 # OpenRaft Storage Interfaces — Research
 
-OpenRaft 0.9 splits storage into two traits that Trellis implements behind
+OpenRaft 0.9 splits storage into two traits that Loomery implements behind
 decision D2: **`RaftLogStorage`** (the replicated log) and **`RaftStateMachine`**
 (apply + snapshots). This note collects what a first implementation needs to
 know, keyed to the `crates/` layout in `design.md`.
@@ -29,7 +29,7 @@ let (log_store, sm) = Adapter::new(store); // or implement both traits directly
 Raft::new(..., log_store, sm);
 ```
 
-Trellis implements `RaftLogStorage` + `RaftStateMachine` directly (no Adapter),
+Loomery implements `RaftLogStorage` + `RaftStateMachine` directly (no Adapter),
 or starts from the examples in §5.
 
 ## 2. `RaftLogStorage`
@@ -49,7 +49,7 @@ Owns the log; supports reading, appending, and purging. Key methods
 - `save_committed(&self, committed: u64)` — **optional**; persists the
   committed index so startup can immediately apply committed-but-unapplied
   entries to the state machine. Not implementing it doesn't affect
-  correctness, only recovery speed. Trellis should implement it (fast RYW
+  correctness, only recovery speed. Loomery should implement it (fast RYW
   catch-up after restart).
 
 **Gotchas observed:**
@@ -67,7 +67,7 @@ Owns the log; supports reading, appending, and purging. Key methods
 Holds the applied state; supports apply and snapshot:
 
 - `apply(&mut self, entries) -> Vec<R::AppDataResponse>` — fold committed log
-  entries into in-memory state. **This is where Trellis's pure `apply` runs**:
+  entries into in-memory state. **This is where Loomery's pure `apply` runs**:
   `StateMachine::apply` decodes the command envelope and calls the pure core.
   Must be deterministic — replicas must derive identical state from identical
   entries.
@@ -85,10 +85,10 @@ Holds the applied state; supports apply and snapshot:
   backup rule in `storage-engine-alternatives.md`).
 - After `install_snapshot`, everything with log id ≤ snapshot's is gone from
   the log store — `get_log_state` must reflect that for the coordinator.
-- State machine serialization is application-defined: Trellis snapshots are
+- State machine serialization is application-defined: Loomery snapshots are
   versioned projections (envelope-versioned; upcast on load — D3).
 
-## 4. Wiring into a Trellis Raft group
+## 4. Wiring into a Loomery Raft group
 
 ```
 Command (HTTP gateway)
@@ -101,7 +101,7 @@ Command (HTTP gateway)
                                  └─> outbox tailer → NATS JetStream
 ```
 
-The `raft-kv-memstore` example is the reference for this flow; Trellis swaps
+The `raft-kv-memstore` example is the reference for this flow; Loomery swaps
 the KV store for the pure-core `apply`/`Execution` decoding.
 
 ## 5. Example implementations to crib

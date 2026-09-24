@@ -1,10 +1,10 @@
 [package]
-name = "trellis-core"
+name = "loomery-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Pure, deterministic core of the Trellis event-sourced backend"
+description = "Pure, deterministic core of the Loomery event-sourced backend"
 
 [lints]
 workspace = true

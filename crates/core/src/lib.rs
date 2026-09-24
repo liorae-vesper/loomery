@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! The pure, deterministic core of Trellis.
+//! The pure, deterministic core of Loomery.
 //!
 //! This crate holds the domain model and the envelope machinery. It is
 //! deliberately free of I/O, wall-clock reads, and randomness: identities

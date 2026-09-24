@@ -87,7 +87,7 @@ pub enum ContentType {
 /// published by the shell after commit (the outbox payload, D8/D11).
 #[derive(Debug)]
 pub struct OutboundEvent {
-    /// The NATS subject / integration channel (e.g. `trellis.email.invitation`).
+    /// The NATS subject / integration channel (e.g. `loomery.email.invitation`).
     pub subject: &'static str,
     /// The payload's content type.
     pub content_type: ContentType,
@@ -254,7 +254,7 @@ mod tests {
                 Ok(Execution {
                     events: vec![event()],
                     outbound_events: vec![OutboundEvent {
-                        subject: "trellis.counter.incremented",
+                        subject: "loomery.counter.incremented",
                         content_type: ContentType::JSON,
                         payload: b"{}".to_vec(),
                     }],
@@ -328,7 +328,7 @@ mod tests {
         // one outbound integration event for the shell's outbox (D8/D11)
         assert_eq!(execution.outbound_events.len(), 1);
         let outbound = &execution.outbound_events[0];
-        assert_eq!(outbound.subject, "trellis.counter.incremented");
+        assert_eq!(outbound.subject, "loomery.counter.incremented");
         assert!(matches!(outbound.content_type, ContentType::JSON));
         assert_eq!(outbound.payload, b"{}");
     }

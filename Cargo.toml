@@ -11,8 +11,8 @@ license = "MPL-2.0"
 publish = false
 
 [workspace.dependencies]
-trellis-core = { path = "crates/core"}
-trellis-genesis = {path = "crates/genesis"}
+loomery-core = { path = "crates/core"}
+loomery-genesis = {path = "crates/genesis"}
 
 [workspace.lints.clippy]
 # Standard groups

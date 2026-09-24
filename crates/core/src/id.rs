@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Identity types for the Trellis core.
+//! Identity types for the Loomery core.
 //!
 //! [`Id`] is the canonical identifier for aggregates, organizations,
 //! workspaces and every other entity: the 36-character hyphenated UUID
@@ -76,7 +76,7 @@ impl Id {
     /// # Examples
     ///
     /// ```
-    /// use trellis_core::id::Id;
+    /// use loomery_core::id::Id;
     ///
     /// let id = Id::new(); // minted shell-side
     /// assert_eq!(Id::parse(&id).unwrap(), id);

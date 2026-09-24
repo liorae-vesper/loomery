@@ -1,16 +1,16 @@
-# Continue Trellis — Session Handoff
+# Continue Loomery — Session Handoff
 
-You are continuing development on **Trellis**, an event-sourced backend for
+You are continuing development on **Loomery**, an event-sourced backend for
 team collaboration, built in **Rust** on **Tokio** with **OpenRaft** for
 consensus. The project lives at
-`/home/john/Workspace/Liorae/trellis` (git branch: `main`, linear history).
+`/home/john/Workspace/Liorae/loomery` (git branch: `main`, linear history).
 
 Read `docs/design.md` first — it is the source of truth for the architecture,
 crate layout, phase plan, and the decisions register.
 
 ---
 
-## What Trellis is
+## What Loomery is
 
 Organizations, workspaces, projects, tasks, documentation, and AI-assisted
 workflows. Architecture: a **pure functional core** (deterministic
@@ -24,18 +24,18 @@ planned for Phases 1+.
   `rustfmt.toml`, `deny.toml` license/advisory policy, hk hooks, cog
   conventional commits, `mise run verify`). See `docs/guardrails.md`.
 - **Pure core — scaffolded, in progress** (`docs/design.md` §3, §8 tracker):
-  - `trellis_core::id::Id` — canonical UUID id: minted `UUIDv7` (shell-side
+  - `loomery_core::id::Id` — canonical UUID id: minted `UUIDv7` (shell-side
     `Id::new()`) or derived `UUIDv5`; `Id::parse` validates ids arriving from
     outside, `From<&str>` adopts ids already known canonical.
-  - `trellis_core::key::Key` — derived identity (`UUIDv5`): causation keys,
+  - `loomery_core::key::Key` — derived identity (`UUIDv5`): causation keys,
     `Command::event_id(index)`, `Command::fingerprint`, and derived entity ids
     (`Id::from(key)`); strict `TryFrom` validation (see D12).
-  - `trellis_core::envelope` — `Event` (fields per §6 of `design.md`) with a
+  - `loomery_core::envelope` — `Event` (fields per §6 of `design.md`) with a
     nested, versioned `Payload { version, data }`; serde round-trip + exact
     wire-format snapshot tests (frozen payloads, D3).
-  - `trellis_core::timestamp::Timestamp` — injected i64 ms-since-epoch (D5);
+  - `loomery_core::timestamp::Timestamp` — injected i64 ms-since-epoch (D5);
     `From<i64>`/`as_millis()`/`Deref`, `now()` is shell-side only.
-  - `crates/genesis` (`trellis-genesis`) — the bootstrap script: derived
+  - `crates/genesis` (`loomery-genesis`) — the bootstrap script: derived
     identity (`step_key`, `bootstrap_correlation_key`, `default_workspace_id`,
     `owner_membership_id`, `command_id`), the three commands at their ①②③ wire
     names, and `Bootstrap::{command, next_command, progress}` — progress is
@@ -48,7 +48,7 @@ planned for Phases 1+.
 
 ## Conventions (non-negotiable)
 
-- **Domain-first modules**: `trellis_core::task::Task`, never `trellis_core::domain::task`.
+- **Domain-first modules**: `loomery_core::task::Task`, never `loomery_core::domain::task`.
 - State is a struct per aggregate; commands/events are **typed serde structs**
   with a `kind`/`event_type` discriminator, JSON payloads inside envelopes.
 - `fn execute(state, command) -> Result<Execution, DomainError>` and
@@ -65,7 +65,7 @@ planned for Phases 1+.
   per attempt — see D12 in `design.md`.
 - Processing a command does NOT record the dedup entry — the shell records it
   after the events are durably appended and applied (contract documented in
-  `trellis_core::aggregate`).
+  `loomery_core::aggregate`).
 - Validate untrusted input against bounded, compile-time schemas at the
   boundary (see D10 in `design.md`) — never build types from user strings.
 
@@ -102,7 +102,7 @@ Dev/test: `proptest` (property tests), `cargo-llvm-cov`, `cargo-audit`,
 See `docs/design.md` §5 and the roadmap tracker. Scope:
 
 1. **Finish the pure core** — `Command`
-   (done — `trellis_core::envelope::Command`), `Error`/`Code`,
+   (done — `loomery_core::envelope::Command`), `Error`/`Code`,
    `Versioning`, `Execution`/
    `IntegrationEvent`, `DedupIndex`, the `Aggregate` trait, then the six
    aggregates (Organization, User, Workspace, Task, OrganizationAssignment,
