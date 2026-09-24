@@ -1,11 +1,11 @@
 ---
 
-> **Research note for the Trellis project.** Informs decision D2 (storage).
+> **Research note for the Loomery project.** Informs decision D2 (storage).
 
 # Indexed Segment File Format
 
 A zero-extra-file index footer embedded in sealed segment files, enabling fast
-recovery and selective lazy loading for the Trellis storage engine
+recovery and selective lazy loading for the Loomery storage engine
 (`RaftLogStorage` behind OpenRaft).
 
 ---
@@ -261,7 +261,7 @@ footer is 0.5%–20% of file size — acceptable for the recovery-speed gain.
 |---|---|
 | Storage Engine Alternatives | `storage-engine-alternatives.md` (this directory) |
 | OpenRaft storage interfaces | `openraft-storage.md` (this directory) |
-| Trellis design (D2/D3) | `../design.md` |
+| Loomery design (D2/D3) | `../design.md` |
 | Unified-log pattern (inspiration) | https://github.com/rabbitmq/ra/blob/main/docs/internals/INTERNALS.md |
 
 *Compiled: 2026-08 (reshaped for the Rust/Tokio/OpenRaft stack).*

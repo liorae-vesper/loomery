@@ -1,4 +1,4 @@
-// hk.pkl — git hooks for the trellis workspace (https://hk.jdx.dev)
+// hk.pkl — git hooks for the loomery workspace (https://hk.jdx.dev)
 //
 // Design notes:
 //  * Git runs `pre-commit` BEFORE the commit message exists (verified on git 2.55),

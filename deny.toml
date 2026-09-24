@@ -34,7 +34,7 @@ unused-allowed-license = "allow"
 multiple-versions = "warn"      # Flag duplicate versions of the same dependency
 wildcards = "deny"              # Block wildcard version specifiers (e.g., "*")
 # Workspace-internal crates are depended on as version-less path deps on purpose
-# (`trellis-core = { workspace = true }`); a path dep is not a registry wildcard,
+# (`loomery-core = { workspace = true }`); a path dep is not a registry wildcard,
 # so allow it while still rejecting real `*` requirements.
 allow-wildcard-paths = true
 highlight = "all"

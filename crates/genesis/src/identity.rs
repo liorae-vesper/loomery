@@ -25,10 +25,10 @@
 //!   [`DEFAULT_WORKSPACE_NAME`] are hashed; changing one silently changes
 //!   every id derived from it (the golden tests here will fail).
 
-use trellis_core::Uuid;
-use trellis_core::actor::Actor;
-use trellis_core::id::Id;
-use trellis_core::key::Key;
+use loomery_core::Uuid;
+use loomery_core::actor::Actor;
+use loomery_core::id::Id;
+use loomery_core::key::Key;
 
 /// The namespace of the `v1` genesis script.
 ///

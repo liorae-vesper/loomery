@@ -24,11 +24,11 @@ use crate::identity::{
     DEFAULT_WORKSPACE_NAME, Step, bootstrap_actor, bootstrap_correlation_key, command_id,
     default_workspace_id, owner_membership_id, step_key,
 };
+use loomery_core::envelope::{Command, Event, Payload, Version};
+use loomery_core::id::Id;
+use loomery_core::timestamp::Timestamp;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use trellis_core::envelope::{Command, Event, Payload, Version};
-use trellis_core::id::Id;
-use trellis_core::timestamp::Timestamp;
 
 /// The envelope version every genesis command is written with.
 const ENVELOPE_VERSION: Version = 1;
@@ -63,7 +63,7 @@ pub struct AddOwner {
 impl Step {
     /// The `command_type` this step issues.
     ///
-    /// **Part of the control-plane wire contract:** when `trellis-core` grows
+    /// **Part of the control-plane wire contract:** when `loomery-core` grows
     /// the `organization` / `workspace` / `membership` aggregates, they must
     /// accept these names (or this crate imports theirs — one source of truth
     /// either way).
@@ -281,8 +281,8 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trellis_core::actor::Actor;
-    use trellis_core::key::Key;
+    use loomery_core::actor::Actor;
+    use loomery_core::key::Key;
 
     fn organization() -> Id {
         Id::from("018f2c3d-4e5f-7071-8293-a4b5c6d7e8f9")
@@ -461,7 +461,7 @@ mod tests {
     fn progress_ignores_events_that_are_not_genesis() {
         let bootstrap = bootstrap();
         let foreign = event_with(Key::new(
-            &trellis_core::Uuid::from_u128(1),
+            &loomery_core::Uuid::from_u128(1),
             "someone-elses-intent",
         ));
 

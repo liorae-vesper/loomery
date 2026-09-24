@@ -1,10 +1,10 @@
 ---
 
-> **Research note for the Trellis project.** Informs decision D2 (storage).
+> **Research note for the Loomery project.** Informs decision D2 (storage).
 
 # Storage Engine Alternatives — Research
 
-Evaluates per-node embedded storage options for Trellis: the hand-rolled
+Evaluates per-node embedded storage options for Loomery: the hand-rolled
 **segment files + in-memory index** design vs sled, Redb, RocksDB, SQLite, and
 others — all behind OpenRaft's `RaftLogStorage`/`RaftStateMachine` traits.
 Includes the **vector database constraint** (Capture phase) with
@@ -65,7 +65,7 @@ accumulated during the previous fsync — latency adapts to load automatically.
 
 ## 2. Alternatives compared (Rust)
 
-| Engine | Crate | Type | Write model | Backup story | Verdict for Trellis |
+| Engine | Crate | Type | Write model | Backup story | Verdict for Loomery |
 |---|---|---|---|---|---|
 | **Segment files + index** (hand-rolled) | — | Purpose-built log | Single batched-fsync WAL | Immutable segments = copy-once | ✅ Event store / unified log |
 | **sled** | `sled` | Ordered KV, log-structured | Concurrent, batched | Tree snapshots; copy-on-write friendly | ✅ OpenRaff-friendly (example impl exists) |
@@ -86,7 +86,7 @@ RocksStore example. **What it costs:**
   literature of their own.
 - **Design-fit friction (the decisive axis):** the unified log wants explicit
   durability control (batched fsync → notify → CRC framing → torn-tail
-  recovery); RocksDB does durability its own way and Trellis layers on top.
+  recovery); RocksDB does durability its own way and Loomery layers on top.
   In-place compaction mutates files → harder delta backup than immutable
   sealed segments. Block cache duplicates hot data already held in-memory.
 - **Build/deploy burden** — C++ toolchain, compile time (clone `rocksdb` once).
@@ -115,7 +115,7 @@ is the comparison baseline and the sane escape hatch (D2).
 
 ## 4. The vector database constraint
 
-### Where vectors live in Trellis
+### Where vectors live in Loomery
 Phase 4 (Capture) and semantic features: embeddings of captured notes, tasks,
 projects — used for extraction assistance, dedup detection, semantic search.
 
@@ -167,7 +167,7 @@ backup a plain file copy.
 
 ---
 
-## 5. Recommendation for Trellis
+## 5. Recommendation for Loomery
 
 | Layer | Choice | Why |
 |---|---|---|

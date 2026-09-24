@@ -1,10 +1,10 @@
 ---
 
-> **Research note for the Trellis project.** Informs decision D1 (consensus).
+> **Research note for the Loomery project.** Informs decision D1 (consensus).
 
 # OpenRaft vs the Alternatives — Research
 
-Trellis is a multi-tenant event-sourced backend: **one consensus group per
+Loomery is a multi-tenant event-sourced backend: **one consensus group per
 organization + a control group**, running inside a single Rust process per
 node. This note answers: **which consensus/coordination approach should drive
 those groups?** OpenRaft wins the recommendation; here is the reasoning.
@@ -35,7 +35,7 @@ replication (Postgres logical replication).
 
 - **Async-native Tokio**: `Raft<TypeConfig>` is a spawnable set of tasks;
   `RaftNetwork` and the storage traits are async traits (`#[openraft-macros::add_async_trait]`).
-  This matches Trellis's Tokio shell exactly — no FFI, no threads-per-group.
+  This matches Loomery's Tokio shell exactly — no FFI, no threads-per-group.
 - **We implement storage.** `RaftLogStorage` (log) and `RaftStateMachine`
   (apply + snapshots) are interfaces we own — so D2 (segment files vs sled vs
   RocksDB) stays an implementation detail behind the traits.
@@ -57,7 +57,7 @@ replication (Postgres logical replication).
   node. OpenRaft scales to many co-resident groups (databend-meta runs one
   large group; the pattern extends to many small ones).
 - **Silent idle groups**: no heartbeat traffic when there's nothing to
-  replicate — matches Trellis's hibernation-friendly tenant model.
+  replicate — matches Loomery's hibernation-friendly tenant model.
 - **Group membership**: a tenant group is created via `initialize` (bootstrap),
   nodes join/leave via `change_membership`; the genesis worker drives this.
 
@@ -65,7 +65,7 @@ replication (Postgres logical replication).
 
 - Raft's correctness requires every replica apply identical commands
   identically. Khepri (RabbitMQ) went so far as to extract and verify the
-  bytecode of transaction functions to guarantee purity. Trellis sidesteps the
+  bytecode of transaction functions to guarantee purity. Loomery sidesteps the
   whole class of problems the Khepri/Horus way but simpler: **commands and
   events are plain data** (`serde_json`), and `apply` is a pure function —
   determinism is structural, not verified.
@@ -83,16 +83,16 @@ replication (Postgres logical replication).
 | External coordination (leader election, config) | etcd/consul | Only when we don't want to run our own raft groups |
 | Durable pub/sub, fan-out, replay | NATS JetStream (outbox, under Raft commit) | AP delivery; *not* a replacement for consensus |
 | SQL query layer | Postgres etc. | Read models only; the Raft log *is* the durability layer (D9) |
-| CRDT/AP data with high churn | Not Trellis's model | Trellis is CP per tenant; Raft is the home turf |
+| CRDT/AP data with high churn | Not Loomery's model | Loomery is CP per tenant; Raft is the home turf |
 
-**For Trellis specifically:** cluster size is 3–5 nodes, so external registry
+**For Loomery specifically:** cluster size is 3–5 nodes, so external registry
 mesh limits are irrelevant; what matters is (a) per-tenant linearizability,
 (b) partition predictability, and (c) an append-only replicated log that *is*
 the event store — all three are OpenRaft's home turf.
 
 ## 6. Use cases that justify "Raft in the app, not in a service"
 
-1. **Per-tenant SaaS** — one Raft group per tenant in-process (Trellis's model).
+1. **Per-tenant SaaS** — one Raft group per tenant in-process (Loomery's model).
 2. **Replicated metadata stores** — databend-meta, Khepri-class workloads.
 3. **Event-sourced systems** — a committed Raft log *is* an event store
    (immutable, totally ordered, persistent); the unified-log pattern.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-//! Causation, idempotency and derived-identity keys for the Trellis core.
+//! Causation, idempotency and derived-identity keys for the Loomery core.
 //!
 //! [`Key`] is the *derived* half of identity (D12): a `UUIDv5` computed from a
 //! namespace plus data, so every replica, resumer and client computes the same
@@ -57,7 +57,7 @@ use uuid::{Uuid, Version};
 /// # Examples
 ///
 /// ```
-/// use trellis_core::key::Key;
+/// use loomery_core::key::Key;
 /// use uuid::Uuid;
 ///
 /// let namespace = Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);
@@ -143,7 +143,7 @@ impl TryFrom<&str> for Key {
     /// # Examples
     ///
     /// ```
-    /// use trellis_core::key::Key;
+    /// use loomery_core::key::Key;
     /// use uuid::Uuid;
     ///
     /// let namespace = Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);

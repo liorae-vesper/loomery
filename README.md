@@ -1,8 +1,8 @@
-# Trellis
+# Loomery
 
 **An event-sourced backend for team collaboration, built in Rust.**
 
-Trellis is a distributed backend for organizations, workspaces, projects,
+Loomery is a distributed backend for organizations, workspaces, projects,
 tasks, documentation, and AI-assisted workflows. It is built around a **pure,
 deterministic core** and an **imperative shell**, with consensus provided by
 [OpenRaft](https://github.com/openraft/openraft) on the [Tokio](https://tokio.rs)
@@ -15,7 +15,7 @@ async runtime.
 
 ## Goals
 
-Trellis is designed around a small set of non-negotiable principles:
+Loomery is designed around a small set of non-negotiable principles:
 
 1. **Append-only.** Events are never mutated; corrections are compensating events.
 2. **Pure core.** `prepare`/`apply` are deterministic. All I/O lives in the shell.
@@ -41,7 +41,7 @@ replay and consistent state across replicas.
 
 ## Architecture
 
-Trellis follows Gary Bernhardt's **Functional Core, Imperative Shell** pattern.
+Loomery follows Gary Bernhardt's **Functional Core, Imperative Shell** pattern.
 
 - **The core (pure)** — business logic as deterministic functions:
   - `prepare(state, command) -> Result<Execution, DomainError>`
@@ -67,10 +67,10 @@ Trellis follows Gary Bernhardt's **Functional Core, Imperative Shell** pattern.
 ## Repository layout
 
 ```
-trellis/
+loomery/
 ├── crates/
-│   ├── core/          # trellis-core — the pure, deterministic domain core
-│   └── genesis/       # trellis-genesis — the deterministic bootstrap script
+│   ├── core/          # loomery-core — the pure, deterministic domain core
+│   └── genesis/       # loomery-genesis — the deterministic bootstrap script
 ├── docs/              # design docs, research notes, and guardrails
 ├── deny.toml          # cargo-deny policy (licenses, advisories, bans)
 ├── hk.pkl             # pre-commit hooks (commit message lint + quality gates)
@@ -90,7 +90,7 @@ derived identity, plus crash-resume progress read back from the log.
 
 ## Prerequisites
 
-Trellis uses [mise](https://mise.jdx.dev) to manage the Rust toolchain and
+Loomery uses [mise](https://mise.jdx.dev) to manage the Rust toolchain and
 developer tools at pinned versions. Install mise first:
 
 ```sh
@@ -180,4 +180,4 @@ build artifacts.
 
 ## License
 
-Trellis is licensed under the [Mozilla Public License 2.0](LICENSE).
+Loomery is licensed under the [Mozilla Public License 2.0](LICENSE).

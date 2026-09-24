@@ -1,9 +1,9 @@
-# Trellis — Design
+# Loomery — Design
 
 **Status: DRAFT** (Rust workspace scaffolded; pure core in progress —
 `crates/core` owns `Id` + `Event`; shell planned on Tokio + OpenRaft)
 
-This is the design and planning document for **Trellis**, an event-sourced
+This is the design and planning document for **Loomery**, an event-sourced
 backend for team collaboration built in **Rust** on the **Tokio** async
 runtime, with **OpenRaft** providing consensus. It defines the architecture
 (pure functional core + imperative shell), the workspace/derive planned crate
@@ -15,9 +15,9 @@ research notes in [`docs/research/`](research/). Development guardrails live in
 
 ---
 
-## 1. What Trellis is
+## 1. What Loomery is
 
-Trellis is an **event-sourced backend for team collaboration**: organizations,
+Loomery is an **event-sourced backend for team collaboration**: organizations,
 workspaces, projects, tasks, documentation, and AI-assisted workflows. Its
 non-negotiable principles:
 
@@ -39,7 +39,7 @@ non-negotiable principles:
 
 ## 2. Architecture
 
-Trellis follows Gary Bernhardt's **Functional Core, Imperative Shell**. All
+Loomery follows Gary Bernhardt's **Functional Core, Imperative Shell**. All
 business logic lives in pure, deterministic functions; side effects (storage,
 consensus, networking, integration) are pushed to the outer shell.
 
@@ -113,30 +113,30 @@ serves the read — otherwise the gateway forwards the request to the leader.
 
 The core is a set of structs, traits, and pure functions living in
 `crates/core`, mirroring the domain model. The package is named
-**`trellis-core`** — a crate literally named `core` would shadow the standard
+**`loomery-core`** — a crate literally named `core` would shadow the standard
 library's `core` in rustdoc/doctests and in any downstream build using proc
 macros (their generated code refers to `::core` paths). Keep it that way.
 
 | Item (crate path) | Purpose |
 |---|---|
-| `trellis_core::id::Id` | Canonical UUID id — minted `UUIDv7` or derived `UUIDv5` (canonical string form) — see [D4](#d4-uuid-representation), [D12](#d12-identity-minted-intents-and-derived-entities) |
-| `trellis_core::key::Key` | Derived identity (`UUIDv5`): causation/dedup keys, event ids, derived entity ids (`Id::from(key)`) — see [D12](#d12-identity-minted-intents-and-derived-entities) |
-| `trellis_core::envelope::Event` | The wrapper for every committed event (see §6) |
-| `trellis_core::envelope::Command` | Command form: `prepare` input, carries injected `occurred_at` + ids |
-| `trellis_core::actor::Actor` | `{ kind: User \| System \| Saga, user_id, saga_name }` — who performed an action |
-| `trellis_core::timestamp::Timestamp` | ms-since-epoch UTC wrapper (injected; the core never reads the clock) |
-| `trellis_core::error::DomainError<C>` | Generic-over-code domain error: `{ code, message, cause }` — each domain area brings its own code enum; `cause: Option<anyhow::Error>` chains shell-side errors |
-| `trellis_core::versioning` | Upcast contract: per-aggregate **static chains** (closed `KnownPayload` enum + exhaustive match), `UpcastCode`, `Upcaster` fn alias (P2) |
-| `trellis_core::aggregate::AggregatePlan` | The trait: `prepare`, `apply`, plus shared `process` and `fold` helpers |
-| `trellis_core::aggregate::Execution` (+ `OutboundEvent`, `ContentType`) | Result of a command: domain events to commit + optional outbound integration events (D8/D11) |
-| `trellis_core::dedup::Registry` | The idempotency window (P3) folded into group state; entries carry the intent fingerprint |
-| `trellis_core::org::Organization` | Organization aggregate |
-| `trellis_core::user::User` | User aggregate |
-| `trellis_core::workspace::Workspace` | Workspace aggregate |
-| `trellis_core::task::Task` | Task aggregate |
-| `trellis_core::membership::OrganizationAssignment` | Organization ↔ User membership |
-| `trellis_core::membership::WorkspaceMembership` | Workspace ↔ User membership with role |
-| `trellis_core::test_helpers` / `proptest` support | Deterministic envelope builder for tests |
+| `loomery_core::id::Id` | Canonical UUID id — minted `UUIDv7` or derived `UUIDv5` (canonical string form) — see [D4](#d4-uuid-representation), [D12](#d12-identity-minted-intents-and-derived-entities) |
+| `loomery_core::key::Key` | Derived identity (`UUIDv5`): causation/dedup keys, event ids, derived entity ids (`Id::from(key)`) — see [D12](#d12-identity-minted-intents-and-derived-entities) |
+| `loomery_core::envelope::Event` | The wrapper for every committed event (see §6) |
+| `loomery_core::envelope::Command` | Command form: `prepare` input, carries injected `occurred_at` + ids |
+| `loomery_core::actor::Actor` | `{ kind: User \| System \| Saga, user_id, saga_name }` — who performed an action |
+| `loomery_core::timestamp::Timestamp` | ms-since-epoch UTC wrapper (injected; the core never reads the clock) |
+| `loomery_core::error::DomainError<C>` | Generic-over-code domain error: `{ code, message, cause }` — each domain area brings its own code enum; `cause: Option<anyhow::Error>` chains shell-side errors |
+| `loomery_core::versioning` | Upcast contract: per-aggregate **static chains** (closed `KnownPayload` enum + exhaustive match), `UpcastCode`, `Upcaster` fn alias (P2) |
+| `loomery_core::aggregate::AggregatePlan` | The trait: `prepare`, `apply`, plus shared `process` and `fold` helpers |
+| `loomery_core::aggregate::Execution` (+ `OutboundEvent`, `ContentType`) | Result of a command: domain events to commit + optional outbound integration events (D8/D11) |
+| `loomery_core::dedup::Registry` | The idempotency window (P3) folded into group state; entries carry the intent fingerprint |
+| `loomery_core::org::Organization` | Organization aggregate |
+| `loomery_core::user::User` | User aggregate |
+| `loomery_core::workspace::Workspace` | Workspace aggregate |
+| `loomery_core::task::Task` | Task aggregate |
+| `loomery_core::membership::OrganizationAssignment` | Organization ↔ User membership |
+| `loomery_core::membership::WorkspaceMembership` | Workspace ↔ User membership with role |
+| `loomery_core::test_helpers` / `proptest` support | Deterministic envelope builder for tests |
 
 ### 3.1 Core contracts
 
@@ -313,8 +313,8 @@ plus the optional `stream_append` pipelining). Findings so far:
   `docs/research/openraft-storage.md` and the upgrade guides in the crate.
 - Multiple co-resident groups per process is the intended deployment (each
   tenant group + the control group = independent `Raft` tasks); idle groups
-  send no heartbeats, matching Trellis's silent-tenant property.
-- A Raft **group** in Trellis = one `organization_id` (or the control group);
+  send no heartbeats, matching Loomery's silent-tenant property.
+- A Raft **group** in Loomery = one `organization_id` (or the control group);
   group membership changes (add/remove node) go through `change_membership`.
 
 ### D2 — Storage engine
@@ -385,11 +385,11 @@ format) and capped.
 ### D11 — Outbox subjects, stream naming, and dedup identity
 **Decision (carried from the original design) — the NATS subject/stream
 naming for the first outbox slice:**
-- Stream: one `TRELLIS_OUTBOX` JetStream stream per deployment, capturing
-  `trellis.>`.
-- Domain events publish to `trellis.events.<group_id>.<event_type>` (e.g.
-  `trellis.events.org:01hx….invitation_accepted`); integration events keep
-  their own subject verbatim (e.g. `trellis.email.invitation`).
+- Stream: one `LOOMERY_OUTBOX` JetStream stream per deployment, capturing
+  `loomery.>`.
+- Domain events publish to `loomery.events.<group_id>.<event_type>` (e.g.
+  `loomery.events.org:01hx….invitation_accepted`); integration events keep
+  their own subject verbatim (e.g. `loomery.email.invitation`).
 - Dedup: `Nats-Msg-Id = <group_id>:<log_index>:e<pos>` for domain events,
   `…:i<pos>` for integration events of the same log entry — one log entry
   yields distinct per-message ids while the `(group_id, log_index)` pair stays
@@ -431,7 +431,7 @@ naming for the first outbox slice:**
 - **Untrusted strings are parsed, not adopted.** `Id::parse` (canonical UUID,
   any version) and `Key::try_from` (canonical **`UUIDv5`** only) are the entry
   points for outside data; `Id::from(&str)` stays for ids already known
-  canonical. `uuid` is re-exported as `trellis_core::Uuid` so namespace
+  canonical. `uuid` is re-exported as `loomery_core::Uuid` so namespace
   constants cannot drift into a second `uuid` version.
 - **Naming follows the rule.** `*_id` holds an `Id` — an *entity* identity,
   minted or derived-then-adopted (`Id::from(key)`); `*_key` holds a `Key` — a
@@ -469,30 +469,30 @@ naming for the first outbox slice:**
 - [x] `mise run verify` — check + clippy -D warnings + fmt + deny + package
 
 ### Pure core (Phase 0)
-- [x] `trellis_core::id::Id` (UUIDv7 wrapper, serde round-trip + shape tests)
-- [x] `trellis_core::envelope::EventEnvelope` + `Payload` (serde round-trip +
+- [x] `loomery_core::id::Id` (UUIDv7 wrapper, serde round-trip + shape tests)
+- [x] `loomery_core::envelope::EventEnvelope` + `Payload` (serde round-trip +
       exact wire-format snapshot test)
-- [x] `trellis_core::timestamp::Timestamp` (injected i64 ms, D5; `now()` shell-side)
-- [x] `trellis_core::envelope::Command` (injected carrier, mirrors `Event`; round-trip test)
-- [x] `trellis_core::actor::Actor` (`User \| System \| Saga`, serde round-trip + equality tests)
-- [x] `trellis_core::error::DomainError<C>` (generic over code enum; `cause` chains via `anyhow`; display/equality/source tests)
-- [x] `trellis_core::versioning` (per-aggregate static chain contract:
+- [x] `loomery_core::timestamp::Timestamp` (injected i64 ms, D5; `now()` shell-side)
+- [x] `loomery_core::envelope::Command` (injected carrier, mirrors `Event`; round-trip test)
+- [x] `loomery_core::actor::Actor` (`User \| System \| Saga`, serde round-trip + equality tests)
+- [x] `loomery_core::error::DomainError<C>` (generic over code enum; `cause` chains via `anyhow`; display/equality/source tests)
+- [x] `loomery_core::versioning` (per-aggregate static chain contract:
       `UpcastCode` + `Upcaster` + documented pattern; chains land with each
       aggregate)
-- [x] `trellis_core::aggregate::AggregatePlan` (`prepare`/`apply` trait +
+- [x] `loomery_core::aggregate::AggregatePlan` (`prepare`/`apply` trait +
       `process`/`fold` free fns; dedup-on-`causation_key`; property + unit
       tests)
-- [x] `trellis_core::aggregate::Execution` — real result type: `events` to
+- [x] `loomery_core::aggregate::Execution` — real result type: `events` to
       commit + `outbound_events` (subject/content-type/payload); carried by
       `Executed(Execution)`; covered by unit test (35 total)
-- [x] `trellis_core::dedup::DedupIndex` — bounded FIFO idempotency window
+- [x] `loomery_core::dedup::DedupIndex` — bounded FIFO idempotency window
       (`dashmap` + `VecDeque`, deterministic eviction; unit + **proptest**
       model-based and metadata-retention properties)
-- [ ] `trellis_core::org::Organization`
-- [ ] `trellis_core::user::User`
-- [ ] `trellis_core::workspace::Workspace`
-- [ ] `trellis_core::task::Task`
-- [ ] `trellis_core::membership` (OrganizationAssignment / WorkspaceMembership)
+- [ ] `loomery_core::org::Organization`
+- [ ] `loomery_core::user::User`
+- [ ] `loomery_core::workspace::Workspace`
+- [ ] `loomery_core::task::Task`
+- [ ] `loomery_core::membership` (OrganizationAssignment / WorkspaceMembership)
 - [ ] Property tests (`proptest`: replay determinism, fold associativity,
       random-commands-never-crash) *(dedup window ✓ — model-based eviction
       + re-insert-never-refreshes)*

@@ -3,7 +3,7 @@
 The project's development guardrails — the tools and gates that keep the
 codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 
-| Guardrail | Trellis (Rust) |
+| Guardrail | Loomery (Rust) |
 |---|---|
 | Formatter | `cargo fmt --check` (`rustfmt.toml`: 2024 edition, max_width 100, tabs 4) |
 | Lint / static analysis | `cargo clippy --workspace --all-targets -- -D warnings` |
