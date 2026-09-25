@@ -13,6 +13,7 @@ publish = false
 [workspace.dependencies]
 loomery-core = { path = "crates/core"}
 loomery-genesis = {path = "crates/genesis"}
+loomery-shell = { path = "crates/shell"}
 
 [workspace.lints.clippy]
 # Standard groups

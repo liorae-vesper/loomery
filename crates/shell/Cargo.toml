@@ -1,0 +1,17 @@
+[package]
+name = "loomery-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Imperative shell: consesus, storage, gateway and workers"
+
+[dependencies]
+loomery-core.workspace = true
+loomery-genesis.workspace = true
+anyhow = "1.0.104"
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
+
+[lints]
+workspace = true
