@@ -3,7 +3,7 @@
 You are continuing development on **Loomery**, an event-sourced backend for
 team collaboration, built in **Rust** on **Tokio** with **OpenRaft** for
 consensus. The project lives at
-`/home/john/Workspace/Liorae/loomery` (git branch: `main`, linear history).
+`/home/john/Workspace/Liorae/loomery` (git branch: `feat/shell-group-port`, linear history).
 
 Read `docs/design.md` first — it is the source of truth for the architecture,
 crate layout, phase plan, and the decisions register.
@@ -48,7 +48,7 @@ planned for Phases 1+.
     the pure core (`AggregatePlan::process`) and passes OpenRaft's
     `testing::Suite`; genesis ①②③ are born end-to-end in process, and a
     crash between steps resumes with no duplicate genesis.
-  - 82 core + 24 genesis + 26 shell unit tests + 3 doctests passing (serde
+  - 82 core + 24 genesis + 33 shell unit tests + 3 benchmark tests + 3 doctests passing (serde
     round-trips, wire-format snapshot, id/key derivation + validation, dedup
     window, timestamp ordering, actor/command round-trips, error
     display/equality/source, genesis plan + crash-resume ordering, the
@@ -178,3 +178,41 @@ Then commit with `mise exec -- cog commit ...` on `main`.
 - Full state checkpoints are persisted per apply batch; incremental persistence
   and archival are still future work.
 - Next: control-plane orchestration/router, bootstrap reconciliation and RYW.
+
+## TLS and checkpoint-policy follow-up
+
+- Optional `transport.server_tls` and `client_tls` load PEM identity/CA paths;
+  client CA enforcement enables mTLS. HTTPS is required with outbound TLS,
+  with hostname verification and no plaintext fallback.
+- `docs/design.md` now records the implemented 0.9 `RaftNetwork` RPCs, actual
+  checkpoint recovery, separate snapshot policy and heartbeat behavior.
+- `docs/research/checkpoint-policy.md` distinguishes background scheduling
+  from WAL synchronization. Awaited state checkpoints remain the current
+  contract; snapshot-backed recovery and incremental writes need benchmarks
+  and crash/purge tests before changing it.
+
+## Controlled consensus benchmark
+
+- `crates/shell/examples/consensus_bench.rs` orchestrates separate replica
+  processes, production tonic/RocksDB storage, configurable bounded write load,
+  snapshots, leader crash/election, and full-cluster database reopen.
+- `docs/benchmarks.md` describes measurement boundaries and controlled
+  comparisons; `docs/benchmarks/consensus.json` supplies an example config.
+- `mise run bench-consensus` runs release trials. Effective configuration,
+  environment, dependency lockfile, raw write samples and JSON phase timings
+  are saved alongside fresh retained databases in `benchmark-results/`.
+
+## Checkpoint benchmark spike
+
+An experimental `storage.state_persistence = "snapshot"` mode uses in-memory
+apply and durable snapshot + committed-log recovery; checkpoint remains default.
+The mode is fixed per database. Both pass OpenRaft's storage suite. A paired
+three-voter benchmark measured ~174 versus ~550 writes/s (3.16×), and ~170 versus
+~530 with snapshots every 200 logs (3.11×), with zero failures and full-cluster
+process-crash recovery verified. See `docs/benchmarks/checkpoint-spike.md` and
+`mise run bench-persistence -- --output benchmark-results/persistence-comparison`.
+Large-state, interrupted-snapshot and power-loss validation remain outstanding.
+
+Persistence-mode protection is always enabled: durable mode marker, rejection
+in both directions across restarts, nonempty unmarked databases pinned to legacy
+checkpoint mode, and invalid markers rejected. Targeted protection tests pass.

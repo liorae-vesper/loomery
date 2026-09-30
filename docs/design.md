@@ -1,7 +1,8 @@
 # Loomery — Design
 
-**Status: DRAFT** (Rust workspace scaffolded; pure core in progress —
-`crates/core` owns `Id` + `Event`; shell planned on Tokio + OpenRaft)
+**Status: IN PROGRESS** — core infrastructure and bootstrap aggregates are
+implemented. The shell includes OpenRaft, tonic networking and RocksDB storage;
+control-plane orchestration, gateway and outbox remain planned.
 
 This is the design and planning document for **Loomery**, an event-sourced
 backend for team collaboration built in **Rust** on the **Tokio** async
@@ -71,7 +72,7 @@ serialization details, or which node is the leader.
                                                              │  propose → log → quorum
                                                              v
                                execute/apply (pure core) → in-memory state
-                                                             │  (+ async snapshot)
+                                                             │  (checkpoint before reply)
                                                              v
                               WAL tailer → NATS JetStream (outbox)
 ```
@@ -81,7 +82,7 @@ command/response flow, background tasks for snapshots, the outbox tailer, and
 saga runners. The shell owns:
 
 - **Transport** — the gateway (axum) plus the OpenRaft `RaftNetwork`
-  implementation (tonic gRPC is the default recommendation, see [D1](#d1-consensus)).
+  implementation over tonic gRPC, with opt-in TLS/mTLS (see [D1](#d1-consensus)).
 - **Edge pre-computation** — password hashing, token minting, before commands
   enter consensus.
 - **Routing** — `organization_id → group` lookup (see §2.3).
@@ -91,8 +92,9 @@ saga runners. The shell owns:
   snapshots) implementations (see [D2](#d2-storage-engine)).
 - **Outbox** — a tailer task streaming committed log entries and publishing
   domain events to NATS JetStream via `async-nats` ([D8](#d8-sagas-bus)).
-- **Recovery** — startup replay: load latest snapshot, apply committed-but-
-  unapplied log after it, rebuild read models.
+- **Recovery** — restore the durable applied-state checkpoint and the separately
+  stored Raft snapshot; OpenRaft replays the committed suffix after the restored
+  applied index. Snapshots and log retention follow [D2](#d2-storage-engine).
 
 ### 2.3 Consistency: Eventual + Read-Your-Writes
 
@@ -173,19 +175,19 @@ core receives values through the command envelope. Tracked in
 
 ## 4. Shell layout — Rust/Tokio/OpenRaft counterparts
 
-The built shell (port, genesis worker, in-process Raft group) is documented in
+The built shell (port, genesis worker, networked persistent Raft groups) is documented in
 [`shell.md`](shell.md); the table below is the planned full layout.
 
 | Concept | Rust counterpart |
 |---|---|
 | Runtime | **Tokio** (multi-threaded, `flavor = "multi_thread"`); one task per Raft group |
-| Consensus (one group per org + control group) | **OpenRaft** — async-native Raft in Rust; `Raft<TypeConfig>` per group, each with its own `RaftStorage`. See [D1](#d1-consensus) |
-| Storage (log / state / snapshots) | `RaftLogStorage` + `RaftStateMachine` impls — sled, rocksdb, or hand-rolled segment engine (see [D2](#d2-storage-engine) + research notes) |
-| Transport for Raft RPCs | `RaftNetwork` impl over **tonic** (gRPC) — `append_entries`, `vote`, `full_snapshot` |
+| Consensus (one group per org + control group) | **OpenRaft** — async-native Raft in Rust; `Raft<TypeConfig>` per group, each with its own `RaftLogStorage`/`RaftStateMachine`. See [D1](#d1-consensus) |
+| Storage (log / state / snapshots) | `RaftLogStorage` + `RaftStateMachine` over RocksDB; awaited state checkpoints and scheduled Raft snapshots (see [D2](#d2-storage-engine)) |
+| Transport for Raft RPCs | `RaftNetwork` over **tonic** gRPC — `append_entries`, `vote`, chunked `install_snapshot`; opt-in TLS/mTLS |
 | WAL-tailing outbox → NATS JetStream | A Tokio task streaming committed entries, publishing via **async-nats**; dedup by `(group_id, log_index)` ([D8](#d8-sagas-bus), [D11](#d11-outbox-subjects-stream-naming-and-dedup-identity)) |
 | Router (`organization_id` → group) | `DashMap` read model projected by the control group's state machine |
 | Read models / projections | `DashMap`/`Arc<RwLock<HashMap>>` tables fed by projections applied inside the state machine |
-| Worker lifecycle / idle groups | OpenRaft groups idle silently (no heartbeat traffic when idle); snapshotting is async and backgrounded |
+| Worker lifecycle / idle groups | Heartbeat/election behavior follows OpenRaft configuration; scheduled snapshots are separate from awaited state checkpoints |
 | Gateway, edge pre-compute (argon2) | **axum** HTTP server; hash before the command enters consensus |
 | Saga runner | Tokio tasks consuming NATS JetStream with retry classification; timers via `tokio::time` |
 | Bootstrap worker | Genesis script ①②③, emits as `actor = Saga { user_id: None, name: "control-plane:Bootstrap" }`, deterministic `uuid_v5`-style causation |
@@ -283,8 +285,9 @@ replayed.
   `KnownPayload` enum + exhaustive `upcast` match (`versioning` docs) — adding
   a version is a compile-time forcing function: new variant ⇒ missing arm ≠
   builds. `apply` upcasts at fold time; stored bytes are never rewritten
-  (append-only). Snapshots are versioned too; stale snapshots are upcast on
-  load.
+  (append-only). Snapshots carry a format version. The current implementation
+  accepts v1 (including legacy snapshots without an explicit version) and rejects
+  unsupported versions; snapshot upcast chains remain future work.
 - **Writer gating:** new event types are written only once all replicas run a
   supporting version (cluster capability flag on the control group). Decode
   first, write second.
@@ -304,10 +307,24 @@ others. An opinionated application server (APIs -> `Raft::client_write` ->
 log replication -> `StateMachine::apply`) maps 1:1 onto our command flow
 (see the `raft-kv-memstore` example). Hand-rolling Raft in Rust duplicates
 battle-tested machinery for no benefit at our cluster size (3–5 nodes).
-**Status: DECIDED (target).** First slice (Phase 1 control group) lands on
-OpenRaft 0.9.x; the transport is `RaftNetwork` over **tonic gRPC** (matching
-OpenRaft's `RaftNetworkV2` RPC shape — append_entries / vote / full_snapshot,
-plus the optional `stream_append` pipelining). Findings so far:
+**Status: DECIDED and implemented.** OpenRaft 0.9.x uses `RaftNetwork` over
+**tonic gRPC** for `append_entries`, `vote` and chunked `install_snapshot`.
+This is the 0.9 `RaftNetwork` interface, not `RaftNetworkV2`/`full_snapshot`;
+Migration to V2 is future work.
+A versioned protobuf envelope routes each request by group id and carries the
+pinned OpenRaft JSON request/Result types. One listener serves many groups.
+
+TLS is opt-in through `GroupConfig.transport.server_tls` and `client_tls`.
+The server loads a PEM certificate/key pair; clients verify a configured CA and
+the peer URI host (or an explicit `server_name`). A server-side client CA bundle
+requires client certificates, enabling mTLS with configured client identities.
+Configured TLS requires `https://` membership addresses; plaintext requires
+`http://`. Invalid material or a scheme mismatch fails without plaintext fallback.
+Server configuration belongs to the shared listener, and client configuration
+to each group's peer connections. Rotation requires recreating the listener and
+channels; automatic certificate reload is not implemented.
+
+Findings:
 - OpenRaft 0.9 splits storage into **`RaftLogStorage`** (log) +
   **`RaftStateMachine`** (apply/snapshot) with an `Adapter` bridging the old
   combined `RaftStorage`; log and state-machine operations run in parallel.
@@ -315,26 +332,55 @@ plus the optional `stream_append` pipelining). Findings so far:
   methods take an `RPCOption` (hard/soft TTL) — see
   `docs/research/openraft-storage.md` and the upgrade guides in the crate.
 - Multiple co-resident groups per process is the intended deployment (each
-  tenant group + the control group = independent `Raft` tasks); idle groups
-  send no heartbeats, matching Loomery's silent-tenant property.
+  tenant group + the control group = independent `Raft` tasks). Heartbeats and
+  elections are enabled by default. Silent tenant groups require a separate
+  lifecycle design; they are not guaranteed by the current implementation.
 - A Raft **group** in Loomery = one `organization_id` (or the control group);
   group membership changes (add/remove node) go through `change_membership`.
 
 ### D2 — Storage engine
-**Status: DECIDED — RocksDB.** The shell implements durable log/vote/commit
-storage and state/snapshot checkpoints in RocksDB, with synchronous WAL writes
-and blocking-pool I/O. Tonic transport routes multiple groups over one listener.
-Resource settings and OpenRaft consensus settings are exposed through
-`GroupConfig`; see [raft-configuration.md](raft-configuration.md). The initial
-state checkpoint rewrites full applied state per batch; incremental persistence
-and archival remain future work.
+**Status: DECIDED — RocksDB with a persistent state machine.** Each replica
+opens a distinct database per group. Log/vote/commit writes use the WAL with
+`sync=true`; log purge and its floor marker are atomic. `apply()` awaits a
+complete checkpoint containing aggregate state, applied events, dedup, membership
+and applied index before returning success. Recovery loads this checkpoint and
+replays committed logs after its applied index. Storage errors stop the Raft node.
+
+Raft snapshots are separate records, built by OpenRaft according to
+`GroupConfig.raft.snapshot_policy` (default: `LogsSinceLast(5000)`). Snapshot
+creation persists the record before publishing it to OpenRaft; installation
+atomically saves both checkpoint and snapshot before replacing live state.
+OpenRaft controls log purge using snapshot coverage and configured retention.
+An apply checkpoint is not itself a trigger for snapshot publication or log purge.
+
+**Scheduling policy:** keep awaited state checkpoints for this first persistent
+slice; use background scheduling for Raft snapshots, while synchronizing their
+completed storage writes. Background execution and durable synchronization are
+independent. Database calls run on Tokio's blocking pool and are awaited;
+full-state serialization currently runs on the calling task. Awaited checkpoint
+cost grows with history. Incremental persistence or snapshot-backed recovery is
+a future optimization, requiring crash/purge/replay tests and latency/recovery
+benchmarks before changing the contract. The controlled multi-process tonic/
+RocksDB harness in [benchmarks.md](benchmarks.md) measures the current path. Do not replace awaited checkpoints
+with unchecked background writes or disable WAL synchronization.
+
+An experimental `GroupConfig.storage.state_persistence = "snapshot"` mode
+implements in-memory apply with durable scheduled snapshots and committed-log
+replay. The default remains `"checkpoint"`; each database records its mode and
+rejects changes. See the [paired checkpoint spike](benchmarks/checkpoint-spike.md)
+for measurements and remaining validation.
+
+The reasoning and upstream contracts are recorded in
+[checkpoint-policy.md](research/checkpoint-policy.md). Configuration and startup
+examples are in [raft-configuration.md](raft-configuration.md).
 
 ### D3 — Envelope/payload encoding
 Options: `bincode` (compact, fast, not human-readable) vs **serde_json**
 (stable, human-readable, versioned via `payload_version` + upcast).
 **Recommendation: serde_json for the envelope/payload wire format**; `bincode`
 allowed for log entries / snapshots behind the storage traits (log bytes are
-opaque to replicas' `apply`, and snapshots are best-effort derived data).
+opaque to replicas' `apply`; snapshots are derived state but must meet the
+selected durability contract before they cover purged logs).
 **Status: RECOMMENDED**
 
 ### D4 — UUID representation
@@ -504,12 +550,12 @@ naming for the first outbox slice:**
       random-commands-never-crash) *(dedup window ✓ — model-based eviction
       + re-insert-never-refreshes)*
 
-**Phase 0 gate ⏳** — envelope round-trip ✓ (24 tests incl. proptest);
-DedupIndex eviction + dedup-hit property tests ✓; transition-matrix property
-tests green for all six aggregates; coverage floor met.
+**Phase 0 gate ⏳** — envelope round-trip and dedup properties pass; the
+coverage floor is met. Full transition-matrix property tests for all six
+aggregates remain incomplete.
 
 ### Shell (Phases 1–7)
-- [ ] Phase 1 control plane *(next — OpenRaft 0.9 spike)*
+- [ ] Phase 1 control plane *(next — orchestration, router and RYW)*
   - [ ] Control group on OpenRaft (`RaftLogStorage`/`RaftStateMachine` +
         `RaftNetwork` over tonic): `shell::control`
     - [x] levels 1–2 of the spike: in-memory `RaftLogStorage` +
@@ -552,9 +598,9 @@ integration layers:
 | `openraft-vs-alternatives.md` | OpenRaft vs hand-rolled Raft, external coordination (etcd/consul), DB replication; why per-tenant Raft groups |
 | `storage-engine-alternatives.md` | sled/redb/RocksDB/SQLite vs hand-rolled segment files; vector store constraint; backup anchored to event index |
 | `indexed-segment-file-format.md` | An embedded-index segment-file format adapted from the log-storage research |
+| `checkpoint-policy.md` | Checkpoint scheduling versus durability, current recovery contract and future optimization criteria |
 | `openraft-storage.md` | OpenRaft 0.9 storage interfaces — `RaftLogStorage`/`RaftStateMachine` split, snapshot builder, gotchas |
 
 ---
 
-*Last updated: scaffold era — Rust workspace initialized; `crates/core` holds
-`Id` + `Event`; Phase 0 (pure core) is next.*
+*Last updated: 2026-09-30 — tonic/RocksDB slice, checkpoint policy and opt-in gRPC TLS.*
