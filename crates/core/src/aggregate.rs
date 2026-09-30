@@ -71,7 +71,7 @@
 
 use crate::aggregate::Processed::{Error, Executed, Replayed};
 use crate::dedup::Registry;
-use crate::envelope::{Command, Event};
+use crate::envelope::{Command, Event, Payload};
 use crate::error::DomainError;
 
 /// The content type of an outbound (integration) event payload.
@@ -212,6 +212,35 @@ pub fn fold<State, ErrorCode, A: AggregatePlan<State, ErrorCode>>(
     events
         .iter()
         .fold(state, |state, event| A::apply(state, event.clone()))
+}
+
+/// Builds the event a command produces, copying the command's envelope identity.
+///
+/// `index` selects the event id ([`Command::event_id`]) when one command yields
+/// several events; `event_type` and `payload` are the aggregate's own result.
+/// Every identity field is *derived* from the command (D12) — every replica
+/// re-`prepare`s the committed command and must derive the identical envelope,
+/// so nothing here may be minted or clocked.
+#[must_use]
+pub fn event_from_command(
+    command: &Command,
+    index: usize,
+    event_type: &str,
+    payload: Payload,
+) -> Event {
+    Event {
+        envelope_version: command.envelope_version,
+        id: command.event_id(index),
+        aggregate_id: command.aggregate_id.clone(),
+        organization_id: command.organization_id.clone(),
+        workspace_id: command.workspace_id.clone(),
+        occurred_at: command.occurred_at.clone(),
+        causation_key: command.causation_key.clone(),
+        correlation_key: command.correlation_key.clone(),
+        actor: command.actor.clone(),
+        event_type: event_type.to_owned(),
+        payload,
+    }
 }
 
 #[cfg(test)]
