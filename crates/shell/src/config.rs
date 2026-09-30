@@ -120,10 +120,22 @@ impl TransportConfig {
         Ok(())
     }
 }
+/// Recovery contract for applied state. Snapshot-backed mode is experimental.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatePersistence {
+    /// Synchronize the complete applied state before each apply batch returns.
+    #[default]
+    Checkpoint,
+    /// Apply in memory; recover from durable snapshots and the committed log.
+    Snapshot,
+}
 /// `RocksDB` resource tuning. WAL synchronization is always enabled for Raft safety.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StorageConfig {
+    /// Experimental recovery mode; fixed for the lifetime of a database.
+    pub state_persistence: StatePersistence,
     /// Bytes allocated per memtable.
     pub write_buffer_bytes: usize,
     /// Maximum number of memtables.
@@ -138,6 +150,7 @@ pub struct StorageConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
+            state_persistence: StatePersistence::Checkpoint,
             write_buffer_bytes: 64 * 1024 * 1024,
             max_write_buffers: 2,
             max_background_jobs: 2,

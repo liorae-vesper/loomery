@@ -118,7 +118,7 @@ impl RaftGroup {
         anyhow::ensure!(!group_id.is_empty(), "group id must not be empty");
         let disk = super::disk::Disk::open(path, &config.storage).await?;
         let log = super::RocksLogStore::open(disk.clone());
-        let machine = MemStateMachine::open(disk).await?;
+        let machine = MemStateMachine::open(disk, config.storage.state_persistence).await?;
         let network = super::transport::TonicNetworkFactory {
             group_id,
             config: config.transport,

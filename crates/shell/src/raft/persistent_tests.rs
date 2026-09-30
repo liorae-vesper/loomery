@@ -19,7 +19,7 @@ use std::{
     time::Duration,
 };
 
-struct Builder;
+struct Builder(crate::config::StatePersistence);
 impl StoreBuilder<TypeConfig, RocksLogStore, Arc<MemStateMachine>, tempfile::TempDir> for Builder {
     async fn build(
         &self,
@@ -29,14 +29,21 @@ impl StoreBuilder<TypeConfig, RocksLogStore, Arc<MemStateMachine>, tempfile::Tem
             .await
             .unwrap();
         let log = RocksLogStore::open(disk.clone());
-        let machine = MemStateMachine::open(disk).await.unwrap();
+        let machine = MemStateMachine::open(disk, self.0).await.unwrap();
         Ok((dir, log, machine))
     }
 }
 #[test]
 fn rocksdb_passes_openraft_storage_suite() {
     Suite::<TypeConfig, RocksLogStore, Arc<MemStateMachine>, Builder, tempfile::TempDir>::test_all(
-        Builder,
+        Builder(crate::config::StatePersistence::Checkpoint),
+    )
+    .unwrap();
+}
+#[test]
+fn snapshot_backed_rocksdb_passes_openraft_storage_suite() {
+    Suite::<TypeConfig, RocksLogStore, Arc<MemStateMachine>, Builder, tempfile::TempDir>::test_all(
+        Builder(crate::config::StatePersistence::Snapshot),
     )
     .unwrap();
 }
@@ -276,3 +283,208 @@ async fn snapshots_cross_tonic_and_unknown_groups_are_rejected() {
     server.await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // Recovery scenarios deliberately share the full lifecycle.
+async fn snapshot_mode_recovers_log_only_and_snapshot_with_purged_prefix() {
+    use crate::config::StatePersistence;
+    use openraft::storage::RaftLogStorage;
+    for snapshot_first in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = config();
+        settings.storage.state_persistence = StatePersistence::Snapshot;
+        let mut group =
+            RaftGroup::boot_persistent(1, "tenant".into(), root.path(), settings.clone())
+                .await
+                .unwrap();
+        group
+            .raft()
+            .initialize(BTreeMap::from([(1, BasicNode::default())]))
+            .await
+            .unwrap();
+        group
+            .raft()
+            .wait(Some(Duration::from_secs(5)))
+            .current_leader(1, "leader")
+            .await
+            .unwrap();
+        let commands = bootstrap_value();
+        group
+            .propose(
+                commands
+                    .command(loomery_genesis::Step::AssignLeader)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if snapshot_first {
+            let covered = group.raft().metrics().borrow().last_applied.unwrap();
+            group.raft().trigger().snapshot().await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if group
+                        .raft()
+                        .metrics()
+                        .borrow()
+                        .snapshot
+                        .is_some_and(|id| id.index >= covered.index)
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            // Exercise recovery after the snapshot-covered prefix is gone.
+            group
+                .raft()
+                .trigger()
+                .purge_log(covered.index)
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if group
+                        .raft()
+                        .metrics()
+                        .borrow()
+                        .purged
+                        .is_some_and(|id| id.index >= covered.index)
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        bootstrap::run(&mut group, &commands).await.unwrap();
+        let index = group.raft().metrics().borrow().last_applied.unwrap().index;
+        group.shutdown().await.unwrap();
+        drop(group);
+        let mut restored =
+            RaftGroup::boot_persistent(1, "tenant".into(), root.path(), settings.clone())
+                .await
+                .unwrap();
+        restored
+            .raft()
+            .wait(Some(Duration::from_secs(5)))
+            .applied_index(Some(index), "replay")
+            .await
+            .unwrap();
+        assert_eq!(
+            restored
+                .committed_events(&organization())
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        restored
+            .raft()
+            .wait(Some(Duration::from_secs(5)))
+            .current_leader(1, "restored leader")
+            .await
+            .unwrap();
+        bootstrap::run(&mut restored, &commands).await.unwrap();
+        assert_eq!(
+            restored
+                .committed_events(&organization())
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        restored.shutdown().await.unwrap();
+        drop(restored);
+        let disk = super::disk::Disk::open(root.path(), &settings.storage)
+            .await
+            .unwrap();
+        assert!(disk.get(b"state").await.unwrap().is_none());
+        let mut log = RocksLogStore::open(disk.clone());
+        assert!(log.read_committed().await.unwrap().is_some());
+        assert!(
+            MemStateMachine::open(disk, StatePersistence::Checkpoint)
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn persistence_mode_is_fixed_across_restarts_in_both_directions() {
+    use crate::config::{StatePersistence, StorageConfig};
+    for (selected, rejected) in [
+        (StatePersistence::Checkpoint, StatePersistence::Snapshot),
+        (StatePersistence::Snapshot, StatePersistence::Checkpoint),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let settings = StorageConfig::default();
+        let disk = super::disk::Disk::open(root.path(), &settings)
+            .await
+            .unwrap();
+        let machine = MemStateMachine::open(disk.clone(), selected).await.unwrap();
+        let marker = disk.get(b"state_persistence").await.unwrap().unwrap();
+        drop(machine);
+        drop(disk);
+        let disk = super::disk::Disk::open(root.path(), &settings)
+            .await
+            .unwrap();
+        let error = MemStateMachine::open(disk.clone(), rejected)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("mode cannot change"));
+        assert_eq!(disk.get(b"state_persistence").await.unwrap(), Some(marker));
+        MemStateMachine::open(disk, selected).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn unmarked_nonempty_database_is_pinned_to_legacy_checkpoint_mode() {
+    use crate::config::{StatePersistence, StorageConfig};
+    let root = tempfile::tempdir().unwrap();
+    let disk = super::disk::Disk::open(root.path(), &StorageConfig::default())
+        .await
+        .unwrap();
+    // A legacy node may have persisted a vote before its first state checkpoint.
+    disk.put(b"vote", b"legacy vote".to_vec()).await.unwrap();
+    assert!(
+        MemStateMachine::open(disk.clone(), StatePersistence::Snapshot)
+            .await
+            .is_err()
+    );
+    assert!(disk.get(b"state_persistence").await.unwrap().is_none());
+    assert_eq!(
+        disk.get(b"vote").await.unwrap(),
+        Some(b"legacy vote".to_vec())
+    );
+    MemStateMachine::open(disk.clone(), StatePersistence::Checkpoint)
+        .await
+        .unwrap();
+    assert!(
+        MemStateMachine::open(disk, StatePersistence::Snapshot)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn invalid_persistence_marker_fails_closed() {
+    use crate::config::{StatePersistence, StorageConfig};
+    let root = tempfile::tempdir().unwrap();
+    let disk = super::disk::Disk::open(root.path(), &StorageConfig::default())
+        .await
+        .unwrap();
+    let invalid = b"\"unknown_mode\"".to_vec();
+    disk.put(b"state_persistence", invalid.clone())
+        .await
+        .unwrap();
+    for mode in [StatePersistence::Checkpoint, StatePersistence::Snapshot] {
+        assert!(MemStateMachine::open(disk.clone(), mode).await.is_err());
+        assert_eq!(
+            disk.get(b"state_persistence").await.unwrap(),
+            Some(invalid.clone())
+        );
+    }
+}

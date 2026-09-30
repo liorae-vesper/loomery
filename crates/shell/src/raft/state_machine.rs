@@ -82,6 +82,7 @@ pub struct MemStateMachine {
     /// the [`crate::raft::RaftGroup`] port reads from another).
     state: RwLock<GroupState>,
     disk: Option<super::disk::Disk>,
+    persistence: crate::config::StatePersistence,
     /// Identifier counter for snapshots (snapshot ids need only be unique).
     snapshot_idx: AtomicU64,
     /// The last snapshot this replica built or received.
@@ -93,6 +94,7 @@ impl Default for MemStateMachine {
         Self {
             state: RwLock::new(GroupState::default()),
             disk: None,
+            persistence: crate::config::StatePersistence::Checkpoint,
             snapshot_idx: AtomicU64::new(0),
             current_snapshot: RwLock::new(None),
         }
@@ -173,9 +175,41 @@ struct StoredSnapshot {
 }
 
 impl MemStateMachine {
-    pub(crate) async fn open(disk: super::disk::Disk) -> anyhow::Result<Arc<Self>> {
+    pub(crate) async fn open(
+        disk: super::disk::Disk,
+        persistence: crate::config::StatePersistence,
+    ) -> anyhow::Result<Arc<Self>> {
+        let saved = disk.get(b"state_persistence").await?;
+        if let Some(bytes) = saved {
+            let previous: crate::config::StatePersistence = serde_json::from_slice(&bytes)?;
+            anyhow::ensure!(
+                previous == persistence,
+                "state persistence mode cannot change on an existing database: stored {previous:?}, requested {persistence:?}"
+            );
+        } else {
+            // Databases predating this marker used checkpoint recovery.
+            anyhow::ensure!(
+                persistence == crate::config::StatePersistence::Checkpoint
+                    || disk
+                        .run(|db| {
+                            Ok(db
+                                .iterator(rocksdb::IteratorMode::Start)
+                                .next()
+                                .transpose()?
+                                .is_none())
+                        })
+                        .await?,
+                "existing unmarked database requires checkpoint mode"
+            );
+            disk.put(b"state_persistence", serde_json::to_vec(&persistence)?)
+                .await?;
+        }
         let mut machine = Arc::new(Self::default());
-        if let Some(bytes) = disk.get(b"state").await? {
+        let recovery_key: &'static [u8] = match persistence {
+            crate::config::StatePersistence::Checkpoint => b"state",
+            crate::config::StatePersistence::Snapshot => b"snapshot",
+        };
+        if let Some(bytes) = disk.get(recovery_key).await? {
             let stored: StoredSnapshot = serde_json::from_slice(&bytes)?;
             machine
                 .clone()
@@ -187,9 +221,10 @@ impl MemStateMachine {
             .await?
             .map(|bytes| serde_json::from_slice(&bytes))
             .transpose()?;
-        Arc::get_mut(&mut machine)
-            .ok_or_else(|| anyhow::anyhow!("state machine unexpectedly shared during recovery"))?
-            .disk = Some(disk);
+        let recovered = Arc::get_mut(&mut machine)
+            .ok_or_else(|| anyhow::anyhow!("state machine unexpectedly shared during recovery"))?;
+        recovered.disk = Some(disk);
+        recovered.persistence = persistence;
         Ok(machine)
     }
     #[allow(clippy::result_large_err)] // OpenRaft fixes the storage error type.
@@ -395,17 +430,23 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<MemStateMachine> {
             events: group.events.clone(),
             dedup: group.dedup.clone(),
         };
-        let bytes = serde_json::to_vec(&data)
+        let last_applied_log = data.last_applied_log;
+        let last_membership = data.last_membership.clone();
+        let bytes = tokio::task::spawn_blocking(move || serde_json::to_vec(&data))
+            .await
+            .map_err(|error| {
+                StorageIOError::read_state_machine(&std::io::Error::other(error.to_string()))
+            })?
             .map_err(|error| StorageIOError::read_state_machine(&error))?;
 
         let snapshot_idx = self.snapshot_idx.fetch_add(1, Ordering::Relaxed);
-        let snapshot_id = match data.last_applied_log {
+        let snapshot_id = match last_applied_log {
             Some(last) => format!("{}-{}-{snapshot_idx}", last.leader_id, last.index),
             None => format!("--{snapshot_idx}"),
         };
         let meta = SnapshotMeta {
-            last_log_id: data.last_applied_log,
-            last_membership: data.last_membership.clone(),
+            last_log_id: last_applied_log,
+            last_membership,
             snapshot_id,
         };
 
@@ -466,7 +507,7 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
         }
 
         drop(group);
-        if self.disk.is_some() {
+        if self.disk.is_some() && self.persistence == crate::config::StatePersistence::Checkpoint {
             let group = self.state.read().await;
             let data = SnapshotData {
                 version: snapshot_version(),
