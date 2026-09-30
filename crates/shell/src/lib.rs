@@ -2,6 +2,9 @@
 
 //! The imperative shell around the pure core: consensus, storage, the gateway,
 //! and the workers that drive the pure scripts.
+//!
+//! See `docs/shell.md` for the reference: the [`group::GroupOps`] port, the
+//! [`bootstrap`] worker, and the in-process Raft group in [`raft`].
 
 // Strict lints (unwrap/expect/panicking slicing/overflowing math) are denied in
 // production code — test code may use them freely, via a single crate-level
@@ -19,6 +22,7 @@
 
 pub mod bootstrap;
 pub mod group;
+pub mod raft;
 
 #[cfg(test)]
 pub(crate) mod test_support;
