@@ -172,6 +172,7 @@ build artifacts.
 ## Documentation
 
 - [`docs/design.md`](docs/design.md) — architecture, decisions, and the phased build plan
+- [`docs/shell.md`](docs/shell.md) — how `crates/shell` works: the port, the genesis worker, the Raft group
 - [`docs/guardrails.md`](docs/guardrails.md) — formatting, linting, and testing gates
 - [`docs/CONTINUE.md`](docs/CONTINUE.md) — current work-in-progress and next steps
 - [`docs/research/`](docs/research/) — notes on consensus, storage, and integrations
