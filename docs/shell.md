@@ -680,3 +680,8 @@ is [`CONTINUE.md`](CONTINUE.md).
 | `crates/genesis/src/script.rs` | `Bootstrap`, `Progress`, the ①②③ plan |
 | `crates/core/src/aggregate.rs` | `AggregatePlan`, `process`, `fold`, `Execution` |
 | `crates/core/src/dedup.rs` | `Registry`, `window_entries` |
+
+## Persistent networked groups
+
+Tonic transport, RocksDB persistence and user tuning are implemented. See
+[raft-configuration.md](raft-configuration.md) for configuration and lifecycle.

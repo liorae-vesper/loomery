@@ -38,7 +38,7 @@ use crate::group::ProposeOutcome;
 /// tail's.
 pub struct RaftGroup {
     raft: Raft<TypeConfig>,
-    state_machine: Arc<MemStateMachine>,
+    pub(super) state_machine: Arc<MemStateMachine>,
 }
 
 impl RaftGroup {
@@ -101,6 +101,43 @@ impl RaftGroup {
         }
 
         Ok(Self::new(raft, state_machine))
+    }
+
+    /// Boots a persistent networked replica without initializing membership.
+    /// Call `initialize` only on the designated bootstrap node of a new cluster.
+    /// # Errors
+    /// Returns configuration, database, recovery or consensus startup errors.
+    pub async fn boot_persistent(
+        node_id: u64,
+        group_id: String,
+        path: &std::path::Path,
+        config: crate::config::GroupConfig,
+    ) -> anyhow::Result<Self> {
+        config.validate()?;
+        anyhow::ensure!(!group_id.is_empty(), "group id must not be empty");
+        let disk = super::disk::Disk::open(path, &config.storage).await?;
+        let log = super::RocksLogStore::open(disk.clone());
+        let machine = MemStateMachine::open(disk).await?;
+        let network = super::transport::TonicNetworkFactory {
+            group_id,
+            config: config.transport,
+        };
+        let raft = Raft::new(
+            node_id,
+            Arc::new(config.raft.validate()?),
+            network,
+            log,
+            machine.clone(),
+        )
+        .await?;
+        Ok(Self::new(raft, machine))
+    }
+
+    /// Consensus handle for transport registration, metrics, initialization,
+    /// learner admission and membership changes.
+    #[must_use]
+    pub fn raft(&self) -> Raft<TypeConfig> {
+        self.raft.clone()
     }
 
     /// Stops the group's `OpenRaft` task.
