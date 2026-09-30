@@ -44,11 +44,11 @@ planned for Phases 1+.
   - `crates/shell` (`loomery-shell`) — the imperative shell: the async
     `GroupOps` port, the genesis bootstrap worker (`bootstrap::run`), and the
     in-memory Raft group behind it (`raft::{MemLogStore, MemStateMachine,
-    RaftGroup}` — spike levels 1–2, no network yet). The state machine runs
+    RaftGroup}` — in-memory spike plus tonic transport and RocksDB persistence). The state machine runs
     the pure core (`AggregatePlan::process`) and passes OpenRaft's
     `testing::Suite`; genesis ①②③ are born end-to-end in process, and a
     crash between steps resumes with no duplicate genesis.
-  - 82 core + 24 genesis + 22 shell unit tests + 3 doctests passing (serde
+  - 82 core + 24 genesis + 26 shell unit tests + 3 doctests passing (serde
     round-trips, wire-format snapshot, id/key derivation + validation, dedup
     window, timestamp ordering, actor/command round-trips, error
     display/equality/source, genesis plan + crash-resume ordering, the
@@ -120,9 +120,10 @@ See `docs/design.md` §5 and the roadmap tracker. Scope:
 2. **Phase 1 — control plane & onboarding**
    1. **OpenRaft 0.9 spike**: control group `RaftLogStorage`/`RaftStateMachine`
       + `RaftNetwork` over tonic; `Raft::new`/`RaftServer` bootstrap.
-      *(levels 1–2 done: in-memory `RaftLogStorage`/`RaftStateMachine` + the
+      *(levels 1–3 done: in-memory `RaftLogStorage`/`RaftStateMachine` + the
       `GroupOps` adapter in `crates/shell/src/raft`, passing OpenRaft's
-      `testing::Suite`; tonic network + multi-node membership remain.)*
+      `testing::Suite`; tonic network + multi-node membership and RocksDB persistence are now implemented;
+      see `docs/raft-configuration.md` for startup and tuning.)*
    2. Router read model (`dashmap`) + RYW `X-Min-Index` session tokens
       (50 ms hold → leader redirect).
    3. Genesis bootstrap worker — tenant groups born with their first three
@@ -156,9 +157,7 @@ decisions D6/D7 (FTS, vectors) are Phase 4.
   preferred, warn otherwise).
 - Decide the NATS subject/stream naming for the first slice (D11 — carries
   the v1 convention).
-- 15 unit tests green (envelope wire-format snapshot, id/timestamp/actor
-  serde);
-  next: `Error`/`Code`, `Versioning`, then the aggregates, then Phase 1.
+
 
 ## Verification before committing
 
@@ -166,3 +165,16 @@ decisions D6/D7 (FTS, vectors) are Phase 4.
 mise run verify && cargo test --workspace && cargo llvm-cov --workspace
 ```
 Then commit with `mise exec -- cog commit ...` on `main`.
+
+## Latest continuation — tonic + RocksDB
+
+- `RaftGroup::boot_persistent` opens a durable replica without implicitly
+  initializing membership. `raft()` exposes initialization, learners, membership
+  and metrics. `TonicTransport` multiplexes registered groups.
+- `GroupConfig` exposes serde-defaulted transport/resource tuning and OpenRaft
+  settings; startup validates them. WAL synchronization stays mandatory.
+- Acceptance coverage: RocksDB OpenRaft suite, three-replica genesis replication,
+  database reopen/dedup and snapshot transfer over tonic.
+- Full state checkpoints are persisted per apply batch; incremental persistence
+  and archival are still future work.
+- Next: control-plane orchestration/router, bootstrap reconciliation and RYW.

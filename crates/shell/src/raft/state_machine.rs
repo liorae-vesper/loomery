@@ -81,6 +81,7 @@ pub struct MemStateMachine {
     /// The folded state, behind an async lock (`OpenRaft` applies from its task,
     /// the [`crate::raft::RaftGroup`] port reads from another).
     state: RwLock<GroupState>,
+    disk: Option<super::disk::Disk>,
     /// Identifier counter for snapshots (snapshot ids need only be unique).
     snapshot_idx: AtomicU64,
     /// The last snapshot this replica built or received.
@@ -91,6 +92,7 @@ impl Default for MemStateMachine {
     fn default() -> Self {
         Self {
             state: RwLock::new(GroupState::default()),
+            disk: None,
             snapshot_idx: AtomicU64::new(0),
             current_snapshot: RwLock::new(None),
         }
@@ -142,6 +144,9 @@ enum AggregateState {
 /// The serializable projection of [`GroupState`] used as snapshot data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SnapshotData {
+    /// Frozen snapshot format version; absent on legacy in-memory snapshots.
+    #[serde(default = "snapshot_version")]
+    version: u32,
     /// The last applied log id at snapshot time.
     last_applied_log: Option<LogId<u64>>,
     /// The last applied membership at snapshot time.
@@ -154,8 +159,12 @@ struct SnapshotData {
     dedup: Vec<(Key, Key, usize)>,
 }
 
+fn snapshot_version() -> u32 {
+    1
+}
+
 /// A snapshot as stored by the state machine.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct StoredSnapshot {
     /// The snapshot's metadata.
     meta: SnapshotMeta<u64, BasicNode>,
@@ -164,6 +173,41 @@ struct StoredSnapshot {
 }
 
 impl MemStateMachine {
+    pub(crate) async fn open(disk: super::disk::Disk) -> anyhow::Result<Arc<Self>> {
+        let mut machine = Arc::new(Self::default());
+        if let Some(bytes) = disk.get(b"state").await? {
+            let stored: StoredSnapshot = serde_json::from_slice(&bytes)?;
+            machine
+                .clone()
+                .install_snapshot(&stored.meta, Box::new(Cursor::new(stored.data)))
+                .await?;
+        }
+        *machine.current_snapshot.write().await = disk
+            .get(b"snapshot")
+            .await?
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose()?;
+        Arc::get_mut(&mut machine)
+            .ok_or_else(|| anyhow::anyhow!("state machine unexpectedly shared during recovery"))?
+            .disk = Some(disk);
+        Ok(machine)
+    }
+    #[allow(clippy::result_large_err)] // OpenRaft fixes the storage error type.
+    async fn persist(
+        &self,
+        key: &'static [u8],
+        stored: &StoredSnapshot,
+    ) -> Result<(), StorageError<u64>> {
+        if let Some(disk) = &self.disk {
+            let bytes =
+                serde_json::to_vec(stored).map_err(|e| StorageIOError::write_state_machine(&e))?;
+            disk.put(key, bytes).await.map_err(|e| {
+                StorageIOError::write_state_machine(&std::io::Error::other(e.to_string()))
+            })?;
+        }
+        Ok(())
+    }
+
     /// Every event the group has applied, filtered to `organization_id`, in log
     /// order.
     ///
@@ -344,6 +388,7 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<MemStateMachine> {
         let group = self.state.read().await;
 
         let data = SnapshotData {
+            version: snapshot_version(),
             last_applied_log: group.last_applied_log,
             last_membership: group.last_membership.clone(),
             streams: group.streams.clone(),
@@ -368,10 +413,12 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<MemStateMachine> {
         // build cannot install over this one (the reference store's ordering).
         let mut current = self.current_snapshot.write().await;
         drop(group);
-        *current = Some(StoredSnapshot {
+        let stored = StoredSnapshot {
             meta: meta.clone(),
             data: bytes.clone(),
-        });
+        };
+        self.persist(b"snapshot", &stored).await?;
+        *current = Some(stored);
 
         Ok(Snapshot {
             meta,
@@ -418,6 +465,28 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
             }
         }
 
+        drop(group);
+        if self.disk.is_some() {
+            let group = self.state.read().await;
+            let data = SnapshotData {
+                version: snapshot_version(),
+                last_applied_log: group.last_applied_log,
+                last_membership: group.last_membership.clone(),
+                streams: group.streams.clone(),
+                events: group.events.clone(),
+                dedup: group.dedup.clone(),
+            };
+            let stored = StoredSnapshot {
+                meta: SnapshotMeta {
+                    last_log_id: data.last_applied_log,
+                    last_membership: data.last_membership.clone(),
+                    snapshot_id: "checkpoint".into(),
+                },
+                data: serde_json::to_vec(&data)
+                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+            };
+            self.persist(b"state", &stored).await?;
+        }
         Ok(responses)
     }
 
@@ -441,6 +510,34 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
         let data: SnapshotData = serde_json::from_slice(&bytes)
             .map_err(|error| StorageIOError::read_snapshot(Some(meta.signature()), &error))?;
 
+        if data.version != snapshot_version() {
+            return Err(StorageIOError::read_snapshot(
+                Some(meta.signature()),
+                &std::io::Error::other("unsupported snapshot format version"),
+            )
+            .into());
+        }
+        let stored = StoredSnapshot {
+            meta: meta.clone(),
+            data: bytes.clone(),
+        };
+        if let Some(disk) = &self.disk {
+            let bytes =
+                serde_json::to_vec(&stored).map_err(|e| StorageIOError::write_state_machine(&e))?;
+            disk.run(move |db| {
+                let mut batch = rocksdb::WriteBatch::default();
+                batch.put(b"state", &bytes);
+                batch.put(b"snapshot", &bytes);
+                let mut options = rocksdb::WriteOptions::default();
+                options.set_sync(true);
+                db.write_opt(batch, &options)?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| {
+                StorageIOError::write_state_machine(&std::io::Error::other(e.to_string()))
+            })?;
+        }
         let mut group = self.state.write().await;
         group.last_applied_log = meta.last_log_id;
         group.last_membership = meta.last_membership.clone();

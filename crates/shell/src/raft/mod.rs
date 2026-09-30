@@ -7,10 +7,10 @@
 //! [`MemStateMachine`] (apply + snapshots), and [`RaftGroup`], the adapter that
 //! maps `Raft::client_write` onto [`crate::group::GroupOps`].
 //!
-//! It is the **levels 1–2 spike** of `docs/tutorials/openraft-spike.md`: one
-//! node, in process, no network ([`NoopNetworkFactory`]), no persistence. The
-//! point is to pin the storage semantics and the apply path before a cluster
-//! exists.
+//! [`RaftGroup::boot_single_node`] retains the in-memory spike. Persistent
+//! replicas use [`RaftGroup::boot_persistent`], [`RocksLogStore`] and the
+//! multiplexed tonic service in [`transport`]. User tuning lives in
+//! [`crate::config::GroupConfig`].
 //!
 //! The state machine is where the **pure core** runs: every committed command
 //! is decoded and dispatched through
@@ -27,17 +27,23 @@ use loomery_core::envelope::Command;
 use openraft::TokioRuntime;
 use serde::{Deserialize, Serialize};
 
+mod disk;
 mod log_store;
 mod network;
 mod port;
+mod rocks_log_store;
 mod state_machine;
+pub mod transport;
 
+#[cfg(test)]
+mod persistent_tests;
 #[cfg(test)]
 mod suite;
 
 pub use log_store::MemLogStore;
 pub use network::NoopNetworkFactory;
 pub use port::{ProposeError, RaftGroup};
+pub use rocks_log_store::RocksLogStore;
 pub use state_machine::MemStateMachine;
 
 /// What clients write to a group.

@@ -21,6 +21,7 @@
 )]
 
 pub mod bootstrap;
+pub mod config;
 pub mod group;
 pub mod raft;
 

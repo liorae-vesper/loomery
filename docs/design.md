@@ -321,13 +321,13 @@ plus the optional `stream_append` pipelining). Findings so far:
   group membership changes (add/remove node) go through `change_membership`.
 
 ### D2 — Storage engine
-**Recommendation: start with `sled` or the hand-rolled segment engine** (see
-`docs/research/storage-engine-alternatives.md` + `indexed-segment-file-format.md`)
-behind the `RaftLogStorage`/`RaftStateMachine` traits. RocksDB (`rocksdb` crate)
-is the escape hatch if raw throughput or a queryable store is needed —
-OpenRaft ships RocksStore/SledStore/MemStore examples we can crib.
-**Status: OPEN** — needs a spike against OpenRaft 0.9's storage calls
-(`try_append_entry`, `get_log_state`, `save_committed`, snapshot builder).
+**Status: DECIDED — RocksDB.** The shell implements durable log/vote/commit
+storage and state/snapshot checkpoints in RocksDB, with synchronous WAL writes
+and blocking-pool I/O. Tonic transport routes multiple groups over one listener.
+Resource settings and OpenRaft consensus settings are exposed through
+`GroupConfig`; see [raft-configuration.md](raft-configuration.md). The initial
+state checkpoint rewrites full applied state per batch; incremental persistence
+and archival remain future work.
 
 ### D3 — Envelope/payload encoding
 Options: `bincode` (compact, fast, not human-readable) vs **serde_json**
@@ -516,7 +516,8 @@ tests green for all six aggregates; coverage floor met.
           `RaftStateMachine` (`crates/shell/src/raft`) and the `RaftGroup`
           `GroupOps` adapter; passes OpenRaft's `testing::Suite` and drives
           genesis end-to-end in process
-    - [ ] tonic `RaftNetwork` + multi-node membership (`shell::control`)
+    - [x] tonic `RaftNetwork` + multi-node membership through `RaftGroup::raft`,
+          RocksDB durability and configurable transport/storage/consensus tuning
   - [ ] Router read model + RYW `X-Min-Index` hold
   - [x] Genesis script (`crates/genesis`): the deterministic ①②③ plan —
         derived keys/ids, commands, and progress read back from the committed
