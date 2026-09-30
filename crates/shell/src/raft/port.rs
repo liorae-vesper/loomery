@@ -114,6 +114,7 @@ impl RaftGroup {
         config: crate::config::GroupConfig,
     ) -> anyhow::Result<Self> {
         config.validate()?;
+        super::tls::preflight(&config.transport).await?;
         anyhow::ensure!(!group_id.is_empty(), "group id must not be empty");
         let disk = super::disk::Disk::open(path, &config.storage).await?;
         let log = super::RocksLogStore::open(disk.clone());

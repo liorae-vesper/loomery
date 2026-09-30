@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Serializable tuning knobs for persistent networked groups.
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// gRPC transport limits and connection tuning. Durations are milliseconds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +19,10 @@ pub struct TransportConfig {
     pub stream_window_bytes: u32,
     /// HTTP/2 initial connection window in bytes.
     pub connection_window_bytes: u32,
+    /// Opt-in inbound TLS; absent means plaintext HTTP/2.
+    pub server_tls: Option<ServerTls>,
+    /// Opt-in outbound TLS; requires HTTPS peer addresses.
+    pub client_tls: Option<ClientTls>,
 }
 impl Default for TransportConfig {
     fn default() -> Self {
@@ -28,7 +33,91 @@ impl Default for TransportConfig {
             tcp_keepalive_ms: 30000,
             stream_window_bytes: 1024 * 1024,
             connection_window_bytes: 4 * 1024 * 1024,
+            server_tls: None,
+            client_tls: None,
         }
+    }
+}
+/// PEM certificate chain and private key file paths. File contents are never
+/// part of serialized configuration or debug output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsIdentity {
+    /// PEM certificate chain file.
+    pub certificate: PathBuf,
+    /// PEM private key file.
+    pub private_key: PathBuf,
+}
+/// TLS settings for the shared gRPC listener.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerTls {
+    /// Server certificate chain and private key.
+    pub identity: TlsIdentity,
+    /// Optional PEM CA bundle. When set, every client must present a valid
+    /// certificate signed by a trusted CA (mutual TLS).
+    pub client_ca_certificate: Option<PathBuf>,
+}
+/// TLS settings for outbound peer connections.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientTls {
+    /// PEM CA bundle for verifying peer certificates.
+    pub ca_certificate: PathBuf,
+    /// Optional client certificate/key for mutual TLS.
+    pub identity: Option<TlsIdentity>,
+    /// Optional expected certificate name; defaults to the peer URI host.
+    /// Useful when connecting by IP to certificates with a DNS identity.
+    pub server_name: Option<String>,
+}
+impl TlsIdentity {
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.certificate.as_os_str().is_empty() && !self.private_key.as_os_str().is_empty(),
+            "TLS certificate and private key paths must not be empty"
+        );
+        Ok(())
+    }
+}
+impl TransportConfig {
+    /// Validates transport limits and TLS configuration shapes.
+    /// # Errors
+    /// Returns an error for invalid limits, empty paths or empty server names.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.connect_timeout_ms > 0
+                && self.request_timeout_ms > 0
+                && self.max_message_bytes > 0
+                && self.tcp_keepalive_ms > 0
+                && self.stream_window_bytes > 0
+                && self.connection_window_bytes > 0,
+            "transport limits must be positive"
+        );
+        if let Some(tls) = &self.server_tls {
+            tls.identity.validate()?;
+            anyhow::ensure!(
+                tls.client_ca_certificate
+                    .as_ref()
+                    .is_none_or(|p| !p.as_os_str().is_empty()),
+                "client CA certificate path must not be empty"
+            );
+        }
+        if let Some(tls) = &self.client_tls {
+            anyhow::ensure!(
+                !tls.ca_certificate.as_os_str().is_empty(),
+                "peer CA certificate path must not be empty"
+            );
+            anyhow::ensure!(
+                tls.server_name
+                    .as_ref()
+                    .is_none_or(|s| !s.trim().is_empty()),
+                "TLS server name must not be empty"
+            );
+            if let Some(identity) = &tls.identity {
+                identity.validate()?;
+            }
+        }
+        Ok(())
     }
 }
 /// `RocksDB` resource tuning. WAL synchronization is always enabled for Raft safety.
@@ -75,15 +164,7 @@ impl GroupConfig {
     /// Returns an error for zero/invalid resource limits or consensus timings.
     pub fn validate(&self) -> anyhow::Result<()> {
         self.raft.clone().validate()?;
-        anyhow::ensure!(
-            self.transport.connect_timeout_ms > 0
-                && self.transport.request_timeout_ms > 0
-                && self.transport.max_message_bytes > 0
-                && self.transport.tcp_keepalive_ms > 0
-                && self.transport.stream_window_bytes > 0
-                && self.transport.connection_window_bytes > 0,
-            "transport limits must be positive"
-        );
+        self.transport.validate()?;
         anyhow::ensure!(
             self.storage.write_buffer_bytes > 0
                 && self.storage.block_cache_bytes > 0

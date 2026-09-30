@@ -72,18 +72,25 @@ impl TonicTransport {
         config: TransportConfig,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> anyhow::Result<()> {
+        config.validate()?;
+        let mut server = Server::builder();
+        if let Some(tls) = &config.server_tls {
+            server = server.tls_config(
+                super::tls::server(tls, Duration::from_millis(config.connect_timeout_ms)).await?,
+            )?;
+        }
         let service = TransportServer::new(self.clone())
             .max_decoding_message_size(config.max_message_bytes)
             .max_encoding_message_size(config.max_message_bytes);
-        Server::builder()
-            .tcp_keepalive(Some(Duration::from_millis(config.tcp_keepalive_ms)))
+        // Custom incoming streams bypass the server builder's socket options.
+        let incoming = tonic::transport::server::TcpIncoming::from(listener)
+            .with_nodelay(Some(true))
+            .with_keepalive(Some(Duration::from_millis(config.tcp_keepalive_ms)));
+        server
             .initial_stream_window_size(config.stream_window_bytes)
             .initial_connection_window_size(config.connection_window_bytes)
             .add_service(service)
-            .serve_with_incoming_shutdown(
-                tokio_stream::wrappers::TcpListenerStream::new(listener),
-                shutdown,
-            )
+            .serve_with_incoming_shutdown(incoming, shutdown)
             .await?;
         Ok(())
     }
@@ -147,12 +154,29 @@ impl RaftNetworkFactory<TypeConfig> for TonicNetworkFactory {
     }
 }
 impl TonicNetwork {
-    fn client(&mut self) -> Result<TransportClient<Channel>, tonic::transport::Error> {
+    async fn client(&mut self) -> anyhow::Result<TransportClient<Channel>> {
         if let Some(client) = &self.client {
             return Ok(client.clone());
         }
         let config = &self.factory.config;
-        let channel = Endpoint::from_shared(self.node.addr.clone())?
+        config.validate()?;
+        let mut endpoint = Endpoint::from_shared(self.node.addr.clone())?;
+        let scheme = endpoint.uri().scheme_str();
+        anyhow::ensure!(
+            scheme
+                == Some(if config.client_tls.is_some() {
+                    "https"
+                } else {
+                    "http"
+                }),
+            "peer URI scheme must match the configured TLS mode"
+        );
+        if let Some(tls) = &config.client_tls {
+            endpoint = endpoint.tls_config(
+                super::tls::client(tls, Duration::from_millis(config.connect_timeout_ms)).await?,
+            )?;
+        }
+        let channel = endpoint
             .connect_timeout(Duration::from_millis(config.connect_timeout_ms))
             .tcp_keepalive(Some(Duration::from_millis(config.tcp_keepalive_ms)))
             .initial_stream_window_size(config.stream_window_bytes)
@@ -204,9 +228,9 @@ macro_rules! rpc {
             let request = self
                 .request(&rpc, &option)
                 .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
-            let mut client = self
-                .client()
-                .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
+            let mut client = self.client().await.map_err(|e| {
+                RPCError::Unreachable(Unreachable::new(&std::io::Error::other(e.to_string())))
+            })?;
             let response = tokio::time::timeout(
                 option.hard_ttl().min(Duration::from_millis(
                     self.factory.config.request_timeout_ms,

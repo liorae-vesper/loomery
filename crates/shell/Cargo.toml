@@ -11,13 +11,14 @@ loomery-core.workspace = true
 loomery-genesis.workspace = true
 anyhow = "1.0.104"
 thiserror = "2.0.21"
-tokio = { version = "1.53.1", features = ["rt", "macros", "time", "sync", "net", "rt-multi-thread"] }
+tokio = { version = "1.53.1", features = ["rt", "macros", "time", "sync", "net", "rt-multi-thread", "fs"] }
 openraft = { version = "0.9.25", features = ["serde", "storage-v2"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 
-tonic = "0.14"
+tonic = { version = "0.14", features = ["tls-ring"] }
 tonic-prost = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 prost = "0.14"
 rocksdb = { version = "0.24", default-features = false, features = ["bindgen-runtime", "lz4"] }
 tokio-stream = { version = "0.1", features = ["net"] }
@@ -27,6 +28,7 @@ tonic-prost-build = "0.14"
 
 [dev-dependencies]
 tempfile = "3"
+rcgen = "0.14"
 
 [lints]
 workspace = true

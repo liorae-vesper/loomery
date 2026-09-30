@@ -51,6 +51,11 @@ fn config() -> GroupConfig {
 #[allow(clippy::too_many_lines)]
 async fn three_replicas_commit_and_recover_genesis() {
     let root = tempfile::tempdir().unwrap();
+    let (mut server_tls, client_tls) = super::tls_tests::certificates(root.path());
+    server_tls.client_ca_certificate = Some(client_tls.ca_certificate.clone());
+    let mut group_config = config();
+    group_config.transport.server_tls = Some(server_tls);
+    group_config.transport.client_tls = Some(client_tls);
     let mut groups = Vec::new();
     let mut servers = Vec::new();
     let mut members = BTreeMap::new();
@@ -58,13 +63,13 @@ async fn three_replicas_commit_and_recover_genesis() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         members.insert(
             node,
-            BasicNode::new(format!("http://{}", listener.local_addr().unwrap())),
+            BasicNode::new(format!("https://{}", listener.local_addr().unwrap())),
         );
         let group = RaftGroup::boot_persistent(
             node,
             "tenant".into(),
             &root.path().join(node.to_string()),
-            config(),
+            group_config.clone(),
         )
         .await
         .unwrap();
@@ -74,9 +79,10 @@ async fn three_replicas_commit_and_recover_genesis() {
             .await
             .unwrap();
         let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server_config = group_config.transport.clone();
         let server = tokio::spawn(async move {
             transport
-                .serve(listener, config().transport, async {
+                .serve(listener, server_config, async {
                     let _ = stopped.await;
                 })
                 .await
@@ -141,7 +147,7 @@ async fn three_replicas_commit_and_recover_genesis() {
     }
     drop(groups);
     let recovered =
-        RaftGroup::boot_persistent(1, "tenant".into(), &root.path().join("1"), config())
+        RaftGroup::boot_persistent(1, "tenant".into(), &root.path().join("1"), group_config)
             .await
             .unwrap();
     assert_eq!(
@@ -269,3 +275,4 @@ async fn snapshots_cross_tonic_and_unknown_groups_are_rejected() {
     stop.send(()).unwrap();
     server.await.unwrap();
 }
+

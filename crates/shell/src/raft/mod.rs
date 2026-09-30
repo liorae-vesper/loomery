@@ -33,6 +33,9 @@ mod network;
 mod port;
 mod rocks_log_store;
 mod state_machine;
+mod tls;
+#[cfg(test)]
+mod tls_tests;
 pub mod transport;
 
 #[cfg(test)]
