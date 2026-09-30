@@ -47,4 +47,4 @@ run = "cargo run --release -p loomery-shell --example consensus_bench -- --confi
 
 [tasks.bench-persistence]
 description = "Compares checkpoint and snapshot recovery with controlled crash benchmarks"
-run = "python3 docs/benchmarks/persistence-spike.py"
+run = "python3 scripts/bench-persistence.py"

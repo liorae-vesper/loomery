@@ -7,6 +7,8 @@
 
 # OpenRaft Storage Interfaces — Research
 
+> Current implementation: OpenRaft 0.9.25 with split storage traits and `RaftNetwork` RPCs `append_entries`, `vote`, and chunked `install_snapshot`. Earlier V2/example sketches below are research context, not the implemented API. See [the shell reference](../shell.md) and [checkpoint policy](checkpoint-policy.md) for current recovery behavior.
+
 OpenRaft 0.9 splits storage into two traits that Loomery implements behind
 decision D2: **`RaftLogStorage`** (the replicated log) and **`RaftStateMachine`**
 (apply + snapshots). This note collects what a first implementation needs to

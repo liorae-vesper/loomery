@@ -31,7 +31,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--summarize", action="store_true", help="Summarize existing arm directories without running")
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[1]
     os.chdir(root)
     if not args.summarize:
         args.output.mkdir(parents=True, exist_ok=False)

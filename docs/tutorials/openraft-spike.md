@@ -1,5 +1,10 @@
 # OpenRaft spike — a working control group
 
+This walkthrough builds the original in-memory baseline. Persistent networking,
+TLS and both recovery modes are now implemented; see the
+[current shell reference](../shell.md) and [configuration guide](../raft-configuration.md).
+
+
 Design §5, Phase 1, item 1: keep the consensus machinery behind
 [`GroupOps`](shell-group.md) and get a group that can commit a command and hand
 its events back.
@@ -27,7 +32,7 @@ currently an alpha, so **stay on one 0.9.x**.
 
 | Fact | Value | Source |
 |---|---|---|
-| Newest 0.9 | `0.9.25` | crates.io |
+| Workspace version | `0.9.25` | Cargo.lock |
 | **Required feature** | `storage-v2` — the split `RaftLogStorage`/`RaftStateMachine` traits only exist with it (without it you get the legacy, fused `RaftStorage`) | `src/lib.rs:108`, `src/storage/mod.rs:3` |
 | Serialization | `serde` feature | `Cargo.toml` |
 | Construct | `Raft::new(id, Arc<Config>, network, log_store, state_machine) -> Result<Raft<C>, Fatal<NodeId>>` | `src/raft/mod.rs:230` |
@@ -39,7 +44,7 @@ currently an alpha, so **stay on one 0.9.x**.
 | Log reader | `try_get_log_entries(range)` | `src/storage/mod.rs:159`, guide §3 |
 | State machine | `applied_state`, `apply(entries) -> Vec<C::R>`, `get_snapshot_builder`, `begin_receiving_snapshot`, `install_snapshot`, `get_current_snapshot`; `type SnapshotBuilder: RaftSnapshotBuilder<C>` | `src/storage/v2.rs:153-256` |
 | Snapshot builder | `build_snapshot()` | `src/storage/mod.rs:200` |
-| Network | `RaftNetworkFactory { type Network: RaftNetwork<C>; async fn new_client(target, node) }`; RPCs `append_entries` / `vote` / `full_snapshot` | `src/network/factory.rs:17`, `src/network/network.rs:41,76,104` |
+| Network | `RaftNetworkFactory { type Network: RaftNetwork<C>; async fn new_client(target, node) }`; RPCs `append_entries` / `vote` / `install_snapshot` | `src/network/factory.rs:17`, `src/network/network.rs:41,76,104` |
 | Runtime | `AsyncRuntime` is an associated type with a built-in `openraft::TokioRuntime` — no feature flag needed | `src/async_runtime.rs:105` |
 | Type config | `declare_raft_types!` (see §2) | `src/type_config.rs:33`, guide §5 |
 
@@ -201,10 +206,10 @@ impl GroupOps for RaftGroup {
   genesis acceptance list in `genesis-worker.md` §9 now exercises real storage,
   real apply and real dedup.
 
-## 7. Multi-node (level 3, later)
+## 7. Multi-node (level 3, implemented)
 
 * `RaftNetworkFactory::new_client(target, node)` → your `RaftNetwork`, whose
-  RPCs are `append_entries`, `vote`, `full_snapshot` (tonic service in the
+  RPCs are `append_entries`, `vote`, `install_snapshot` (tonic service in the
   shell). The factory is passed to `Raft::new`; it is *not* a connection.
 * `BasicNode { addr }` carries the address; the shell's router (design §4) owns
   the `organization_id → group` mapping and leader hints.

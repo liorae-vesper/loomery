@@ -1,218 +1,73 @@
-# Continue Loomery — Session Handoff
+# Loomery — continuation
 
-You are continuing development on **Loomery**, an event-sourced backend for
-team collaboration, built in **Rust** on **Tokio** with **OpenRaft** for
-consensus. The project lives at
-`/home/john/Workspace/Liorae/loomery` (git branch: `feat/shell-group-port`, linear history).
+Read [design.md](design.md) for the architecture, decisions and full progress
+tracker. [README.md](README.md) maps the documentation. The project is a Rust
+workspace with a deterministic core and an imperative Tokio/OpenRaft shell.
 
-Read `docs/design.md` first — it is the source of truth for the architecture,
-crate layout, phase plan, and the decisions register.
+## Implemented
 
----
+- Core envelope, identity, timestamp, actor, errors, aggregate execution,
+  versioning contracts and the bounded dedup registry. Organization, workspace
+  and membership implement the genesis slice; full domain coverage is pending.
+- Deterministic genesis script and async bootstrap worker. The worker re-reads
+  applied events before retrying an unknown outcome, using derived causation
+  keys to avoid duplicate provisioning.
+- In-memory single-node Raft baseline and persistent multi-node groups over
+  tonic gRPC and RocksDB. A shared listener multiplexes group IDs. Membership
+  is explicitly initialized and changed through `RaftGroup::raft()`.
+- Optional TLS/mTLS with peer verification and no plaintext fallback.
+- Two persistence modes: `checkpoint` (default, full durable state per apply
+  batch) and `snapshot` (experimental, in-memory apply plus durable snapshots
+  and committed-log replay). Both keep synchronized Raft log writes and quorum
+  acknowledgements. Each database durably pins its mode; mismatches and invalid
+  markers fail startup. Nonempty unmarked databases require checkpoint mode.
+- Controlled multi-process benchmarks, leader failover and database restart
+  checks. The paired spike measured approximately 174 versus 550 writes/s on
+  one host; this is a workload-specific result, not deployment capacity.
 
-## What Loomery is
+See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
+[checkpoint policy](research/checkpoint-policy.md) and
+[benchmark results](benchmarks/checkpoint-spike.md) for details.
 
-Organizations, workspaces, projects, tasks, documentation, and AI-assisted
-workflows. Architecture: a **pure functional core** (deterministic
-`execute`/`apply` — no I/O, no wall clock, no randomness) wrapped by an
-imperative shell (Tokio + OpenRaft consensus, storage, NATS outbox)
-planned for Phases 1+.
+## Next work
 
-## Current state (DONE)
+1. Finish Phase 0 aggregates and their transition-matrix/replay property tests.
+2. Build control-plane tenant lifecycle and router projections. Wire startup
+   reconciliation and retry sweeping into the existing bootstrap worker.
+3. Implement the gateway and read-your-writes `X-Min-Index` wait/leader fallback.
+   Local reads exist; gateway session-token enforcement is still planned.
+4. Add the committed-log outbox, NATS delivery, invitation choreography and saga
+   runner according to design D8/D11.
+5. Extend persistence validation to large histories, interrupted snapshot
+   creation/installation/purge and storage failures before changing the default.
+   Multi-group mixed read/write capacity has not been benchmarked.
 
-- **Scaffold + guardrails** — complete (Cargo workspace, edition 2024,
-  `rustfmt.toml`, `deny.toml` license/advisory policy, hk hooks, cog
-  conventional commits, `mise run verify`). See `docs/guardrails.md`.
-- **Pure core — scaffolded, in progress** (`docs/design.md` §3, §8 tracker):
-  - `loomery_core::id::Id` — canonical UUID id: minted `UUIDv7` (shell-side
-    `Id::new()`) or derived `UUIDv5`; `Id::parse` validates ids arriving from
-    outside, `From<&str>` adopts ids already known canonical.
-  - `loomery_core::key::Key` — derived identity (`UUIDv5`): causation keys,
-    `Command::event_id(index)`, `Command::fingerprint`, and derived entity ids
-    (`Id::from(key)`); strict `TryFrom` validation (see D12).
-  - `loomery_core::envelope` — `Event` (fields per §6 of `design.md`) with a
-    nested, versioned `Payload { version, data }`; serde round-trip + exact
-    wire-format snapshot tests (frozen payloads, D3).
-  - `loomery_core::timestamp::Timestamp` — injected i64 ms-since-epoch (D5);
-    `From<i64>`/`as_millis()`/`Deref`, `now()` is shell-side only.
-  - `crates/genesis` (`loomery-genesis`) — the bootstrap script: derived
-    identity (`step_key`, `bootstrap_correlation_key`, `default_workspace_id`,
-    `owner_membership_id`, `command_id`), the three commands at their ①②③ wire
-    names, and `Bootstrap::{command, next_command, progress}` — progress is
-    read from the committed events by causation key, so a resumed run knows
-    what already happened.
-  - `crates/shell` (`loomery-shell`) — the imperative shell: the async
-    `GroupOps` port, the genesis bootstrap worker (`bootstrap::run`), and the
-    in-memory Raft group behind it (`raft::{MemLogStore, MemStateMachine,
-    RaftGroup}` — in-memory spike plus tonic transport and RocksDB persistence). The state machine runs
-    the pure core (`AggregatePlan::process`) and passes OpenRaft's
-    `testing::Suite`; genesis ①②③ are born end-to-end in process, and a
-    crash between steps resumes with no duplicate genesis.
-  - 82 core + 24 genesis + 33 shell unit tests + 3 benchmark tests + 3 doctests passing (serde
-    round-trips, wire-format snapshot, id/key derivation + validation, dedup
-    window, timestamp ordering, actor/command round-trips, error
-    display/equality/source, genesis plan + crash-resume ordering, the
-    bootstrap-slice aggregates, and the log/state-machine/snapshot
-    semantics).
+D1 (OpenRaft/tonic) and D2 (RocksDB) are selected. FTS and vector-store decisions
+remain Phase 4 work. Preserve the original research when revisiting decisions.
 
-## Conventions (non-negotiable)
+## Working conventions
 
-- **Domain-first modules**: `loomery_core::task::Task`, never `loomery_core::domain::task`.
-- State is a struct per aggregate; commands/events are **typed serde structs**
-  with a `kind`/`event_type` discriminator, JSON payloads inside envelopes.
-- `fn execute(state, command) -> Result<Execution, DomainError>` and
-  `fn apply(state, event) -> State`; **creation events build state regardless
-  of prior state** (re-add/re-assign safe).
-- `AggregatePlan` trait with shared `process` (dedup hit → `Replayed`; miss →
-  `prepare`) and `fold` (sequential apply) helpers — trait first.
-- Errors: `DomainError<C>` + per-area code enums (machine-readable
-  discriminators). Never rename an existing code.
-- **The core never reads the clock or generates IDs** — timestamps and
-  per-attempt ids are **injected** through the command envelope, and everything
-  that must be reproducible (causation keys, event ids, genesis entity ids) is
-  **derived** from the intent with `Key` (`UUIDv5`). Mint once per intent, never
-  per attempt — see D12 in `design.md`.
-- Processing a command does NOT record the dedup entry — the shell records it
-  after the events are durably appended and applied (contract documented in
-  `loomery_core::aggregate`).
-- Validate untrusted input against bounded, compile-time schemas at the
-  boundary (see D10 in `design.md`) — never build types from user strings.
+- Use the pinned mise environment for all Rust commands.
+- Keep the core deterministic: inject IDs and timestamps, derive reproducible
+  identities, and put I/O in the shell.
+- Record dedup only after committed application. Errors from proposal mean an
+  unknown outcome; re-read before deciding whether to retry.
+- Frozen event names/payloads, versioning and writer gating follow design D12
+  and §6. Unsupported snapshot versions currently fail; upcast chains are future work.
+- Keep linear Git history and conventional commits. Do not bypass checks for
+  ordinary work. [guardrails.md](guardrails.md) documents hooks and CI.
 
-## Development guardrails (keep green)
+## Verification and benchmarks
 
-```bash
-mise run verify                    # cargo check + clippy -D warnings + fmt --check + deny + package
-cargo test --workspace             # unit/property tests
-cargo llvm-cov --workspace         # coverage floor 80% (cargo-llvm-cov)
-cargo audit                        # dependency advisories
-cargo deny check                   # license allowlist + bans (deny.toml)
+```sh
+mise run verify
+mise exec -- cargo test --workspace --all-targets
+mise exec -- cargo test --workspace --doc
+mise run coverage
+mise run bench-consensus
+mise run bench-persistence -- --output benchmark-results/persistence-comparison
 ```
 
-- Pre-commit hooks run via `hk` (commit-msg: cog verify + fmt/deny/clippy);
-  commits are made with `mise exec -- cog commit <type> "<message>"`
-  (types: feat, fix, refactor, chore, docs, test, style, ci, perf...).
-- A commit message containing `wip` bypasses the gates (escape hatch).
-- **Linear history on `main` only** — merge commits are blocked by hk; use
-  rebase.
-
-## Dependency stack
-
-Core (in `Cargo.lock`): `uuid` (v7). Planned core: `serde` + `serde_json`
-(envelope/payload D3), `thiserror` (domain errors).
-Shell (Phase 1+): **`tokio`** (multi-thread), **`openraft` 0.9.x** +
-`tonic` (gRPC `RaftNetwork`), `async-nats` (JetStream outbox), `axum`
-(gateway), `tracing` (+ `tracing-opentelemetry` later), `dashmap` (read
-models), `sled`/`rocksdb` (storage spike, D2).
-Dev/test: `proptest` (property tests), `cargo-llvm-cov`, `cargo-audit`,
-`cargo-deny` (already in `mise.toml`).
-
-## Next: Phase 0 pure core, then Phase 1 control plane
-
-See `docs/design.md` §5 and the roadmap tracker. Scope:
-
-1. **Finish the pure core** — `Command`
-   (done — `loomery_core::envelope::Command`), `Error`/`Code`,
-   `Versioning`, `Execution`/
-   `IntegrationEvent`, `DedupIndex`, the `Aggregate` trait, then the six
-   aggregates (Organization, User, Workspace, Task, OrganizationAssignment,
-   WorkspaceMembership) with `proptest` property tests (transition matrices,
-   replay determinism, fold associativity, dedup window).
-2. **Phase 1 — control plane & onboarding**
-   1. **OpenRaft 0.9 spike**: control group `RaftLogStorage`/`RaftStateMachine`
-      + `RaftNetwork` over tonic; `Raft::new`/`RaftServer` bootstrap.
-      *(levels 1–3 done: in-memory `RaftLogStorage`/`RaftStateMachine` + the
-      `GroupOps` adapter in `crates/shell/src/raft`, passing OpenRaft's
-      `testing::Suite`; tonic network + multi-node membership and RocksDB persistence are now implemented;
-      see `docs/raft-configuration.md` for startup and tuning.)*
-   2. Router read model (`dashmap`) + RYW `X-Min-Index` session tokens
-      (50 ms hold → leader redirect).
-   3. Genesis bootstrap worker — tenant groups born with their first three
-      events committed (assign leader → create default workspace → add Owner),
-      `actor = Saga { user_id: None, name: "control-plane:Bootstrap" }`, deterministic
-      causation;
-      crash-resume idempotency. *(worker + acceptance tests done over the
-      in-memory group; startup reconciliation and the retry sweep still need
-      the control plane to call it.)*
-   4. axum gateway — command routing, `causation_id` minting, edge pre-compute
-      hooks (argon2), system-admin flag from OIDC `groups` claim.
-   5. Invitation domain + acceptance saga + outbox email event.
-   6. NATS outbox tailer first slice via `async-nats` — one stream, one
-      consumer, dedup by `(group_id, log_index)` (D8/D11).
-   7. Saga-runner seed — consumer task + cursor + retry classification.
-
-**Phase 1 E2E gate:** register org → genesis ①②③ → workspace + Owner-led;
-invite by email → accept → provisioned → can log in and read the board;
-crash mid-provisioning resumes with no duplicate genesis; duplicate
-`causation_id` dedup-hits with RYW honored; admin-only commands enforced.
-
-**Decisions to revisit at Phase 1:** D1 (OpenRaft transport), D2 (storage:
-sled/rocksdb vs hand-rolled segment engine), D8 (async-nats wiring). Open
-decisions D6/D7 (FTS, vectors) are Phase 4.
-
-## Open questions for you during Phase 1
-
-- Decide how the control group maps the router table (OpenRaft `client_write`
-  into the control group's state machine, then project to `dashmap`).
-- Decide `causation_id` minting rules at the gateway (client-generated
-  preferred, warn otherwise).
-- Decide the NATS subject/stream naming for the first slice (D11 — carries
-  the v1 convention).
-
-
-## Verification before committing
-
-```bash
-mise run verify && cargo test --workspace && cargo llvm-cov --workspace
-```
-Then commit with `mise exec -- cog commit ...` on `main`.
-
-## Latest continuation — tonic + RocksDB
-
-- `RaftGroup::boot_persistent` opens a durable replica without implicitly
-  initializing membership. `raft()` exposes initialization, learners, membership
-  and metrics. `TonicTransport` multiplexes registered groups.
-- `GroupConfig` exposes serde-defaulted transport/resource tuning and OpenRaft
-  settings; startup validates them. WAL synchronization stays mandatory.
-- Acceptance coverage: RocksDB OpenRaft suite, three-replica genesis replication,
-  database reopen/dedup and snapshot transfer over tonic.
-- Full state checkpoints are persisted per apply batch; incremental persistence
-  and archival are still future work.
-- Next: control-plane orchestration/router, bootstrap reconciliation and RYW.
-
-## TLS and checkpoint-policy follow-up
-
-- Optional `transport.server_tls` and `client_tls` load PEM identity/CA paths;
-  client CA enforcement enables mTLS. HTTPS is required with outbound TLS,
-  with hostname verification and no plaintext fallback.
-- `docs/design.md` now records the implemented 0.9 `RaftNetwork` RPCs, actual
-  checkpoint recovery, separate snapshot policy and heartbeat behavior.
-- `docs/research/checkpoint-policy.md` distinguishes background scheduling
-  from WAL synchronization. Awaited state checkpoints remain the current
-  contract; snapshot-backed recovery and incremental writes need benchmarks
-  and crash/purge tests before changing it.
-
-## Controlled consensus benchmark
-
-- `crates/shell/examples/consensus_bench.rs` orchestrates separate replica
-  processes, production tonic/RocksDB storage, configurable bounded write load,
-  snapshots, leader crash/election, and full-cluster database reopen.
-- `docs/benchmarks.md` describes measurement boundaries and controlled
-  comparisons; `docs/benchmarks/consensus.json` supplies an example config.
-- `mise run bench-consensus` runs release trials. Effective configuration,
-  environment, dependency lockfile, raw write samples and JSON phase timings
-  are saved alongside fresh retained databases in `benchmark-results/`.
-
-## Checkpoint benchmark spike
-
-An experimental `storage.state_persistence = "snapshot"` mode uses in-memory
-apply and durable snapshot + committed-log recovery; checkpoint remains default.
-The mode is fixed per database. Both pass OpenRaft's storage suite. A paired
-three-voter benchmark measured ~174 versus ~550 writes/s (3.16×), and ~170 versus
-~530 with snapshots every 200 logs (3.11×), with zero failures and full-cluster
-process-crash recovery verified. See `docs/benchmarks/checkpoint-spike.md` and
-`mise run bench-persistence -- --output benchmark-results/persistence-comparison`.
-Large-state, interrupted-snapshot and power-loss validation remain outstanding.
-
-Persistence-mode protection is always enabled: durable mode marker, rejection
-in both directions across restarts, nonempty unmarked databases pinned to legacy
-checkpoint mode, and invalid markers rejected. Targeted protection tests pass.
+Both storage modes pass OpenRaft's suite. Tests also cover replication, snapshot
+transfer, restart/dedup, TLS trust/identity and persistence-mode protection.
+Benchmarks retain raw samples and databases in ignored `benchmark-results/`.

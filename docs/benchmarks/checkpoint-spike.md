@@ -19,7 +19,7 @@ publication, so they can safely cover logs selected for purge.
 mise run bench-persistence -- --output benchmark-results/persistence-comparison
 ```
 
-The [runner](persistence-spike.py) builds the release example once, then runs
+The [paired runner](../../scripts/bench-persistence.py) builds the release example once, then runs
 four arms sequentially: both modes with snapshot thresholds of 5000 and 200
 entries. Each arm uses the base workload in [consensus.json](consensus.json):
 three trials, 100 warmup writes, 1000 measured writes, concurrency 8,

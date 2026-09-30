@@ -9,7 +9,8 @@ deterministic core** and an **imperative shell**, with consensus provided by
 async runtime.
 
 > **Status: early development.** The pure core (`crates/core`) is in progress;
-> the distributed shell (Raft consensus, gateway, outbox) is planned.
+> the shell has OpenRaft consensus, tonic networking and RocksDB persistence.
+> The gateway, control plane and outbox remain planned.
 
 ---
 
@@ -70,7 +71,8 @@ Loomery follows Gary Bernhardt's **Functional Core, Imperative Shell** pattern.
 loomery/
 ├── crates/
 │   ├── core/          # loomery-core — the pure, deterministic domain core
-│   └── genesis/       # loomery-genesis — the deterministic bootstrap script
+│   ├── genesis/       # loomery-genesis — the deterministic bootstrap script
+│   └── shell/         # loomery-shell — Raft, tonic, RocksDB and workers
 ├── docs/              # design docs, research notes, and guardrails
 ├── deny.toml          # cargo-deny policy (licenses, advisories, bans)
 ├── hk.pkl             # pre-commit hooks (commit message lint + quality gates)
@@ -128,7 +130,7 @@ Run one with `mise run <task>`.
 
 | Task | What it does |
 |------|--------------|
-| `mise run verify` | `cargo check`, clippy (`-D warnings`), `fmt --check`, `cargo deny check`, `cargo package --workspace` |
+| `mise run verify` | `cargo check`, clippy (`-D warnings`), `fmt --check`, `cargo deny check` |
 | `mise run test` | `cargo test --workspace` |
 | `mise run coverage` | Generate an LCOV coverage report (`cargo llvm-cov --workspace`) |
 | `mise run crap` | Compute **CRAP** scores from coverage; fails above the threshold |
@@ -171,11 +173,13 @@ build artifacts.
 
 ## Documentation
 
-- [`docs/design.md`](docs/design.md) — architecture, decisions, and the phased build plan
-- [`docs/shell.md`](docs/shell.md) — how `crates/shell` works: the port, the genesis worker, the Raft group
-- [`docs/guardrails.md`](docs/guardrails.md) — formatting, linting, and testing gates
-- [`docs/CONTINUE.md`](docs/CONTINUE.md) — current work-in-progress and next steps
-- [`docs/research/`](docs/research/) — notes on consensus, storage, and integrations
+Start with the [documentation index](docs/README.md). It groups current
+references, tutorials, research and benchmarks. The main entry points are:
+
+- [Design and roadmap](docs/design.md)
+- [Shell reference](docs/shell.md) and [Raft configuration](docs/raft-configuration.md)
+- [Current work and next steps](docs/CONTINUE.md)
+- [Consensus benchmarks](docs/benchmarks/README.md)
 
 ---
 
