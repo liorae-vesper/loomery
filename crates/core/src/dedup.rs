@@ -51,6 +51,7 @@ impl Entry {
 /// The only dedup store of the core (P3): the shell records the causation
 /// key *after* the events are durably appended and applied, so a `lookup`
 /// hit means the command was already processed.
+#[derive(Debug)]
 pub struct Registry {
     max_entries: usize,
     window: VecDeque<Key>,
@@ -115,6 +116,28 @@ impl Registry {
             },
         );
     }
+
+    /// The recorded entries, in **insertion order** — the FIFO window that
+    /// [`insert`](Registry::insert) evicts from.
+    ///
+    /// Each tuple is `(causation_key, intent fingerprint, first_log_index)`.
+    /// Re-inserting them in this order rebuilds an identical registry, which is
+    /// how a shell serializes the window into a state-machine snapshot.
+    #[must_use]
+    pub fn window_entries(&self) -> Vec<(Key, Key, usize)> {
+        self.window
+            .iter()
+            .filter_map(|key| {
+                self.entries.get(key).map(|entry| {
+                    (
+                        key.clone(),
+                        entry.fingerprint.clone(),
+                        entry.first_log_index,
+                    )
+                })
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +198,27 @@ mod tests {
         assert!(reg.lookup(&key(97)).is_none()); // evicted long ago
         assert!(reg.lookup(&key(98)).is_some());
         assert!(reg.lookup(&key(100)).is_some());
+    }
+
+    #[test]
+    fn window_entries_are_in_insertion_order() {
+        let mut reg = Registry::new(2);
+
+        reg.insert(key(1), fingerprint(1), 1);
+        reg.insert(key(2), fingerprint(2), 2);
+        reg.insert(key(3), fingerprint(3), 3); // evicts key(1)
+
+        let entries = reg.window_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], (key(2), fingerprint(2), 2));
+        assert_eq!(entries[1], (key(3), fingerprint(3), 3));
+
+        // Re-inserting them in order rebuilds the same window.
+        let mut rebuilt = Registry::new(2);
+        for (cause, intent, index) in reg.window_entries() {
+            rebuilt.insert(cause, intent, index);
+        }
+        assert_eq!(rebuilt.window_entries(), entries);
     }
 
     #[test]
