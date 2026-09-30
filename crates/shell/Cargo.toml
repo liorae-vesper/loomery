@@ -27,6 +27,7 @@ tokio-stream = { version = "0.1", features = ["net"] }
 tonic-prost-build = "0.14"
 
 [dev-dependencies]
+tokio = { version = "1.53.1", features = ["process", "io-util", "io-std"] }
 tempfile = "3"
 rcgen = "0.14"
 

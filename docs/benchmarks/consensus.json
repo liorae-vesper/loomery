@@ -1,0 +1,28 @@
+{
+  "nodes": 3,
+  "trials": 3,
+  "warmup": 100,
+  "operations": 1000,
+  "concurrency": 8,
+  "name_bytes": 256,
+  "payload_pattern": "pseudorandom",
+  "worker_threads": 2,
+  "operation_timeout_ms": 10000,
+  "phase_timeout_ms": 120000,
+  "failover": true,
+  "group": {
+    "raft": {
+      "heartbeat_interval": 100,
+      "election_timeout_min": 250,
+      "election_timeout_max": 500,
+      "snapshot_policy": { "LogsSinceLast": 5000 }
+    },
+    "storage": {
+      "write_buffer_bytes": 67108864,
+      "max_write_buffers": 2,
+      "max_background_jobs": 2,
+      "max_open_files": 512,
+      "block_cache_bytes": 67108864
+    }
+  }
+}
