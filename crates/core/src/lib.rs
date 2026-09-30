@@ -30,8 +30,11 @@ pub mod envelope;
 pub mod error;
 pub mod id;
 pub mod key;
+pub mod membership;
+pub mod org;
 pub mod timestamp;
 pub mod versioning;
+pub mod workspace;
 
 /// The `Uuid` type this crate's API speaks in — [`key::Key::new`] takes a
 /// namespace `&Uuid`.
