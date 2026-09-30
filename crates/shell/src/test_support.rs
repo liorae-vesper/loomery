@@ -2,6 +2,8 @@
 
 //! Test doubles shared by the shell's tests.
 
+use std::future::Future;
+
 use crate::group::{GroupOps, ProposeOutcome};
 use loomery_core::envelope::{Command, Event, Payload};
 use loomery_core::id::Id;
@@ -36,12 +38,18 @@ pub(crate) struct FakeGroup {
 }
 
 impl GroupOps for FakeGroup {
-    fn committed_events(&self, _organization_id: &Id) -> anyhow::Result<Vec<Event>> {
-        Ok(self.events.clone())
+    fn committed_events(
+        &self,
+        _organization_id: &Id,
+    ) -> impl Future<Output = anyhow::Result<Vec<Event>>> + Send {
+        std::future::ready(Ok(self.events.clone()))
     }
 
-    fn propose(&mut self, command: Command) -> anyhow::Result<ProposeOutcome> {
-        self.apply(&command)
+    fn propose(
+        &mut self,
+        command: Command,
+    ) -> impl Future<Output = anyhow::Result<ProposeOutcome>> + Send {
+        std::future::ready(self.apply(&command))
     }
 }
 

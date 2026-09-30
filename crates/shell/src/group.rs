@@ -7,6 +7,8 @@
 //! goes through [`GroupOps`]; nothing else needs to know about Raft, storage or
 //! leadership.
 
+use std::future::Future;
+
 use loomery_core::envelope::{Command, Event};
 use loomery_core::id::Id;
 
@@ -27,7 +29,11 @@ pub enum ProposeOutcome {
 }
 
 /// The group operations the rest of the shell needs.
-pub trait GroupOps {
+///
+/// The futures are declared explicitly (`-> impl Future<Output = T> + Send`)
+/// rather than as `async fn`: the worker is `tokio::spawn`ed, and `async fn` in
+/// a trait gives no `Send` guarantee (and warns, `async_fn_in_trait`).
+pub trait GroupOps: Send + Sync {
     /// Every event the group has committed *and applied*, in log order.
     ///
     /// Answers must reflect *applied* state, not just the log tail: a caller
@@ -38,7 +44,10 @@ pub trait GroupOps {
     ///
     /// Whatever the group's store reports: I/O, a corrupt segment, a snapshot
     /// that will not load.
-    fn committed_events(&self, organization_id: &Id) -> anyhow::Result<Vec<Event>>;
+    fn committed_events(
+        &self,
+        organization_id: &Id,
+    ) -> impl Future<Output = anyhow::Result<Vec<Event>>> + Send;
 
     /// Appends `command` through consensus and waits for it to be applied.
     ///
@@ -51,5 +60,8 @@ pub trait GroupOps {
     /// Consensus failures — the proposal timed out, leadership moved, the group
     /// is unavailable. Every error means *unknown outcome*, never "nothing
     /// happened": re-read [`GroupOps::committed_events`] before proposing again.
-    fn propose(&mut self, command: Command) -> anyhow::Result<ProposeOutcome>;
+    fn propose(
+        &mut self,
+        command: Command,
+    ) -> impl Future<Output = anyhow::Result<ProposeOutcome>> + Send;
 }
