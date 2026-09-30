@@ -22,6 +22,7 @@ shell settings fail validation. JSON example:
     "connection_window_bytes": 4194304
   },
   "storage": {
+    "state_persistence": "checkpoint",
     "write_buffer_bytes": 67108864,
     "max_write_buffers": 2,
     "max_background_jobs": 2,
@@ -78,8 +79,8 @@ Transport requests have the lesser of OpenRaft's RPC TTL and
 `request_timeout_ms`; channels reconnect automatically. Message limits apply
 to both clients and servers. Snapshot chunks use JSON byte arrays, so leave
 room for encoding overhead when selecting the consensus chunk size and the
-gRPC message limit. This first transport uses plaintext HTTP/2; deploy it on
-a trusted private network. Its versioned protobuf envelope carries the pinned
+gRPC message limit. Plaintext HTTP/2 is the default; TLS and mutual TLS are
+available through the opt-in settings below. Its versioned protobuf envelope carries the pinned
 OpenRaft JSON request/Result types; rolling wire upgrades need compatibility
 review.
 
@@ -93,8 +94,11 @@ are committed atomically. All writes retain the WAL and synchronize it before
 acknowledgment; these correctness guarantees are fixed. Blocking database
 operations run on Tokio's blocking pool. Raft stops on storage failure.
 
-The initial durable state machine saves a complete state/snapshot checkpoint
-(including applied events and dedup) after each apply batch. This favors simple
+The initial durable state machine awaits a complete applied-state checkpoint
+(including applied events and dedup) after each apply batch. Raft snapshots are separate and follow
+`raft.snapshot_policy` (default: every 5000 logs since the last snapshot).
+See [checkpoint-policy.md](research/checkpoint-policy.md) for the difference
+between background scheduling and durable synchronization. This favors simple
 recovery but serialization and write cost grow with group history. Incremental
 state persistence and event archival remain future work; benchmark expected
 group sizes before choosing production capacity.
@@ -103,3 +107,83 @@ Build prerequisites: `protoc`, a C++ compiler and libclang (RocksDB bindings).
 Run builds and checks through `mise exec --` to use the pinned Rust toolchain.
 The storage conformance tests cover RocksDB; network tests cover three-node
 membership/replication, database reopen and snapshot transfer.
+
+## Opt-in TLS and mutual TLS
+
+Add these settings to `transport` for encrypted peer connections:
+
+```json
+{
+  "server_tls": {
+    "identity": {
+      "certificate": "/etc/loomery/tls/server-chain.pem",
+      "private_key": "/etc/loomery/tls/server-key.pem"
+    }
+  },
+  "client_tls": {
+    "ca_certificate": "/etc/loomery/tls/peer-ca.pem"
+  }
+}
+```
+
+`server_tls` configures the shared listener. `client_tls` configures each
+group's outbound connections. Neither setting is enabled by default. Use
+`https://node.example:7001` addresses in Raft membership when `client_tls` is
+set; the client verifies the certificate's identity against the address host.
+Set `client_tls.server_name` only when an explicit shared certificate name is
+needed (for example connecting by IP to a DNS certificate). This still verifies
+the specified name; verification cannot be disabled.
+
+For mutual TLS, add `server_tls.client_ca_certificate` with the PEM CA bundle
+that signs allowed client certificates. The listener then requires a valid
+client certificate. Add `client_tls.identity` with `certificate` and
+`private_key` file paths for the outbound client identity. Omit the server's
+client CA setting for server-authenticated TLS without client certificates.
+CA bundles must contain parseable certificates. PEM files are read using async
+file I/O; the configuration contains only paths, never key material.
+
+TLS-enabled clients reject `http://` addresses; plaintext clients reject
+`https://` addresses. TLS errors fail rather than fall back to plaintext.
+`connect_timeout_ms` also bounds TLS handshakes. The listener validates server
+credentials before serving; persistent group startup preflights client
+credentials before opening the database. Existing channels reuse loaded
+credentials. Restart groups and recreate the shared listener to rotate them;
+automatic reload is not supported. All groups sharing a listener share its
+server identity and client CA policy.
+
+Tests cover three-replica replication and recovery over mTLS, standalone TLS
+and mTLS handshakes, plaintext snapshot transfer, and rejection of wrong CA,
+wrong certificate name, missing client identity and invalid configuration.
+
+### Experimental snapshot-backed recovery
+
+`GroupConfig.storage.state_persistence` accepts `"checkpoint"` (default) or
+`"snapshot"` (experimental). Set the configuration flag when creating a new
+replica database:
+
+```json
+{
+  "storage": {
+    "state_persistence": "snapshot"
+  }
+}
+```
+
+In benchmark configuration this lives under `group.storage.state_persistence`.
+In Rust, use `config.storage.state_persistence = StatePersistence::Snapshot`.
+Snapshot mode removes the per-apply full-state checkpoint, keeping synchronized
+log writes and durable scheduled snapshots. Startup restores the durable
+snapshot and replays committed logs.
+
+The protection is always enabled: first startup synchronously persists the
+selected mode. Every later startup checks that marker before recovery or
+starting Raft. A mismatch fails with the stored and requested modes; it does not
+rewrite the marker. Nonempty legacy databases without a marker are restricted
+to checkpoint mode, even if they have no applied-state checkpoint yet. Invalid
+markers fail startup. Choose the same mode for all replicas of a group. This is
+per-database protection, not a cluster-wide control-plane setting.
+
+There is no force-switch option or automatic migration. Use fresh database
+paths for comparisons; changing the configuration on an existing deployment
+fails startup. See [the persistence spike](benchmarks/checkpoint-spike.md) before
+selecting snapshot mode.
