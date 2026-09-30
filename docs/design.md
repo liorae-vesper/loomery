@@ -82,19 +82,19 @@ command/response flow, background tasks for snapshots, the outbox tailer, and
 saga runners. The shell owns:
 
 - **Transport** — the gateway (axum) plus the OpenRaft `RaftNetwork`
-  implementation over tonic gRPC, with opt-in TLS/mTLS (see [D1](#d1-consensus)).
+  implementation over tonic gRPC, with opt-in TLS/mTLS (see [D1](#d1--consensus)).
 - **Edge pre-computation** — password hashing, token minting, before commands
   enter consensus.
 - **Routing** — `organization_id → group` lookup (see §2.3).
 - **Consensus** — OpenRaft: one `Raft` instance per organization plus one
-  control group (see [D1](#d1-consensus)).
+  control group (see [D1](#d1--consensus)).
 - **Persistence** — the `RaftLogStorage` (log) and `RaftStateMachine` (state +
-  snapshots) implementations (see [D2](#d2-storage-engine)).
+  snapshots) implementations (see [D2](#d2--storage-engine)).
 - **Outbox** — a tailer task streaming committed log entries and publishing
-  domain events to NATS JetStream via `async-nats` ([D8](#d8-sagas-bus)).
+  domain events to NATS JetStream via `async-nats` ([D8](#d8--sagas-bus)).
 - **Recovery** — restore the durable applied-state checkpoint and the separately
   stored Raft snapshot; OpenRaft replays the committed suffix after the restored
-  applied index. Snapshots and log retention follow [D2](#d2-storage-engine).
+  applied index. Snapshots and log retention follow [D2](#d2--storage-engine).
 
 ### 2.3 Consistency: Eventual + Read-Your-Writes
 
@@ -121,8 +121,8 @@ macros (their generated code refers to `::core` paths). Keep it that way.
 
 | Item (crate path) | Purpose |
 |---|---|
-| `loomery_core::id::Id` | Canonical UUID id — minted `UUIDv7` or derived `UUIDv5` (canonical string form) — see [D4](#d4-uuid-representation), [D12](#d12-identity-minted-intents-and-derived-entities) |
-| `loomery_core::key::Key` | Derived identity (`UUIDv5`): causation/dedup keys, event ids, derived entity ids (`Id::from(key)`) — see [D12](#d12-identity-minted-intents-and-derived-entities) |
+| `loomery_core::id::Id` | Canonical UUID id — minted `UUIDv7` or derived `UUIDv5` (canonical string form) — see [D4](#d4--uuid-representation), [D12](#d12--identity-minted-intents-and-derived-entities) |
+| `loomery_core::key::Key` | Derived identity (`UUIDv5`): causation/dedup keys, event ids, derived entity ids (`Id::from(key)`) — see [D12](#d12--identity-minted-intents-and-derived-entities) |
 | `loomery_core::envelope::Event` | The wrapper for every committed event (see §6) |
 | `loomery_core::envelope::Command` | Command form: `prepare` input, carries injected `occurred_at` + ids |
 | `loomery_core::actor::Actor` | `{ kind: User \| System \| Saga, user_id, saga_name }` — who performed an action |
@@ -181,10 +181,10 @@ The built shell (port, genesis worker, networked persistent Raft groups) is docu
 | Concept | Rust counterpart |
 |---|---|
 | Runtime | **Tokio** (multi-threaded, `flavor = "multi_thread"`); one task per Raft group |
-| Consensus (one group per org + control group) | **OpenRaft** — async-native Raft in Rust; `Raft<TypeConfig>` per group, each with its own `RaftLogStorage`/`RaftStateMachine`. See [D1](#d1-consensus) |
-| Storage (log / state / snapshots) | `RaftLogStorage` + `RaftStateMachine` over RocksDB; awaited state checkpoints and scheduled Raft snapshots (see [D2](#d2-storage-engine)) |
+| Consensus (one group per org + control group) | **OpenRaft** — async-native Raft in Rust; `Raft<TypeConfig>` per group, each with its own `RaftLogStorage`/`RaftStateMachine`. See [D1](#d1--consensus) |
+| Storage (log / state / snapshots) | `RaftLogStorage` + `RaftStateMachine` over RocksDB; awaited state checkpoints and scheduled Raft snapshots (see [D2](#d2--storage-engine)) |
 | Transport for Raft RPCs | `RaftNetwork` over **tonic** gRPC — `append_entries`, `vote`, chunked `install_snapshot`; opt-in TLS/mTLS |
-| WAL-tailing outbox → NATS JetStream | A Tokio task streaming committed entries, publishing via **async-nats**; dedup by `(group_id, log_index)` ([D8](#d8-sagas-bus), [D11](#d11-outbox-subjects-stream-naming-and-dedup-identity)) |
+| WAL-tailing outbox → NATS JetStream | A Tokio task streaming committed entries, publishing via **async-nats**; dedup by `(group_id, log_index)` ([D8](#d8--sagas-bus), [D11](#d11--outbox-subjects-stream-naming-and-dedup-identity)) |
 | Router (`organization_id` → group) | `DashMap` read model projected by the control group's state machine |
 | Read models / projections | `DashMap`/`Arc<RwLock<HashMap>>` tables fed by projections applied inside the state machine |
 | Worker lifecycle / idle groups | Heartbeat/election behavior follows OpenRaft configuration; scheduled snapshots are separate from awaited state checkpoints |
@@ -235,8 +235,8 @@ retention caps + replay.
 
 ### Phase 4 — Knowledge base & RAG
 Documentation aggregate; document processing pipeline; **tantivy** FTS engine
-([D6](#d6-fts-engine)); embedding sidecar (checkpointed, never re-call the LLM);
-tenant-scale brute-force KNN (or `pgvector`, [D7](#d7-vector-store)).
+([D6](#d6--fts-engine-phase-4)); embedding sidecar (checkpointed, never re-call the LLM);
+tenant-scale brute-force KNN (or `pgvector`, [D7](#d7--vector-store-phase-4)).
 
 ### Phase 5 — Automation & integrations
 WorkflowRule aggregate + rule engine (500 ms budget, fail-open) +
@@ -361,7 +361,7 @@ full-state serialization currently runs on the calling task. Awaited checkpoint
 cost grows with history. Incremental persistence or snapshot-backed recovery is
 a future optimization, requiring crash/purge/replay tests and latency/recovery
 benchmarks before changing the contract. The controlled multi-process tonic/
-RocksDB harness in [benchmarks.md](benchmarks.md) measures the current path. Do not replace awaited checkpoints
+RocksDB harness in [benchmark guide](benchmarks/README.md) measures the current path. Do not replace awaited checkpoints
 with unchecked background writes or disable WAL synchronization.
 
 An experimental `GroupConfig.storage.state_persistence = "snapshot"` mode
@@ -412,7 +412,7 @@ Postgres). Platform-wide ANN is explicitly out of v1.
 model; dedup by `(group_id, log_index)`.
 **Status: RECOMMENDED.** Publishing convention: `Nats-Msg-Id =
 <group_id>:<log_index>:e<pos>|i<pos>`; the JetStream dedup window absorbs
-re-issued publishes from leader failover or restart ([D11](#d11-outbox-subjects-stream-naming-and-dedup-identity)).
+re-issued publishes from leader failover or restart ([D11](#d11--outbox-subjects-stream-naming-and-dedup-identity)).
 
 ### D9 — Storage of "cold" read-model state
 ETS/Sled-equivalent question: in Rust, `sled`/`redb`/SQLite (`rusqlite`)

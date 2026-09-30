@@ -1,0 +1,53 @@
+# Documentation
+
+Start with [design.md](design.md) for the architecture and decisions, or
+[CONTINUE.md](CONTINUE.md) for the current implementation and next work.
+
+## Reference
+
+| Document | Purpose |
+|---|---|
+| [Design](design.md) | Architecture, decisions register and phased roadmap; distinguishes implemented and planned features |
+| [Shell](shell.md) | Current group API, genesis worker, transport and storage behavior |
+| [Raft configuration](raft-configuration.md) | Persistent replica startup, tuning, TLS/mTLS and immutable persistence modes |
+| [Development guardrails](guardrails.md) | Toolchain, verification tasks, hooks and CI |
+| [Continuation](CONTINUE.md) | Concise handoff; consult the design tracker for the full backlog |
+
+## Tutorials
+
+Read these in order for the core-to-shell walkthrough. The OpenRaft tutorial
+builds the original in-memory baseline; use the reference above for persistent
+networked deployment.
+
+1. [Group port](tutorials/shell-group.md) — commands, reads and unknown outcomes.
+2. [Genesis worker](tutorials/genesis-worker.md) — deterministic bootstrap and retry behavior.
+3. [OpenRaft spike](tutorials/openraft-spike.md) — storage traits and the Raft adapter.
+
+## Benchmarks
+
+- [Controlled consensus benchmark](benchmarks/README.md) — workload, phases, configuration and measurement limits.
+- [Checkpoint comparison](benchmarks/checkpoint-spike.md) — paired persistence experiment and measured results.
+- [Example workload](benchmarks/consensus.json) — configuration for the release harness.
+
+The paired runner is executable tooling in
+[../scripts/bench-persistence.py](../scripts/bench-persistence.py), invoked by
+`mise run bench-persistence`.
+
+## Research
+
+Research records the reasoning and alternatives behind decisions. Earlier
+recommendations are retained as provenance; the design register and current
+configuration reference describe what was selected and implemented.
+
+| Note | Topic |
+|---|---|
+| [OpenRaft versus alternatives](research/openraft-vs-alternatives.md) | Consensus and per-tenant groups |
+| [Storage engine alternatives](research/storage-engine-alternatives.md) | Log storage, projections, backups and vector storage |
+| [Indexed segment format](research/indexed-segment-file-format.md) | Alternative log format; not the implemented RocksDB backend |
+| [OpenRaft storage](research/openraft-storage.md) | Storage contracts and version-specific integration notes |
+| [Checkpoint policy](research/checkpoint-policy.md) | Scheduling versus durability and the two recovery modes |
+
+Keep current behavior in reference docs, implementation walkthroughs in
+`tutorials/`, measurements in `benchmarks/`, and decision research in
+`research/`. Link to detailed sources instead of appending duplicate session
+summaries. Keep runtime scripts outside this directory.

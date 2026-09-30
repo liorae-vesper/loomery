@@ -78,7 +78,7 @@ configuration and rejects typos. Effective configuration is saved in full.
 | `group.storage` | RocksDB cache, memtable, background-job and file limits |
 
 For TLS or mTLS, supply the `server_tls` and `client_tls` settings documented in
-[raft-configuration.md](raft-configuration.md). The local benchmark requires
+[raft-configuration.md](../raft-configuration.md). The local benchmark requires
 both, or neither. It advertises loopback IP addresses: either issue certificates
 with a `127.0.0.1` IP SAN, or set `client_tls.server_name` to a verified DNS SAN
 such as `localhost`. Certificate files must be accessible to every replica.
@@ -135,7 +135,7 @@ attribution to serialization, log fsync, checkpoint fsync or replication.
 
 ## Comparing state persistence
 
-Run the [paired spike](benchmarks/checkpoint-spike.md) with
+Run the [paired spike](checkpoint-spike.md) with
 `mise run bench-persistence -- --output benchmark-results/persistence-comparison`.
 The runner uses identical workloads for both modes, keeps synchronous Raft log
 writes, tests snapshot thresholds of 5000 and 200 entries, skips a final forced

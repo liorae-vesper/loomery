@@ -55,7 +55,7 @@ committed?"* and *"append this, and tell me what happened."*
 
 | Implementation | Where | Notes |
 |---|---|---|
-| Raft-backed port | `crates/shell/src/raft/port.rs` (`RaftGroup`) | maps `client_write` → `ProposeOutcome`; in-memory spike levels 1–2 (`MemLogStore` + `MemStateMachine`), see `docs/tutorials/openraft-spike.md` |
+| Raft-backed port | `crates/shell/src/raft/port.rs` (`RaftGroup`) | maps `client_write` → `ProposeOutcome`; in-memory and persistent groups, see [shell reference](../shell.md) |
 | Fake group | `crates/shell/src/test_support.rs` | in-memory append + dedup window; can `lose_response_after` a commit to simulate the nastiest crash |
 
 ## Who uses it

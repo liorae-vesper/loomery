@@ -8,7 +8,7 @@ It is split in two halves:
 | Stages | What they need | Verified? |
 |---|---|---|
 | **1–5** (the algorithm) | nothing but the crates in this repo | yes — the code below is extracted from a crate that compiles and passes its tests with this workspace's lint set |
-| **6–7** (async + OpenRaft) | the Phase-1 OpenRaft spike | yes — stage 6 and the stage-7 adapter are implemented in `crates/shell/src/raft` (in-memory levels 1–2), re-checked against the pinned 0.9.25 crate and held to `openraft::testing::Suite` |
+| **6–7** (async + OpenRaft) | the Phase-1 OpenRaft spike | yes — stage 6 and the stage-7 adapter are implemented in `crates/shell/src/raft` (in-memory baseline; persistent groups are covered in the [shell reference](../shell.md)), re-checked against the pinned 0.9.25 crate and held to `openraft::testing::Suite` |
 
 If you only want the algorithm, stop after stage 5: it is the whole decision
 surface, and it is testable without a cluster.
@@ -165,8 +165,7 @@ mise run verify               # fmt + clippy -D warnings + cargo deny
 
 The worker does not own the group abstraction. `GroupOps` and `ProposeOutcome`
 live in `crates/shell/src/group.rs`, because the gateway command plane and the
-saga runner need exactly the same two operations; **[`shell-group.md`](shell-group.md)
-defines them and their contracts](shell-group.md)** — read that first if you have
+saga runner need exactly the same two operations; **[shell-group.md defines them and their contracts](shell-group.md)** — read that first if you have
 not.
 
 Genesis only needs to know two things about it:

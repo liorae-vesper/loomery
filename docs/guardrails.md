@@ -14,7 +14,7 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 | Pre-commit hooks | `hk` (commit-msg + check/fix hooks) |
 | Commit message lint | `cog verify` (conventional commits, cocogitto) |
 | Combined dev gate | `mise run verify` (see `mise.toml`) |
-| Complexity gate | n/a (clippy covers lint+complexity; CRAP has no direct Rust analogue) |
+| Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap) |
 
 ## The `cargo deny` policy (`deny.toml`)
 
@@ -41,8 +41,8 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
    `hk check` hook): `cargo check`, clippy with `-D warnings`, fmt check,
    `cargo deny check`.
 3. **`hk fix`** runs `cargo fmt` to auto-format.
-4. **CI** — not yet wired (`.github/workflows` is a TODO). When added, run the
-   full `mise run verify` job plus `cargo test`, coverage, and `cargo audit`.
+4. **CI** — [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs
+   verify, tests, quality (`mise run crap`) and audit as separate jobs.
 
 ## Coverage data flow
 
@@ -59,5 +59,5 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 
 ---
 
-*Last updated: scaffold era — hk hooks, mise verify, and cargo-deny policy in
-place; CI and coverage floors land with the first real test suite.*
+*Current tasks and tool versions are defined in [mise.toml](../mise.toml);
+hook behavior is defined in [hk.pkl](../hk.pkl).*
