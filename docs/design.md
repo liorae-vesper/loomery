@@ -173,6 +173,9 @@ core receives values through the command envelope. Tracked in
 
 ## 4. Shell layout — Rust/Tokio/OpenRaft counterparts
 
+The built shell (port, genesis worker, in-process Raft group) is documented in
+[`shell.md`](shell.md); the table below is the planned full layout.
+
 | Concept | Rust counterpart |
 |---|---|
 | Runtime | **Tokio** (multi-threaded, `flavor = "multi_thread"`); one task per Raft group |
@@ -488,11 +491,15 @@ naming for the first outbox slice:**
 - [x] `loomery_core::dedup::DedupIndex` — bounded FIFO idempotency window
       (`dashmap` + `VecDeque`, deterministic eviction; unit + **proptest**
       model-based and metadata-retention properties)
-- [ ] `loomery_core::org::Organization`
+- [ ] `loomery_core::org::Organization` — *bootstrap slice* (①
+      `organization.assign_leader` → `leader_assigned`) implemented
 - [ ] `loomery_core::user::User`
-- [ ] `loomery_core::workspace::Workspace`
+- [ ] `loomery_core::workspace::Workspace` — *bootstrap slice* (②
+      `workspace.create` → `created`) implemented
 - [ ] `loomery_core::task::Task`
-- [ ] `loomery_core::membership` (OrganizationAssignment / WorkspaceMembership)
+- [ ] `loomery_core::membership` (OrganizationAssignment / WorkspaceMembership) —
+      `WorkspaceMembership` *bootstrap slice* (③ `membership.add_owner` →
+      `owner_added`) implemented
 - [ ] Property tests (`proptest`: replay determinism, fold associativity,
       random-commands-never-crash) *(dedup window ✓ — model-based eviction
       + re-insert-never-refreshes)*
@@ -505,13 +512,19 @@ tests green for all six aggregates; coverage floor met.
 - [ ] Phase 1 control plane *(next — OpenRaft 0.9 spike)*
   - [ ] Control group on OpenRaft (`RaftLogStorage`/`RaftStateMachine` +
         `RaftNetwork` over tonic): `shell::control`
+    - [x] levels 1–2 of the spike: in-memory `RaftLogStorage` +
+          `RaftStateMachine` (`crates/shell/src/raft`) and the `RaftGroup`
+          `GroupOps` adapter; passes OpenRaft's `testing::Suite` and drives
+          genesis end-to-end in process
+    - [ ] tonic `RaftNetwork` + multi-node membership (`shell::control`)
   - [ ] Router read model + RYW `X-Min-Index` hold
   - [x] Genesis script (`crates/genesis`): the deterministic ①②③ plan —
         derived keys/ids, commands, and progress read back from the committed
         events by causation key
-  - [ ] Genesis bootstrap worker: the loop around the script (Raft client,
-        propose/wait, crash-resume wiring, leader membership) — the script
-        itself is done
+  - [x] Genesis bootstrap worker: the async loop around the script
+        (`crates/shell/src/bootstrap.rs`) over `GroupOps`, with crash-resume
+        and replay tests; startup reconciliation/retry sweeping still needs
+        the control plane to call it
   - [ ] Outbox slice: `shell::outbox` publisher + `async-nats` transport (D8/D11)
   - [ ] Saga-runner seed + `InvitationSaga` (acceptance → assignment + membership)
   - [ ] axum gateway: command plane, causation minting, edge pre-compute

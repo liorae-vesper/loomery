@@ -40,11 +40,20 @@ planned for Phases 1+.
     `owner_membership_id`, `command_id`), the three commands at their ①②③ wire
     names, and `Bootstrap::{command, next_command, progress}` — progress is
     read from the committed events by causation key, so a resumed run knows
-    what already happened. Worker loop (Raft client) still to come.
-  - 92 unit tests + 3 doctests passing (serde round-trips, wire-format
-    snapshot, id/key derivation + validation, dedup window, timestamp ordering,
-    actor/command round-trips, error display/equality/source, genesis plan +
-    crash-resume ordering).
+    what already happened.
+  - `crates/shell` (`loomery-shell`) — the imperative shell: the async
+    `GroupOps` port, the genesis bootstrap worker (`bootstrap::run`), and the
+    in-memory Raft group behind it (`raft::{MemLogStore, MemStateMachine,
+    RaftGroup}` — spike levels 1–2, no network yet). The state machine runs
+    the pure core (`AggregatePlan::process`) and passes OpenRaft's
+    `testing::Suite`; genesis ①②③ are born end-to-end in process, and a
+    crash between steps resumes with no duplicate genesis.
+  - 82 core + 24 genesis + 22 shell unit tests + 3 doctests passing (serde
+    round-trips, wire-format snapshot, id/key derivation + validation, dedup
+    window, timestamp ordering, actor/command round-trips, error
+    display/equality/source, genesis plan + crash-resume ordering, the
+    bootstrap-slice aggregates, and the log/state-machine/snapshot
+    semantics).
 
 ## Conventions (non-negotiable)
 
@@ -111,13 +120,18 @@ See `docs/design.md` §5 and the roadmap tracker. Scope:
 2. **Phase 1 — control plane & onboarding**
    1. **OpenRaft 0.9 spike**: control group `RaftLogStorage`/`RaftStateMachine`
       + `RaftNetwork` over tonic; `Raft::new`/`RaftServer` bootstrap.
+      *(levels 1–2 done: in-memory `RaftLogStorage`/`RaftStateMachine` + the
+      `GroupOps` adapter in `crates/shell/src/raft`, passing OpenRaft's
+      `testing::Suite`; tonic network + multi-node membership remain.)*
    2. Router read model (`dashmap`) + RYW `X-Min-Index` session tokens
       (50 ms hold → leader redirect).
    3. Genesis bootstrap worker — tenant groups born with their first three
       events committed (assign leader → create default workspace → add Owner),
       `actor = Saga { user_id: None, name: "control-plane:Bootstrap" }`, deterministic
       causation;
-      crash-resume idempotency.
+      crash-resume idempotency. *(worker + acceptance tests done over the
+      in-memory group; startup reconciliation and the retry sweep still need
+      the control plane to call it.)*
    4. axum gateway — command routing, `causation_id` minting, edge pre-compute
       hooks (argon2), system-admin flag from OIDC `groups` claim.
    5. Invitation domain + acceptance saga + outbox email event.
