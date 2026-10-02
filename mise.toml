@@ -48,3 +48,15 @@ run = "cargo run --release -p loomery-shell --example consensus_bench -- --confi
 [tasks.bench-persistence]
 description = "Compares checkpoint and snapshot recovery with controlled crash benchmarks"
 run = "python3 scripts/bench-persistence.py"
+
+[tasks.bench-batching]
+description = "Compares bounded command batching against the durable single-command baseline"
+run = "python3 scripts/bench-batching.py"
+
+[tasks.bench-batch-matrix]
+description = "Sweeps command batch sizes and concurrency with randomized durable Raft trials"
+run = "python3 scripts/bench-batch-matrix.py"
+
+[tasks.test-consensus-failures]
+description = "Injects replica crashes, quorum loss and lost replies during durable writes"
+run = "python3 scripts/test-consensus-failures.py"

@@ -90,6 +90,7 @@ impl Process {
                 pid,
                 address,
                 boot_us,
+                ..
             } => {
                 anyhow::ensure!(id == process.spec.id, "wrong child identity");
                 process.spec.listen = Some(
@@ -386,7 +387,7 @@ async fn trial(config: &Config, root: &Path, number: usize) -> anyhow::Result<Tr
     }
     Ok(Trial {
         number,
-        schema_version: 2,
+        schema_version: 3,
         replicas,
         initialization_us,
         warmup,

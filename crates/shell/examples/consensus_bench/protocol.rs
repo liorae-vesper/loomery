@@ -106,11 +106,34 @@ pub struct NodeSpec {
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
-    Initialize { members: BTreeMap<u64, String> },
-    Batch { phase: String, count: usize },
+    Initialize {
+        members: BTreeMap<u64, String>,
+    },
+    Batch {
+        phase: String,
+        count: usize,
+    },
+    StreamBatch {
+        phase: String,
+        count: usize,
+    },
+    RetryBatch {
+        phase: String,
+        count: usize,
+        timeout_ms: u64,
+    },
     Status,
-    Check { index: u64, events: usize },
-    Snapshot { index: u64 },
+    Check {
+        index: u64,
+        events: usize,
+    },
+    Audit {
+        index: u64,
+        phases: BTreeMap<String, usize>,
+    },
+    Snapshot {
+        index: u64,
+    },
     Stop,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +143,8 @@ pub struct Sample {
     pub command_json_bytes: usize,
     pub log_index: Option<u64>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub replayed: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Batch {
@@ -144,12 +169,18 @@ pub enum Reply {
         pid: u32,
         address: String,
         boot_us: u64,
+        config: Box<Config>,
     },
     Initialized {
         elapsed_us: u64,
         log_index: u64,
     },
     Batch(Batch),
+    Sample(Sample),
+    Audited {
+        events: Vec<loomery_core::envelope::Event>,
+        status: Status,
+    },
     Status(Status),
     Checked {
         elapsed_us: u64,
