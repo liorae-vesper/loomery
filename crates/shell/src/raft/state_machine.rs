@@ -503,6 +503,14 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
                 EntryPayload::Normal(AppData::Command(command)) => {
                     responses.push(apply_command(&mut group, command, log_index));
                 }
+                EntryPayload::Normal(AppData::Batch(commands)) => {
+                    responses.push(Applied::Batch(
+                        commands
+                            .into_iter()
+                            .map(|command| apply_command(&mut group, command, log_index))
+                            .collect(),
+                    ));
+                }
             }
         }
 
@@ -664,6 +672,54 @@ mod tests {
 
         assert!(matches!(outcome, Applied::Replayed { .. }));
         assert_eq!(machine.committed_events(&organization()).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_batch_applies_in_order_with_independent_dedup_and_rejections() {
+        let machine = Arc::new(MemStateMachine::default());
+        let bootstrap = bootstrap_value();
+        let first = bootstrap.command(Step::AssignLeader).unwrap();
+        let mut rejected = first.clone();
+        rejected.command_type = "task.create".to_owned();
+        let second = bootstrap.command(Step::CreateWorkspace).unwrap();
+        let commands = vec![first.clone(), first.clone(), rejected, second.clone()];
+        let entry = Entry {
+            log_id: LogId::new(openraft::CommittedLeaderId::new(1, 1), 42),
+            payload: EntryPayload::Normal(AppData::Batch(commands)),
+        };
+        let results = machine.clone().apply([entry]).await.unwrap();
+        let results = match results.into_iter().next() {
+            Some(Applied::Batch(results)) => results,
+            _ => Vec::new(),
+        };
+        assert_eq!(results.len(), 4);
+        assert_eq!(
+            results[0],
+            Applied::Appended {
+                first_log_index: 42
+            }
+        );
+        assert_eq!(
+            results[1],
+            Applied::Replayed {
+                first_log_index: 42
+            }
+        );
+        assert!(matches!(results[2], Applied::Rejected { .. }));
+        assert_eq!(
+            results[3],
+            Applied::Appended {
+                first_log_index: 42
+            }
+        );
+        let events = machine.committed_events(&organization()).await;
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.causation_key.clone())
+                .collect::<Vec<_>>(),
+            vec![first.causation_key, second.causation_key]
+        );
     }
 
     #[tokio::test]
