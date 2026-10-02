@@ -20,8 +20,8 @@ use openraft::Raft;
 use openraft::error::ClientWriteError;
 use openraft::error::RaftError;
 
-use super::AppData;
 use super::Applied;
+use super::ProposalWriter;
 use super::TypeConfig;
 use super::log_store::MemLogStore;
 use super::network::NoopNetworkFactory;
@@ -38,6 +38,7 @@ use crate::group::ProposeOutcome;
 /// tail's.
 pub struct RaftGroup {
     raft: Raft<TypeConfig>,
+    writer: ProposalWriter,
     pub(super) state_machine: Arc<MemStateMachine>,
 }
 
@@ -46,6 +47,7 @@ impl RaftGroup {
     #[must_use]
     pub fn new(raft: Raft<TypeConfig>, state_machine: Arc<MemStateMachine>) -> Self {
         Self {
+            writer: ProposalWriter::new(raft.clone(), crate::config::ProposalConfig::default()),
             raft,
             state_machine,
         }
@@ -131,7 +133,12 @@ impl RaftGroup {
             machine.clone(),
         )
         .await?;
-        Ok(Self::new(raft, machine))
+        let writer = ProposalWriter::new(raft.clone(), config.proposals);
+        Ok(Self {
+            raft,
+            writer,
+            state_machine: machine,
+        })
     }
 
     /// Consensus handle for transport registration, metrics, initialization,
@@ -141,12 +148,22 @@ impl RaftGroup {
         self.raft.clone()
     }
 
-    /// Stops the group's `OpenRaft` task.
+    /// Clone the group's shared proposal writer for concurrent producers.
+    /// Unlike direct `raft().client_write`, this honors configured batching.
+    #[must_use]
+    pub fn writer(&self) -> ProposalWriter {
+        self.writer.clone()
+    }
+
+    /// Stops the shared proposal writer and the group's `OpenRaft` task.
+    /// Queued/in-flight proposals are interrupted with unknown outcomes;
+    /// shutdown does not promise to drain or commit the proposal queue.
     ///
     /// # Errors
     ///
     /// The runtime's join error, if the Raft task could not be awaited.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
+        self.writer.stop().await;
         self.raft.shutdown().await?;
         Ok(())
     }
@@ -167,29 +184,24 @@ impl GroupOps for RaftGroup {
         &mut self,
         command: Command,
     ) -> impl Future<Output = anyhow::Result<ProposeOutcome>> + Send {
-        let raft = self.raft.clone();
-
-        async move {
-            // `client_write` (not `client_write_ff`): genesis must know ①
-            // committed before proposing ②.
-            let response = raft
-                .client_write(AppData::Command(command))
-                .await
-                .map_err(classify)?;
-
-            Ok(match response.data {
-                Applied::Appended { first_log_index } => {
-                    ProposeOutcome::Appended { first_log_index }
-                }
-                Applied::Replayed { first_log_index } => {
-                    ProposeOutcome::Replayed { first_log_index }
-                }
-                Applied::Rejected { code, message } => {
-                    return Err(anyhow::Error::new(ProposeError::Rejected { code, message }));
-                }
-            })
-        }
+        let writer = self.writer.clone();
+        async move { writer.propose(command).await }
     }
+}
+
+pub(super) fn outcome(applied: Applied) -> anyhow::Result<ProposeOutcome> {
+    Ok(match applied {
+        Applied::Appended { first_log_index } => ProposeOutcome::Appended { first_log_index },
+        Applied::Replayed { first_log_index } => ProposeOutcome::Replayed { first_log_index },
+        Applied::Rejected { code, message } => {
+            return Err(anyhow::Error::new(ProposeError::Rejected { code, message }));
+        }
+        Applied::Batch(_) => {
+            return Err(anyhow::Error::new(ProposeError::Unknown(anyhow::anyhow!(
+                "unexpected nested batch response"
+            ))));
+        }
+    })
 }
 
 /// Why a proposal could not be completed.
@@ -225,7 +237,7 @@ pub enum ProposeError {
 /// Backoff and routing belong *outside* the worker: this only says what the
 /// failure was, and every non-membership variant is retryable in the sense that
 /// re-reading the log first is always safe.
-fn classify(error: RaftError<u64, ClientWriteError<u64, BasicNode>>) -> anyhow::Error {
+pub(super) fn classify(error: RaftError<u64, ClientWriteError<u64, BasicNode>>) -> anyhow::Error {
     match error {
         RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) => {
             anyhow::Error::new(ProposeError::ForwardToLeader {

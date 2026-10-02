@@ -31,6 +31,7 @@ mod disk;
 mod log_store;
 mod network;
 mod port;
+mod proposal;
 mod rocks_log_store;
 mod state_machine;
 mod tls;
@@ -39,40 +40,51 @@ mod tls_tests;
 pub mod transport;
 
 #[cfg(test)]
+mod append_tests;
+#[cfg(test)]
 mod persistent_tests;
+#[cfg(test)]
+mod proposal_tests;
 #[cfg(test)]
 mod suite;
 
 pub use log_store::MemLogStore;
 pub use network::NoopNetworkFactory;
 pub use port::{ProposeError, RaftGroup};
+pub use proposal::ProposalWriter;
 pub use rocks_log_store::RocksLogStore;
 pub use state_machine::MemStateMachine;
 
 /// What clients write to a group.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)] // Preserve the existing Command constructor; its size is unchanged.
 pub enum AppData {
     /// A domain command for the pure core.
     Command(Command),
+    /// Ordered independent commands sharing a durable Raft entry. Every replica
+    /// must support this variant before a leader enables proposal batching.
+    Batch(Vec<Command>),
 }
 
 /// What the state machine answers a writer with.
 ///
-/// The first two variants map one-to-one onto
+/// [`Applied::Appended`] and [`Applied::Replayed`] map one-to-one onto
 /// [`ProposeOutcome`](crate::group::ProposeOutcome). [`Applied::Rejected`] has
 /// no port equivalent — it is the defensive case where a committed command's
 /// payload does not decode (validation is supposed to happen at the gateway,
 /// before the command enters consensus), and the port surfaces it as an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Applied {
-    /// The command produced events; the first landed at this index.
+    /// One outcome per command in a batch, in the original command order.
+    Batch(Vec<Applied>),
+    /// The command produced events in this Raft entry.
     Appended {
-        /// Log index of the first event the command produced.
+        /// Raft index containing the command; batched commands share this index.
         first_log_index: u64,
     },
     /// The causation key was already in the dedup window.
     Replayed {
-        /// Log index of the first event the *original* command produced.
+        /// Raft index containing the original command.
         first_log_index: u64,
     },
     /// The command was committed but the aggregate refused it.

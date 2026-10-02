@@ -488,3 +488,79 @@ async fn invalid_persistence_marker_fails_closed() {
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_releases_database_only_after_state_handles_are_dropped() {
+    use crate::config::StatePersistence;
+    for mode in [StatePersistence::Checkpoint, StatePersistence::Snapshot] {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = config();
+        settings.storage.state_persistence = mode;
+        let mut group =
+            RaftGroup::boot_persistent(1, "tenant".into(), root.path(), settings.clone())
+                .await
+                .unwrap();
+        group
+            .raft()
+            .initialize(BTreeMap::from([(1, BasicNode::default())]))
+            .await
+            .unwrap();
+        group
+            .raft()
+            .wait(Some(Duration::from_secs(5)))
+            .current_leader(1, "leader")
+            .await
+            .unwrap();
+        bootstrap::run(&mut group, &bootstrap_value())
+            .await
+            .unwrap();
+        let index = group.raft().metrics().borrow().last_applied.unwrap().index;
+        let retained_state = group.state_machine.clone();
+        group.shutdown().await.unwrap();
+        drop(group);
+        let error = super::disk::Disk::open(root.path(), &settings.storage)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().to_lowercase().contains("lock"));
+        assert_eq!(
+            retained_state.committed_events(&organization()).await.len(),
+            3
+        );
+        drop(retained_state);
+        let mut recovered = RaftGroup::boot_persistent(1, "tenant".into(), root.path(), settings)
+            .await
+            .unwrap();
+        recovered
+            .raft()
+            .wait(Some(Duration::from_secs(5)))
+            .applied_index_at_least(Some(index), "recovered")
+            .await
+            .unwrap();
+        assert_eq!(
+            recovered
+                .committed_events(&organization())
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        recovered
+            .raft()
+            .wait(Some(Duration::from_secs(5)))
+            .current_leader(1, "recovered leader")
+            .await
+            .unwrap();
+        bootstrap::run(&mut recovered, &bootstrap_value())
+            .await
+            .unwrap();
+        assert_eq!(
+            recovered
+                .committed_events(&organization())
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        recovered.shutdown().await.unwrap();
+    }
+}

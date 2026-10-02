@@ -17,13 +17,14 @@ use loomery_core::id::Id;
 pub enum ProposeOutcome {
     /// The command was appended and applied.
     Appended {
-        /// Log index of the first event the command produced.
+        /// Raft index containing the command; batched commands share this index.
         first_log_index: u64,
     },
     /// The group had already processed this `causation_key`: nothing new was
-    /// appended, and the recorded result is the authority.
+    /// applied, and the recorded result is the authority. A retry can still
+    /// occupy another Raft entry without producing another domain event.
     Replayed {
-        /// Log index of the first event the *original* command produced.
+        /// Raft index containing the original command.
         first_log_index: u64,
     },
 }

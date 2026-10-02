@@ -180,6 +180,10 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
             .await;
         match result {
             Ok(()) => {
+                // The synchronous WAL batch has completed on the blocking pool.
+                // OpenRaft permits this callback before append returns. Its 0.9.25
+                // core awaits the callback too, so merely detaching the sync would
+                // not pipeline appends from this group.
                 callback.log_io_completed(Ok(()));
                 Ok(())
             }

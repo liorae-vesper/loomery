@@ -159,6 +159,45 @@ impl Default for StorageConfig {
         }
     }
 }
+/// Leader proposal queue and command batching. Enable only after every replica
+/// supports batch entries; one command per batch preserves the legacy format.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProposalConfig {
+    /// Maximum commands sharing one Raft entry. One disables batching.
+    pub max_batch_commands: usize,
+    /// Maximum sum of serialized command bytes per batch (excluding envelope).
+    /// With batching enabled, larger individual commands are rejected locally.
+    pub max_batch_bytes: usize,
+    /// Maximum collection delay after the first queued command, in milliseconds.
+    /// Zero collects only commands already queued.
+    pub max_delay_ms: u64,
+    /// Channel capacity; producers wait when full. The worker additionally
+    /// holds a collected/in-flight batch and at most one deferred command.
+    pub queue_capacity: usize,
+}
+impl Default for ProposalConfig {
+    fn default() -> Self {
+        Self {
+            max_batch_commands: 1,
+            max_batch_bytes: 256 * 1024,
+            max_delay_ms: 1,
+            queue_capacity: 1024,
+        }
+    }
+}
+impl ProposalConfig {
+    /// Checks queue and batch limits before spawning a writer.
+    /// # Errors
+    /// Returns an error when any count or byte limit is zero.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.max_batch_commands > 0 && self.max_batch_bytes > 0 && self.queue_capacity > 0,
+            "proposal batch count, bytes and queue capacity must be positive"
+        );
+        Ok(())
+    }
+}
 /// Settings for a group; `OpenRaft`'s configuration exposes election, heartbeat,
 /// replication and snapshot tuning directly.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -170,6 +209,8 @@ pub struct GroupConfig {
     pub transport: TransportConfig,
     /// Persistent storage settings.
     pub storage: StorageConfig,
+    /// Opt-in batching of concurrent commands before proposing one Raft entry.
+    pub proposals: ProposalConfig,
 }
 impl GroupConfig {
     /// Checks limits before opening a database or starting a node.
@@ -178,6 +219,12 @@ impl GroupConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         self.raft.clone().validate()?;
         self.transport.validate()?;
+        self.proposals.validate()?;
+        anyhow::ensure!(
+            self.proposals.max_batch_commands == 1
+                || self.proposals.max_batch_bytes <= self.transport.max_message_bytes / 2,
+            "proposal byte limit must leave room for transport encoding"
+        );
         anyhow::ensure!(
             self.storage.write_buffer_bytes > 0
                 && self.storage.block_cache_bytes > 0
