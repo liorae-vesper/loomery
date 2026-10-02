@@ -8,6 +8,7 @@ Start with [design.md](design.md) for the architecture and decisions, or
 | Document | Purpose |
 |---|---|
 | [Design](design.md) | Architecture, decisions register and phased roadmap; distinguishes implemented and planned features |
+| [Implementation guide](implementation.md) | Build pipeline, Raft startup, storage/network wiring and tenant group lifecycle |
 | [Shell](shell.md) | Current group API, genesis worker, transport and storage behavior |
 | [Raft configuration](raft-configuration.md) | Persistent replica startup, tuning, TLS/mTLS and immutable persistence modes |
 | [Development guardrails](guardrails.md) | Toolchain, verification tasks, hooks and CI |
@@ -27,11 +28,15 @@ networked deployment.
 
 - [Controlled consensus benchmark](benchmarks/README.md) — workload, phases, configuration and measurement limits.
 - [Checkpoint comparison](benchmarks/checkpoint-spike.md) — paired persistence experiment and measured results.
+- [Command batching](benchmarks/batching.md) — bounded proposal batches, semantics and paired throughput results.
+- [Batch-size matrix](benchmarks/batch-matrix.md) — configurable count/concurrency sweeps, randomized repeats and observed batch distributions.
+- [Failure injection](benchmarks/failure-injection.md) — crashes during writes, quorum loss, lost replies and flush-callback failures.
 - [Example workload](benchmarks/consensus.json) — configuration for the release harness.
 
 The paired runner is executable tooling in
 [../scripts/bench-persistence.py](../scripts/bench-persistence.py), invoked by
-`mise run bench-persistence`.
+`mise run bench-persistence`. Command batching has a separate
+[runner](../scripts/bench-batching.py), invoked by `mise run bench-batching`.
 
 ## Research
 
@@ -45,6 +50,7 @@ configuration reference describe what was selected and implemented.
 | [Storage engine alternatives](research/storage-engine-alternatives.md) | Log storage, projections, backups and vector storage |
 | [Indexed segment format](research/indexed-segment-file-format.md) | Alternative log format; not the implemented RocksDB backend |
 | [OpenRaft storage](research/openraft-storage.md) | Storage contracts and version-specific integration notes |
+| [Consensus storage performance](research/consensus-storage-performance.md) | Serialized syncs, batching, blocking-pool timing and database closure investigation |
 | [Checkpoint policy](research/checkpoint-policy.md) | Scheduling versus durability and the two recovery modes |
 
 Keep current behavior in reference docs, implementation walkthroughs in

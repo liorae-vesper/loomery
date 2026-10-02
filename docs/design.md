@@ -324,6 +324,20 @@ Server configuration belongs to the shared listener, and client configuration
 to each group's peer connections. Rotation requires recreating the listener and
 channels; automatic certificate reload is not implemented.
 
+**Leader command batching:** opt-in `GroupConfig.proposals` limits a shared
+proposal queue by count, command bytes, collection delay and channel capacity.
+Concurrent producers clone `RaftGroup::writer()`; `GroupOps::propose` uses the
+same writer. Several commands can share one Raft entry and index, with ordered
+application and individual dedup/rejection responses after quorum and apply.
+Successful siblings are not rolled back when another command is rejected.
+This preserves synchronized log writes and the configured apply durability;
+it does not change OpenRaft 0.9.25's serialized append/callback scheduling.
+Batching defaults to disabled. Upgrade every replica before enabling the new
+batch entry format; old-binary downgrade after batched logs is unsupported.
+Snapshot/retention settings count entries, so their command coverage increases
+with batching. See [configuration](raft-configuration.md#opt-in-command-batching)
+and [paired measurements](benchmarks/batching.md).
+
 Findings:
 - OpenRaft 0.9 splits storage into **`RaftLogStorage`** (log) +
   **`RaftStateMachine`** (apply/snapshot) with an `Adapter` bridging the old
@@ -603,4 +617,4 @@ integration layers:
 
 ---
 
-*Last updated: 2026-09-30 — tonic/RocksDB slice, checkpoint policy and opt-in gRPC TLS.*
+*Last updated: 2026-10-01 — opt-in command batching and controlled durability/performance validation.*

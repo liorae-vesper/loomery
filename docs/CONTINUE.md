@@ -24,6 +24,22 @@ workspace with a deterministic core and an imperative Tokio/OpenRaft shell.
 - Controlled multi-process benchmarks, leader failover and database restart
   checks. The paired spike measured approximately 174 versus 550 writes/s on
   one host; this is a workload-specific result, not deployment capacity.
+- Opt-in shared proposal batching, bounded by command count, bytes, collection
+  delay and channel capacity. Commands share one Raft index, apply in order and
+  retain individual responses/dedup/rejections. Defaults preserve single-command
+  entries; every replica must support batch entries before enabling the option.
+  New paired three-trial medians were 172→431 checkpoint and 537→1781 snapshot
+  writes/s at concurrency/batch size 8. See [batching results](benchmarks/batching.md).
+- Configurable batch/concurrency matrix with seeded, interleaved repeats and
+  observed batch-size histograms. At fixed concurrency 128, limits 1/8/16/32/64/128
+  reached their targets; count 128 measured 1612 checkpoint and 3842 snapshot
+  writes/s. Small checkpoint batches regressed relative to the same-load
+  baseline. All 36 trials passed crash/recovery checks. See [matrix results](benchmarks/batch-matrix.md).
+- Controlled failures during write phases: leader/follower SIGKILL, loss of both
+  followers and discarded replies, with retry/index/dedup and full event
+  convergence checks after recovery. Append tests inject a flush callback error
+  and require Raft to stop without acknowledging or applying the batch.
+  See [failure injection](benchmarks/failure-injection.md).
 
 See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
 [checkpoint policy](research/checkpoint-policy.md) and

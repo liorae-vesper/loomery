@@ -2,7 +2,9 @@
 
 `crates/shell` owns the imperative boundary around the deterministic core:
 consensus, storage, peer networking and the genesis worker. It remains a library;
-there is no deployed gateway or control-plane process yet. For a walkthrough,
+there is no deployed gateway or control-plane process yet.
+[implementation.md](implementation.md) traces build, startup and storage/network
+wiring with a complete example. For a walkthrough,
 read the [group port](tutorials/shell-group.md),
 [genesis worker](tutorials/genesis-worker.md) and
 [in-memory OpenRaft baseline](tutorials/openraft-spike.md) tutorials.
@@ -13,9 +15,10 @@ read the [group port](tutorials/shell-group.md),
 |---|---|
 | `group.rs` | `GroupOps` and `ProposeOutcome`; callers do not depend on Raft |
 | `bootstrap.rs` | `bootstrap::run`, genesis progress and error handling |
-| `config.rs` | `GroupConfig`, transport/storage tuning, TLS and persistence mode |
+| `config.rs` | `GroupConfig`, transport/storage/proposal tuning, TLS and persistence mode |
 | `raft/mod.rs` | `AppData`, `Applied` and `TypeConfig` |
 | `raft/port.rs` | `RaftGroup`, proposal error mapping, boot and shutdown |
+| `raft/proposal.rs` | Shared bounded proposal queue and opt-in command batching |
 | `raft/log_store.rs` | In-memory `MemLogStore` baseline |
 | `raft/rocks_log_store.rs` | Durable log, vote, committed index, truncation and purge |
 | `raft/disk.rs` | Synchronized RocksDB operations on Tokio's blocking pool |
@@ -24,6 +27,7 @@ read the [group port](tutorials/shell-group.md),
 | `raft/transport.rs` | Shared tonic listener and per-group peer clients |
 | `raft/tls.rs` | Certificate/identity validation and tonic TLS configuration |
 | `raft/suite.rs`, `raft/persistent_tests.rs`, `raft/tls_tests.rs` | Storage, recovery, networking and TLS tests |
+| `raft/append_tests.rs`, `raft/proposal_tests.rs` | Flush callbacks, batching, limits and batched recovery |
 | `test_support.rs` | Test-only fake group and fixtures |
 
 Dependencies point from shell to genesis/core; the core never imports the shell.
@@ -34,6 +38,14 @@ and managing their lifecycle remain control-plane work.
 ## Group contract
 
 `GroupOps` exposes `committed_events(organization_id)` and `propose(command)`.
+
+Concurrent producers can clone `RaftGroup::writer()` and call its `propose`
+method. Opt-in `GroupConfig.proposals` settings collect ordered commands into
+one durable Raft entry while preserving individual outcomes. Batching defaults
+to disabled; all replicas must support batch entries before enabling it.
+Commands in a batch share a Raft read-barrier index. See
+[configuration](raft-configuration.md#opt-in-command-batching) and
+[benchmarks](benchmarks/batching.md).
 
 - `committed_events` reads locally applied state without a consensus round trip.
   It does not establish a linearizable read or enforce a session minimum index.
