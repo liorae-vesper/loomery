@@ -75,6 +75,70 @@ resolve the server shutdown future and await the server before reopening paths.
 
 ## Tuning and storage behavior
 
+### Opt-in command batching
+
+Set `group.proposals` in benchmark configuration, or `proposals` directly in
+the embedding application's `GroupConfig`:
+
+```json
+{
+  "proposals": {
+    "max_batch_commands": 8,
+    "max_batch_bytes": 262144,
+    "max_delay_ms": 1,
+    "queue_capacity": 1024
+  }
+}
+```
+
+The default `max_batch_commands` is **1**, which bypasses the queue and retains
+the existing single-command log format. Larger values enable a shared writer
+for each group. Call `group.writer().propose(command).await` from concurrent
+producers; cloned writers share the same queue. `GroupOps::propose` uses that
+writer too. A sequential bootstrap still waits for each result and therefore
+does not batch its dependent steps. Direct `group.raft().client_write(...)`
+bypasses the proposal queue.
+
+The writer collects commands in enqueue order, limited by count and the sum
+of serialized command bytes. Collection waits at most `max_delay_ms` after
+starting a batch; zero drains only commands already queued. This is not an
+end-to-end deadline: queue wait and quorum/application time are additional.
+The bounded channel holds `queue_capacity` commands; a collected/in-flight
+batch and at most one deferred command can also be held by the worker. Producers
+wait for channel capacity. Individual commands larger than `max_batch_bytes`
+are rejected locally when batching is enabled. Validation reserves at least
+half the transport message limit for encoding overhead; replication payload
+and snapshot limits still need appropriate sizing.
+
+Multiple commands become one `AppData::Batch` Raft entry, one synchronized
+append and one committed-pointer advance for that entry. They apply in order
+under the state-machine lock, retaining independent dedup/rejection outcomes.
+Rejection of one command does not roll back successful siblings. Every caller
+waits for quorum commit and completed application; checkpoint mode also waits
+for its durable checkpoint. This is command batching, not an atomic domain
+transaction or an early acknowledgment. There is no asynchronous WAL worker.
+
+All commands in a batch share a Raft log index, including the indices returned
+in `ProposeOutcome`; an index is a read barrier, not a unique command identifier.
+Use command/event IDs for identity. Snapshot thresholds and retention count
+**Raft entries**, so their command coverage increases with batch size.
+Cancelling a proposal after enqueue can still leave it committed. Shutdown
+interrupts queued/in-flight proposals with unknown outcomes and stops the
+writer before stopping Raft; it does not promise to drain the queue.
+
+**Upgrade every replica before enabling batching.** Older binaries cannot
+decode `AppData::Batch`; mixed-version replication and downgrade after batched
+logs exist are unsupported. Current binaries read both entry formats and can
+stop producing batches by setting the count back to 1; existing batches still
+replay normally. The immutable checkpoint/snapshot recovery-mode protection
+remains enforced independently of these tuning settings.
+
+See [the batching benchmark](benchmarks/batching.md) for measurements and
+`mise run bench-batching -- --output benchmark-results/batching-comparison`
+for a controlled comparison.
+
+### Transport and RocksDB
+
 Transport requests have the lesser of OpenRaft's RPC TTL and
 `request_timeout_ms`; channels reconnect automatically. Message limits apply
 to both clients and servers. Snapshot chunks use JSON byte arrays, so leave

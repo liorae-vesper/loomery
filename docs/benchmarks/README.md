@@ -4,7 +4,8 @@ The `consensus_bench` example runs Loomery's production tonic transport,
 RocksDB storage and pure-core apply path. Each replica is a separate child
 process with its own Tokio runtime, real loopback TCP listener, database
 and WAL. The coordinator submits valid `workspace.create` commands through
-the leader's local `Raft::client_write`. Peer replication uses tonic gRPC.
+the leader's shared `ProposalWriter`, which calls `Raft::client_write` directly
+when batching is disabled and groups commands when enabled. Peer replication uses tonic gRPC.
 There is no HTTP gateway or client-facing gRPC write endpoint in this benchmark.
 
 Run from the repository root with the pinned toolchain:
@@ -146,3 +147,30 @@ The harness also accepts `snapshot_before_restart` (default true) and
 `snapshot_already_current` are null in report schema 2. `crash_restart` kills the
 owned replica processes rather than asking them to shut down; this tests process
 crashes, not host power loss. Automatic snapshots may still occur.
+
+## Comparing command batching
+
+Run `mise run bench-batching -- --output benchmark-results/batching-comparison`.
+The [paired runner](../../scripts/bench-batching.py) compares count 1 against
+count 8 in each persistence mode, with the same workload, synchronized WAL,
+quorum and after-apply replies. It verifies failover and SIGKILL/restart recovery
+without forcing a final snapshot. Pass `--batch-commands N` to change the count;
+request concurrency limits the available batch size.
+
+Report schema 3 adds `distinct_log_indices` and `commands_per_log_index` to
+write summaries. These are observed indices for successful fresh workspace
+commands, not configured targets or counts of sync syscalls. Queue and collection
+waiting are included in individual latency samples. See [batching.md](batching.md).
+
+For a configurable sweep of 8/16/32/64/128-command limits, use
+`mise run bench-batch-matrix -- --output benchmark-results/batch-matrix`.
+The [matrix guide](batch-matrix.md) explains fixed-concurrency controls,
+randomized repeat order, CSV/JSON tables and observed batch-size distributions.
+
+## Failure injection during writes
+
+Use `mise run test-consensus-failures` to inject leader/follower crashes, quorum
+loss and deliberately lost replies during write phases, then verify retries and
+whole-cluster SIGKILL recovery. The [fault experiment guide](failure-injection.md)
+documents configurable batch sizes, exact event checks, storage callback failure
+tests and the limits of process-crash testing.
