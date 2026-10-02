@@ -2,3 +2,4 @@ target/
 .idea/
 lcov.info
 benchmark-results/
+__pycache__/

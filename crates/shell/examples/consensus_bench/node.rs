@@ -13,8 +13,8 @@ use loomery_core::{
     workspace::{CREATE, CreateWorkspace},
 };
 use loomery_shell::{
-    group::GroupOps,
-    raft::{AppData, Applied, RaftGroup, transport::TonicTransport},
+    group::{GroupOps, ProposeOutcome},
+    raft::{ProposalWriter, RaftGroup, transport::TonicTransport},
 };
 use openraft::{BasicNode, Raft};
 use std::{
@@ -127,6 +127,7 @@ pub async fn run(spec: NodeSpec) -> anyhow::Result<()> {
         pid: std::process::id(),
         address,
         boot_us: micros(started.elapsed()),
+        config: Box::new(spec.config.clone()),
     }))
     .await?;
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -188,9 +189,28 @@ async fn handle(group: &RaftGroup, request: Request, config: &Config) -> anyhow:
                     .ok_or_else(|| anyhow::anyhow!("membership not applied"))?,
             })
         }
-        Request::Batch { phase, count } => {
-            Ok(Reply::Batch(batch(raft, &phase, count, config).await?))
+        Request::Batch { phase, count } => Ok(Reply::Batch(
+            batch(group.writer(), &phase, count, config, false, false).await?,
+        )),
+        Request::StreamBatch { phase, count } => Ok(Reply::Batch(
+            batch(group.writer(), &phase, count, config, true, false).await?,
+        )),
+        Request::RetryBatch {
+            phase,
+            count,
+            timeout_ms,
+        } => {
+            anyhow::ensure!(
+                timeout_ms > 0 && timeout_ms <= config.phase_timeout_ms,
+                "retry timeout must fit the control phase deadline"
+            );
+            let mut config = config.clone();
+            config.operation_timeout_ms = timeout_ms;
+            Ok(Reply::Batch(
+                batch(group.writer(), &phase, count, &config, false, true).await?,
+            ))
         }
+        Request::Audit { index, phases } => audit(group, index, phases, config).await,
         Request::Status => Ok(Reply::Status(status(&raft))),
         Request::Check { index, events } => {
             let started = Instant::now();
@@ -226,22 +246,59 @@ async fn handle(group: &RaftGroup, request: Request, config: &Config) -> anyhow:
         Request::Stop => Ok(Reply::Stopped),
     }
 }
+async fn audit(
+    group: &RaftGroup,
+    index: u64,
+    phases: BTreeMap<String, usize>,
+    config: &Config,
+) -> anyhow::Result<Reply> {
+    let raft = group.raft();
+    raft.wait(Some(Duration::from_millis(config.phase_timeout_ms)))
+        .applied_index_at_least(Some(index), "fault recovery barrier")
+        .await?;
+    let mut expected = Vec::new();
+    for (phase, count) in phases {
+        for sequence in 0..count {
+            expected.push(
+                command(&phase, sequence, config.name_bytes, config.payload_pattern)?.event_id(0),
+            );
+        }
+    }
+    expected.sort();
+    let events = group.committed_events(&organization()).await?;
+    let mut actual: Vec<_> = events.iter().map(|event| event.id.clone()).collect();
+    actual.sort();
+    anyhow::ensure!(
+        actual == expected,
+        "missing, duplicate or unexpected event identities"
+    );
+    Ok(Reply::Audited {
+        events,
+        status: status(&raft),
+    })
+}
 async fn sample(
-    raft: Consensus,
+    writer: ProposalWriter,
     command: Command,
     sequence: usize,
     timeout: Duration,
     command_json_bytes: usize,
+    allow_replay: bool,
 ) -> Sample {
     let started = Instant::now();
-    let result = tokio::time::timeout(timeout, raft.client_write(AppData::Command(command))).await;
-    let (index, error) = match result {
-        Ok(Ok(response)) => match response.data {
-            Applied::Appended { first_log_index } => (Some(first_log_index), None),
-            other => (None, Some(format!("unexpected outcome: {other:?}"))),
+    let result = tokio::time::timeout(timeout, writer.propose(command)).await;
+    let (index, error, replayed) = match result {
+        Ok(Ok(response)) => match response {
+            ProposeOutcome::Appended { first_log_index } => (Some(first_log_index), None, false),
+            ProposeOutcome::Replayed { first_log_index } if allow_replay => {
+                (Some(first_log_index), None, true)
+            }
+            other @ ProposeOutcome::Replayed { .. } => {
+                (None, Some(format!("unexpected outcome: {other:?}")), true)
+            }
         },
-        Ok(Err(error)) => (None, Some(error.to_string())),
-        Err(error) => (None, Some(format!("unknown outcome: {error}"))),
+        Ok(Err(error)) => (None, Some(error.to_string()), false),
+        Err(error) => (None, Some(format!("unknown outcome: {error}")), false),
     };
     Sample {
         sequence,
@@ -249,13 +306,16 @@ async fn sample(
         command_json_bytes,
         log_index: index,
         error,
+        replayed,
     }
 }
 async fn batch(
-    raft: Consensus,
+    writer: ProposalWriter,
     phase: &str,
     count: usize,
     config: &Config,
+    streaming: bool,
+    allow_replay: bool,
 ) -> anyhow::Result<Batch> {
     // Prepare outside the measured interval. Keep exactly concurrency requests in flight.
     let mut commands = (0..count)
@@ -274,12 +334,25 @@ async fn batch(
             let Some((sequence, bytes, command)) = commands.next() else {
                 break;
             };
-            pending.spawn(sample(raft.clone(), command, sequence, timeout, bytes));
+            pending.spawn(sample(
+                writer.clone(),
+                command,
+                sequence,
+                timeout,
+                bytes,
+                allow_replay,
+            ));
         }
         let Some(result) = pending.join_next().await else {
             break;
         };
-        samples.push(result?);
+        let sample = result?;
+        if streaming {
+            // Fault experiments journal replies as they arrive, before killing
+            // an owned replica. Normal timing runs never use this pipe traffic.
+            reply(Ok(Reply::Sample(sample.clone()))).await?;
+        }
+        samples.push(sample);
     }
     let elapsed_us = micros(started.elapsed());
     samples.sort_by_key(|s| s.sequence);

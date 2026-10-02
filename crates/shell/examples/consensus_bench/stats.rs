@@ -2,11 +2,14 @@
 //! Exact nearest-rank percentiles, without discarding failures or raw samples.
 use super::protocol::Batch;
 use serde::Serialize;
+use std::collections::BTreeSet;
 #[derive(Debug, Serialize)]
 pub struct Summary {
     pub successes: usize,
     pub failures: usize,
     pub throughput_per_second: f64,
+    pub distinct_log_indices: usize,
+    pub commands_per_log_index: Option<f64>,
     pub min_us: Option<u64>,
     pub p50_us: Option<u64>,
     pub p95_us: Option<u64>,
@@ -26,9 +29,21 @@ pub fn summarize(batch: &Batch) -> Summary {
         .map(|s| s.latency_us)
         .collect();
     values.sort_unstable();
+    let indices: BTreeSet<_> = batch
+        .samples
+        .iter()
+        .filter(|s| s.error.is_none())
+        .filter_map(|s| s.log_index)
+        .collect();
     Summary {
         successes: values.len(),
         failures: batch.samples.len().saturating_sub(values.len()),
+        distinct_log_indices: indices.len(),
+        commands_per_log_index: if indices.is_empty() {
+            None
+        } else {
+            Some(values.len() as f64 / indices.len() as f64)
+        },
         throughput_per_second: if batch.elapsed_us == 0 {
             0.0
         } else {
@@ -68,6 +83,7 @@ mod failure_tests {
                     command_json_bytes: 100,
                     log_index: Some(1),
                     error: None,
+                    replayed: false,
                 },
                 Sample {
                     sequence: 1,
@@ -75,6 +91,7 @@ mod failure_tests {
                     command_json_bytes: 100,
                     log_index: None,
                     error: Some("timeout".into()),
+                    replayed: false,
                 },
             ],
         };
