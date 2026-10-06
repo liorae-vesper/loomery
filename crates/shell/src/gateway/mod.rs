@@ -17,6 +17,8 @@
 pub mod command;
 pub mod http;
 pub mod identity;
+#[cfg(feature = "test-services")]
+pub mod keycloak;
 pub mod precompute;
 pub mod ryw;
 
@@ -27,10 +29,13 @@ pub use command::CommandRequest;
 pub use command::GroupRegistry;
 pub use http::router;
 pub use identity::AuthError;
+pub use identity::AuthFuture;
 pub use identity::Authenticator;
 pub use identity::Identity;
 pub use identity::StaticAuthenticator;
 pub use identity::is_admin_only;
+#[cfg(feature = "test-services")]
+pub use keycloak::KeycloakAuthenticator;
 pub use precompute::PASSWORD_FIELD;
 pub use precompute::PASSWORD_HASH_FIELD;
 pub use precompute::PreComputeError;

@@ -17,6 +17,11 @@
 //! message rather than skipping it.
 
 use std::sync::Arc;
+
+#[cfg(feature = "test-services")]
+pub mod nats;
+#[cfg(feature = "test-services")]
+pub use nats::NatsPublisher;
 use std::sync::Mutex;
 
 use crate::raft::AppliedEvent;

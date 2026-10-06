@@ -25,6 +25,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 prost = "0.14"
 rocksdb = { version = "0.24", default-features = false, features = ["bindgen-runtime", "lz4"] }
 tokio-stream = { version = "0.1", features = ["net"] }
+async-nats = { version = "0.50.0", optional = true, default-features = false, features = ["jetstream", "nkeys"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "form"], optional = true }
 
 [build-dependencies]
 tonic-prost-build = "0.14"
@@ -37,3 +39,9 @@ rcgen = "0.14"
 
 [lints]
 workspace = true
+
+[features]
+# Real Keycloak and NATS JetStream adapters for the integration suite
+# (`mise run test-services`). The default build and suite never enable them.
+default = []
+test-services = ["dep:async-nats", "dep:reqwest"]
