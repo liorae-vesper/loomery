@@ -73,6 +73,10 @@ run = "python3 scripts/bench-batching.py"
 description = "Sweeps command batch sizes and concurrency with randomized durable Raft trials"
 run = "python3 scripts/bench-batch-matrix.py"
 
+[tasks.bench-services-stress]
+description = "Stress-tests the Keycloak and NATS adapters (auth, outbox, end-to-end)"
+run = "python3 scripts/bench-services-stress.py"
+
 [tasks.test-consensus-failures]
 description = "Injects replica crashes, quorum loss and lost replies during durable writes"
 run = "python3 scripts/test-consensus-failures.py"

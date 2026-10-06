@@ -59,6 +59,20 @@ impl NatsPublisher {
         let mut stream = self.context.get_stream(STREAM).await?;
         Ok(stream.info().await?.state.messages)
     }
+
+    /// The broker's duplicate window for [`STREAM`].
+    ///
+    /// The outbox relies on it (D11): a re-published message is only absorbed
+    /// while it is inside this window. The stress harness reads it to check that
+    /// its crash replay really did fall inside it.
+    ///
+    /// # Errors
+    ///
+    /// The stream could not be read.
+    pub async fn duplicate_window(&self) -> anyhow::Result<std::time::Duration> {
+        let mut stream = self.context.get_stream(STREAM).await?;
+        Ok(stream.info().await?.config.duplicate_window)
+    }
 }
 
 impl Publisher for NatsPublisher {
