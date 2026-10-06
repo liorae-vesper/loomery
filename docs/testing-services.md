@@ -66,6 +66,7 @@ stream on connect:
 | `LOOMERY_TEST_KEYCLOAK_URL` | `http://127.0.0.1:8080` | Keycloak base URL |
 | `LOOMERY_TEST_KEYCLOAK_REALM` | `loomery` | realm name |
 | `LOOMERY_TEST_KEYCLOAK_CLIENT` | `loomery-gateway` | client id for the password grant |
+| `LOOMERY_TEST_HTTPS_PROBE` | unset | when set, the suite performs one real HTTPS request to this URL (TLS smoke test) |
 | `NATS_PORT`, `NATS_MONITOR_PORT`, `KEYCLOAK_PORT` | `4222`, `8222`, `8080` | compose host ports |
 
 The integration tests fail loudly if a required variable is missing rather than
@@ -79,6 +80,14 @@ skipping quietly, so a green run always means the services actually answered.
   one with a different id grows the stream by exactly **two** messages.
 - **Keycloak identity** — `ada`'s token authenticates as a non-admin, `admin`'s
   token authenticates as an admin, and a garbage or missing token is rejected.
+- **TLS (opt-in)** — with `LOOMERY_TEST_HTTPS_PROBE` set, one real HTTPS request
+  proves the `rustls-no-provider` stack and the installed `ring` provider complete
+  a handshake:
+
+  ```sh
+  LOOMERY_TEST_HTTPS_PROBE=https://example.com \
+    cargo test -p loomery-shell --features test-services --test test_services https_probe
+  ```
 
 ```sh
 LOOMERY_TEST_NATS_URL=nats://127.0.0.1:4222 \
@@ -96,16 +105,20 @@ integration tests, and always tears the stack down.
 
 - The adapters are behind `test-services`; the default `mise run verify/test`
   and the coverage gate do not compile or score them.
-- **The OIDC adapter speaks plain HTTP.** `reqwest` is built without a TLS
-  feature because every TLS path in it pulls `rustls-platform-verifier` →
-  `webpki-root-certs`, whose `CDLA-Permissive-2.0` license is not on the
-  `deny.toml` allowlist. The test realm is HTTP, which is what the stub needs; a
-  deployment that fronts Keycloak with HTTPS must either allowlist that license
-  and enable `reqwest`'s `rustls-no-provider` (the authenticator already installs
-  the workspace's `ring` provider) or supply a native-roots client.
+- **TLS is enabled.** `reqwest` uses `rustls-no-provider` and the workspace's
+  `ring` provider. `rustls-no-provider` means a process must install a provider
+  **before** building a `reqwest::Client`; `KeycloakAuthenticator` does that
+  itself, and [`loomery_shell::gateway::install_tls_provider`] is public for any
+  other TLS user. Verify it end to end with the HTTPS probe above.
+- **One allowlist addition.** That TLS path pulls the root-certificate crates
+  `webpki-root-certs` / `webpki-roots`, licensed `CDLA-Permissive-2.0`, so it is
+  now on the `deny.toml` allowlist. It is a permissive *data* license: use,
+  modify and share, with the sole condition (§2.1) that the agreement text
+  accompanies redistributed data — keep their LICENSE files in third-party
+  notices. It is not OSI-approved (it is not a software license), but Fedora's
+  license data accepted it in 2025-05.
 - **`async-nats` is trimmed** to `default-features = false, features =
-  ["jetstream", "nkeys"]`, so the WebSocket transport (and the root certificates
-  it bundles) is not pulled in; the outbox needs only the core client and
-  JetStream.
+  ["jetstream", "nkeys"]`, so the WebSocket transport is not pulled in; the
+  outbox needs only the core client and JetStream.
 - The Keycloak realm is a **development** realm (`start-dev`, no TLS, fixed
   passwords). A deployment uses its own realm and the same authenticator.

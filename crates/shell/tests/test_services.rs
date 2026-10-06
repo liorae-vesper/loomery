@@ -111,3 +111,32 @@ async fn keycloak_tokens_become_identities_with_the_admin_claim() {
         Err(AuthError::Unknown)
     );
 }
+
+/// A real TLS handshake through the `test-services` stack.
+///
+/// Opt-in (`LOOMERY_TEST_HTTPS_PROBE`), so CI does not depend on a public host:
+///
+/// ```sh
+/// LOOMERY_TEST_HTTPS_PROBE=https://example.com \
+///   cargo test -p loomery-shell --features test-services --test test_services https_probe
+/// ```
+#[tokio::test]
+async fn https_probe_completes_a_tls_handshake() {
+    let Ok(url) = env::var("LOOMERY_TEST_HTTPS_PROBE") else {
+        return; // opted out
+    };
+
+    // `rustls-no-provider` requires a provider before a Client is built.
+    loomery_shell::gateway::install_tls_provider();
+
+    let response = reqwest::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .expect("the TLS request should complete");
+    assert!(
+        response.status().is_success() || response.status().is_redirection(),
+        "unexpected status {}",
+        response.status()
+    );
+}

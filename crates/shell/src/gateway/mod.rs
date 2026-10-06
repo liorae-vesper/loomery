@@ -36,6 +36,8 @@ pub use identity::StaticAuthenticator;
 pub use identity::is_admin_only;
 #[cfg(feature = "test-services")]
 pub use keycloak::KeycloakAuthenticator;
+#[cfg(feature = "test-services")]
+pub use keycloak::install_tls_provider;
 pub use precompute::PASSWORD_FIELD;
 pub use precompute::PASSWORD_HASH_FIELD;
 pub use precompute::PreComputeError;

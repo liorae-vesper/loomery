@@ -29,7 +29,7 @@ impl KeycloakAuthenticator {
     /// Builds an authenticator for `{base_url}/realms/{realm}`.
     #[must_use]
     pub fn new(base_url: &str, realm: &str) -> Self {
-        install_crypto_provider();
+        install_tls_provider();
 
         Self {
             http: reqwest::Client::new(),
@@ -64,7 +64,7 @@ impl KeycloakAuthenticator {
         username: &str,
         password: &str,
     ) -> anyhow::Result<String> {
-        install_crypto_provider();
+        install_tls_provider();
 
         let response = reqwest::Client::new()
             .post(format!(
@@ -139,8 +139,11 @@ impl Authenticator for KeycloakAuthenticator {
 
 /// Installs the workspace's rustls (`ring`) provider once per process.
 ///
-/// `reqwest` is built with `rustls-no-provider` so `aws-lc-rs` is never dragged
-/// into the dependency tree; the provider still has to be present for TLS.
-fn install_crypto_provider() {
+/// `reqwest` is built with `rustls-no-provider`, so a process must install a
+/// provider **before** building a `Client` (otherwise it panics). The
+/// authenticator does this itself; the function is public so a host — or the
+/// integration suite's HTTPS probe — can ensure it before using `reqwest`
+/// directly. Installing twice is a no-op.
+pub fn install_tls_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
