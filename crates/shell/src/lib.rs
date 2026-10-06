@@ -23,6 +23,7 @@
 pub mod bootstrap;
 pub mod config;
 pub mod control;
+pub mod gateway;
 pub mod group;
 pub mod raft;
 
