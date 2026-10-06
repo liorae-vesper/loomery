@@ -570,7 +570,7 @@ recorded in [`domain-model.md`](domain-model.md).
 
 ### Shell (Phases 1–7)
 - [ ] Phase 1 control plane *(next — orchestration, router and RYW)*
-  - [ ] Control group on OpenRaft (`RaftLogStorage`/`RaftStateMachine` +
+  - [x] Control group on OpenRaft (`RaftLogStorage`/`RaftStateMachine` +
         `RaftNetwork` over tonic): `shell::control`
     - [x] levels 1–2 of the spike: in-memory `RaftLogStorage` +
           `RaftStateMachine` (`crates/shell/src/raft`) and the `RaftGroup`
@@ -578,14 +578,22 @@ recorded in [`domain-model.md`](domain-model.md).
           genesis end-to-end in process
     - [x] tonic `RaftNetwork` + multi-node membership through `RaftGroup::raft`,
           RocksDB durability and configurable transport/storage/consensus tuning
-  - [ ] Router read model + RYW `X-Min-Index` hold
+    - [x] tenant placement: `loomery_core::tenant` records dispatched by the
+          group state machine; `RaftGroup::boot_persistent` boots the control
+          group like any other
+  - [x] Router read model (`shell::control::Router`): the control group's tenant
+        records projected into `organization_id → group`
+  - [x] Tenant lifecycle + reconciliation: `shell::control::{provision, resume,
+        incomplete}` — register → genesis → activate → route, idempotent by
+        derived keys, with the route fenced behind genesis
+  - [ ] RYW `X-Min-Index` hold (gateway)
   - [x] Genesis script (`crates/genesis`): the deterministic ①②③ plan —
         derived keys/ids, commands, and progress read back from the committed
         events by causation key
   - [x] Genesis bootstrap worker: the async loop around the script
         (`crates/shell/src/bootstrap.rs`) over `GroupOps`, with crash-resume
-        and replay tests; startup reconciliation/retry sweeping still needs
-        the control plane to call it
+        and replay tests; the control-plane controller and `resume` call it,
+        and `incomplete()` is the reconciliation work list
   - [ ] Outbox slice: `shell::outbox` publisher + `async-nats` transport (D8/D11)
   - [ ] Saga-runner seed + `InvitationSaga` (acceptance → assignment + membership)
   - [ ] axum gateway: command plane, causation minting, edge pre-compute

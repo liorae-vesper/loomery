@@ -48,8 +48,10 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
 ## Next work
 
 1. Finish Phase 0 aggregates and their transition-matrix/replay property tests.
-2. Build control-plane tenant lifecycle and router projections. Wire startup
-   reconciliation and retry sweeping into the existing bootstrap worker.
+2. ~~Build control-plane tenant lifecycle and router projections.~~ **Done:**
+   `shell::control` holds the tenant router projection, `provision`
+   (register → genesis → activate → route) and `incomplete`/`resume` for the
+   startup and retry sweeps. The periodic sweep loop itself is host wiring.
 3. Implement the gateway and read-your-writes `X-Min-Index` wait/leader fallback.
    Local reads exist; gateway session-token enforcement is still planned.
 4. Add the committed-log outbox, NATS delivery, invitation choreography and saga
