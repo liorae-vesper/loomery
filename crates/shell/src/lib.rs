@@ -27,6 +27,7 @@ pub mod gateway;
 pub mod group;
 pub mod outbox;
 pub mod raft;
+pub mod saga;
 
 #[cfg(test)]
 pub(crate) mod test_support;
