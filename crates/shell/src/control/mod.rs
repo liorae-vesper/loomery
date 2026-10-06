@@ -5,8 +5,12 @@
 //! The control group holds the tenant-placement records
 //! ([`loomery_core::tenant`]).
 
+mod controller;
 mod router;
 
+pub use controller::incomplete;
+pub use controller::provision;
+pub use controller::resume;
 pub use router::Route;
 pub use router::Router;
 
