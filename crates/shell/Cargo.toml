@@ -10,6 +10,7 @@ description = "Imperative shell: consesus, storage, gateway and workers"
 loomery-core.workspace = true
 loomery-genesis.workspace = true
 anyhow = "1.0.104"
+dashmap = "6.2.1"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["rt", "macros", "time", "sync", "net", "rt-multi-thread", "fs"] }
 openraft = { version = "0.9.25", features = ["serde", "storage-v2"] }

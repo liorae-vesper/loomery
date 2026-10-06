@@ -1017,6 +1017,7 @@ name = "loomery-shell"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "dashmap",
  "loomery-core",
  "loomery-genesis",
  "openraft",
