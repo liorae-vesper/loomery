@@ -74,6 +74,7 @@ loomery/
 │   ├── genesis/       # loomery-genesis — the deterministic bootstrap script
 │   └── shell/         # loomery-shell — Raft, tonic, RocksDB and workers
 ├── docs/              # design docs, research notes, and guardrails
+├── THIRDPARTY.yml     # bundled third-party license texts (docs/third-party-licenses.md)
 ├── deny.toml          # cargo-deny policy (licenses, advisories, bans)
 ├── hk.pkl             # pre-commit hooks (commit message lint + quality gates)
 ├── mise.toml          # tool versions + dev tasks
@@ -117,7 +118,8 @@ mise install
 This installs the exact pinned versions of:
 
 - `rust` (1.98.1, edition 2024) — via rustup
-- `cargo-deny`, `cargo-audit`, `cargo-llvm-cov`, `cargo-crap` — cargo subcommands
+- `cargo-deny`, `cargo-audit`, `cargo-llvm-cov`, `cargo-crap`,
+  `cargo-bundle-licenses` — cargo subcommands
 - `cocogitto` — conventional-commit tooling
 - `hk` — pre-commit hooks
 
@@ -135,6 +137,8 @@ Run one with `mise run <task>`.
 | `mise run coverage` | Generate an LCOV coverage report (`cargo llvm-cov --workspace`) |
 | `mise run crap` | Compute **CRAP** scores from coverage; fails above the threshold |
 | `mise run audit` | `cargo audit` for security advisories |
+| `mise run licenses` | Regenerate the bundled third-party license texts (`THIRDPARTY.yml`) |
+| `mise run licenses-check` | Fail if `THIRDPARTY.yml` is stale (also a CI job) |
 
 The **one-command local gate** is:
 
@@ -156,11 +160,13 @@ associativity/determinism for the aggregate algebra.
 
 ## Continuous integration
 
-GitHub Actions runs four parallel jobs (`.github/workflows/ci.yml`), each
+GitHub Actions runs six parallel jobs (`.github/workflows/ci.yml`), each
 driven by a mise task rather than hardcoded commands:
 
 - **verify** — `mise run verify`
 - **test** — `mise run test`
+- **test-services** — the Keycloak + NATS integration suite (`compose.test.yaml`)
+- **licenses** — `mise run licenses-check`
 - **quality** — `mise run crap` (coverage + CRAP gate)
 - **audit** — `mise run audit`
 
@@ -186,3 +192,8 @@ references, tutorials, research and benchmarks. The main entry points are:
 ## License
 
 Loomery is licensed under the [Mozilla Public License 2.0](LICENSE).
+
+The license texts of every dependency are bundled in
+[`THIRDPARTY.yml`](THIRDPARTY.yml) and ship with release artifacts; see
+[third-party licenses](docs/third-party-licenses.md) for how the bundle is
+generated, checked and kept complete.

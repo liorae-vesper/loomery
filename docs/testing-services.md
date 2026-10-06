@@ -110,13 +110,12 @@ integration tests, and always tears the stack down.
   **before** building a `reqwest::Client`; `KeycloakAuthenticator` does that
   itself, and [`loomery_shell::gateway::install_tls_provider`] is public for any
   other TLS user. Verify it end to end with the HTTPS probe above.
-- **One allowlist addition.** That TLS path pulls the root-certificate crates
-  `webpki-root-certs` / `webpki-roots`, licensed `CDLA-Permissive-2.0`, so it is
-  now on the `deny.toml` allowlist. It is a permissive *data* license: use,
-  modify and share, with the sole condition (§2.1) that the agreement text
-  accompanies redistributed data — keep their LICENSE files in third-party
-  notices. It is not OSI-approved (it is not a software license), but Fedora's
-  license data accepted it in 2025-05.
+- **One allowlist addition.** reqwest's TLS resolves `webpki-root-certs`
+  (CDLA-Permissive-2.0) for the `wasm32` target, and `cargo-deny` resolves every
+  target even though Loomery never builds for wasm, so that license is on the
+  `deny.toml` allowlist. The §2.1 obligation — the agreement text travels with
+  the data — is met by the committed
+  [third-party license bundle](third-party-licenses.md) (`THIRDPARTY.yml`).
 - **`async-nats` is trimmed** to `default-features = false, features =
   ["jetstream", "nkeys"]`, so the WebSocket transport is not pulled in; the
   outbox needs only the core client and JetStream.
