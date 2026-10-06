@@ -14,7 +14,7 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 | Pre-commit hooks | `hk` (commit-msg + check/fix hooks) |
 | Commit message lint | `cog verify` (conventional commits, cocogitto) |
 | Combined dev gate | `mise run verify` (see `mise.toml`) |
-| Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap) |
+| Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap; skips `**/*_tests.rs`) |
 
 ## The `cargo deny` policy (`deny.toml`)
 
@@ -56,6 +56,11 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
   allowlist green (`cargo deny check licenses`).
 - Toolchain is pinned via `mise` (`rust 1.98.1`, edition 2024); `cargo`
   commands should run through `mise exec --` if rust isn't on PATH.
+- The CRAP gate scores production code only: `cargo-crap`'s default exclusions
+  (`tests/**`, `benches/**`, `examples/**`) are extended with `**/*_tests.rs`,
+  the repo's convention for in-crate integration tests that need private APIs
+  (`persistent_tests.rs`, `tls_tests.rs`, …). Those still run in
+  `mise run test`; they are simply not scored as production functions.
 
 ---
 

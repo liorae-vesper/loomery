@@ -38,7 +38,7 @@ run = "cargo llvm-cov --workspace --lcov --output-path lcov.info"
 description = "Computes CRAP scores from coverage (fails above threshold)"
 run = """
 cargo llvm-cov --workspace --lcov --output-path lcov.info
-cargo crap --workspace --lcov lcov.info --fail-above
+cargo crap --workspace --lcov lcov.info --fail-above --exclude '**/*_tests.rs'
 """
 
 [tasks.bench-consensus]
