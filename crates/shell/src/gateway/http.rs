@@ -204,24 +204,25 @@ impl IntoResponse for HttpError {
             )
                 .into_response(),
             HttpError::Command(error) => {
-                let status = match &error {
-                    CommandError::Auth(AuthError::Missing | AuthError::Unknown) => {
-                        StatusCode::UNAUTHORIZED
-                    }
-                    CommandError::Auth(AuthError::Forbidden) => StatusCode::FORBIDDEN,
-                    CommandError::UnknownOrganization => StatusCode::NOT_FOUND,
-                    CommandError::NotActive | CommandError::KeyReused => StatusCode::CONFLICT,
-                    CommandError::GroupUnavailable | CommandError::Propose(_) => {
-                        StatusCode::SERVICE_UNAVAILABLE
-                    }
-                    CommandError::InvalidKey | CommandError::Serialize(_) => {
-                        StatusCode::BAD_REQUEST
-                    }
-                    CommandError::PreCompute(_) => StatusCode::INTERNAL_SERVER_ERROR,
-                };
+                let status = status_for(&error);
                 (status, Json(json!({ "error": error.to_string() }))).into_response()
             }
         }
+    }
+}
+
+/// The status code a command-plane failure maps to.
+fn status_for(error: &CommandError) -> StatusCode {
+    match error {
+        CommandError::Auth(AuthError::Missing | AuthError::Unknown) => StatusCode::UNAUTHORIZED,
+        CommandError::Auth(AuthError::Forbidden) => StatusCode::FORBIDDEN,
+        CommandError::UnknownOrganization => StatusCode::NOT_FOUND,
+        CommandError::NotActive | CommandError::KeyReused => StatusCode::CONFLICT,
+        CommandError::GroupUnavailable | CommandError::Propose(_) => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        CommandError::InvalidKey | CommandError::Serialize(_) => StatusCode::BAD_REQUEST,
+        CommandError::PreCompute(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -355,6 +356,37 @@ mod tests {
         request.headers_mut().remove("authorization");
         let response = app().await.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn unknown_and_malformed_organizations_are_rejected() {
+        // A well-formed but unregistered organization: 404.
+        let response = app()
+            .await
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/organizations/018f2c3d-4e5f-7071-8293-a4b5c6d7e8ff/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // Not a canonical UUID: 400, never adopted.
+        let response = app()
+            .await
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/organizations/not-a-uuid/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
