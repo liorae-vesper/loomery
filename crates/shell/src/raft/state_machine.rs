@@ -28,6 +28,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use loomery_core::aggregate::AggregatePlan;
+use loomery_core::aggregate::Processed;
 use loomery_core::aggregate::Processed::Executed;
 use loomery_core::aggregate::Processed::Replayed;
 use loomery_core::aggregate::process;
@@ -36,14 +37,32 @@ use loomery_core::envelope::Command;
 use loomery_core::envelope::Event;
 use loomery_core::id::Id;
 use loomery_core::key::Key;
+use loomery_core::membership;
 use loomery_core::membership::ADD_OWNER;
+use loomery_core::membership::AssignmentCode;
 use loomery_core::membership::MembershipCode;
+use loomery_core::membership::OrganizationAssignment;
+use loomery_core::membership::OrganizationAssignmentState;
 use loomery_core::membership::WorkspaceMembership;
 use loomery_core::membership::WorkspaceMembershipState;
+use loomery_core::org;
 use loomery_core::org::ASSIGN_LEADER;
 use loomery_core::org::Organization;
 use loomery_core::org::OrganizationCode;
 use loomery_core::org::OrganizationState;
+use loomery_core::task;
+use loomery_core::task::Task;
+use loomery_core::task::TaskCode;
+use loomery_core::task::TaskState;
+use loomery_core::tenant;
+use loomery_core::tenant::Tenant;
+use loomery_core::tenant::TenantCode;
+use loomery_core::tenant::TenantState;
+use loomery_core::user;
+use loomery_core::user::User;
+use loomery_core::user::UserCode;
+use loomery_core::user::UserState;
+use loomery_core::workspace;
 use loomery_core::workspace::CREATE as CREATE_WORKSPACE;
 use loomery_core::workspace::Workspace;
 use loomery_core::workspace::WorkspaceCode;
@@ -141,6 +160,14 @@ enum AggregateState {
     Workspace(WorkspaceState),
     /// The workspace-membership aggregate (genesis ③).
     Membership(WorkspaceMembershipState),
+    /// The control-plane user aggregate.
+    User(UserState),
+    /// The organization-assignment aggregate (onboarding).
+    Assignment(OrganizationAssignmentState),
+    /// The task aggregate (the workspace board).
+    Task(TaskState),
+    /// The control-plane tenant-placement aggregate.
+    Tenant(TenantState),
 }
 
 /// The serializable projection of [`GroupState`] used as snapshot data.
@@ -259,15 +286,50 @@ impl MemStateMachine {
             .cloned()
             .collect()
     }
+
+    /// The control group's tenant records, keyed by organization id, for the
+    /// router projection.
+    ///
+    /// The router maps `organization_id → group` from these; an unregistered
+    /// organization simply does not appear.
+    pub async fn tenants(&self) -> Vec<(Id, TenantState)> {
+        self.state
+            .read()
+            .await
+            .streams
+            .iter()
+            .filter_map(|(organization_id, state)| match state {
+                AggregateState::Tenant(tenant) => Some((organization_id.clone(), tenant.clone())),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// Applies one committed command, dispatching to the aggregate plan its
 /// `command_type` names.
 fn apply_command(group: &mut GroupState, command: Command, log_index: u64) -> Applied {
     match command.command_type.as_str() {
-        ASSIGN_LEADER => apply_organization(group, command, log_index),
-        CREATE_WORKSPACE => apply_workspace(group, command, log_index),
-        ADD_OWNER => apply_membership(group, command, log_index),
+        ASSIGN_LEADER | org::RENAME | org::ARCHIVE => apply_organization(group, command, log_index),
+        CREATE_WORKSPACE | workspace::RENAME | workspace::ARCHIVE => {
+            apply_workspace(group, command, log_index)
+        }
+        ADD_OWNER
+        | membership::ADD_MEMBER
+        | membership::CHANGE_ROLE
+        | membership::REMOVE_MEMBER => apply_membership(group, command, log_index),
+        user::PROVISION | user::UPDATE_PROFILE | user::DEACTIVATE => {
+            apply_user(group, command, log_index)
+        }
+        membership::ASSIGN_MEMBER | membership::ORG_REMOVE_MEMBER => {
+            apply_assignment(group, command, log_index)
+        }
+        task::CREATE | task::RENAME | task::COMPLETE | task::REOPEN => {
+            apply_task(group, command, log_index)
+        }
+        tenant::REGISTER | tenant::ACTIVATE | tenant::TOMBSTONE => {
+            apply_tenant(group, command, log_index)
+        }
         other => Applied::Rejected {
             code: "unknown_command".to_owned(),
             message: format!("no aggregate plan handles `{other}`"),
@@ -385,6 +447,59 @@ fn apply_membership(group: &mut GroupState, command: Command, log_index: u64) ->
         loomery_core::aggregate::Processed::Error(error) => rejected(error.code, &error.message),
     }
 }
+
+/// Drives one aggregate plan through the pure core and folds what it produced.
+///
+/// The plan decides (`process`), the events fold into the stream
+/// (`Plan::apply`), and the dedup entry is recorded *after* the events are
+/// applied — the core's critical-section contract.
+macro_rules! drive_plan {
+    ($name:ident, $variant:ident, $state:ty, $code:ty, $plan:ty) => {
+        /// Applies one committed command through its aggregate plan.
+        fn $name(group: &mut GroupState, command: Command, log_index: u64) -> Applied {
+            let aggregate_id = command.aggregate_id.clone();
+            let mut state = match group.streams.get(&aggregate_id) {
+                Some(AggregateState::$variant(state)) => state.clone(),
+                Some(_) => return kind_mismatch(&aggregate_id),
+                None => <$state>::default(),
+            };
+
+            let key = command.causation_key.clone();
+            let fingerprint = command.fingerprint();
+
+            match process::<$state, $code, $plan>(state.clone(), &group.registry, command) {
+                Executed(execution) => {
+                    for event in execution.events {
+                        state = <$plan>::apply(state, event.clone());
+                        group.events.push(event);
+                    }
+                    group
+                        .streams
+                        .insert(aggregate_id, AggregateState::$variant(state));
+                    record(group, key, fingerprint, log_index);
+                    Applied::Appended {
+                        first_log_index: log_index,
+                    }
+                }
+                Replayed { index } => Applied::Replayed {
+                    first_log_index: to_u64(index),
+                },
+                Processed::Error(error) => rejected(error.code, &error.message),
+            }
+        }
+    };
+}
+
+drive_plan!(apply_user, User, UserState, UserCode, User);
+drive_plan!(
+    apply_assignment,
+    Assignment,
+    OrganizationAssignmentState,
+    AssignmentCode,
+    OrganizationAssignment
+);
+drive_plan!(apply_task, Task, TaskState, TaskCode, Task);
+drive_plan!(apply_tenant, Tenant, TenantState, TenantCode, Tenant);
 
 /// Records a committed command in the dedup window and mirrors it for snapshots.
 fn record(group: &mut GroupState, key: Key, fingerprint: Key, log_index: u64) {
@@ -757,5 +872,76 @@ mod tests {
         assert_eq!(restored.committed_events(&organization()).await.len(), 1);
         let replay = apply_one(&restored, command).await;
         assert!(matches!(replay, Applied::Replayed { .. }));
+    }
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+    use loomery_core::actor::Actor;
+    use loomery_core::envelope::Payload;
+    use loomery_core::tenant::TenantStatus;
+    use loomery_core::timestamp::Timestamp;
+    use openraft::CommittedLeaderId;
+
+    fn tenant_command(command_type: &str, payload: &str) -> Command {
+        Command {
+            envelope_version: 1,
+            id: Id::from("cmd-tenant"),
+            aggregate_id: Id::from("org-1"),
+            organization_id: Id::from("org-1"),
+            workspace_id: None,
+            occurred_at: Timestamp::from(1_700_000_000_000),
+            causation_key: Key::new(
+                &loomery_core::Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9),
+                payload,
+            ),
+            correlation_key: Key::new(
+                &loomery_core::Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9),
+                "control-plane",
+            ),
+            actor: Actor::System,
+            command_type: command_type.to_owned(),
+            payload: Payload {
+                version: 1,
+                data: payload.to_owned(),
+            },
+        }
+    }
+
+    async fn apply_one(machine: &Arc<MemStateMachine>, command: Command) -> Applied {
+        let entry = Entry {
+            log_id: LogId::new(CommittedLeaderId::new(1, 1), 1),
+            payload: EntryPayload::Normal(AppData::Command(command)),
+        };
+        machine.clone().apply([entry]).await.unwrap().remove(0)
+    }
+
+    #[tokio::test]
+    async fn a_tenant_registration_is_applied_and_visible_to_the_router() {
+        let machine = Arc::new(MemStateMachine::default());
+        let register = tenant_command(
+            tenant::REGISTER,
+            r#"{"group_id":"tenant-1","replicas":[{"node_id":1,"address":"http://127.0.0.1:7001"}]}"#,
+        );
+
+        let applied = apply_one(&machine, register).await;
+        assert_eq!(applied, Applied::Appended { first_log_index: 1 });
+
+        let tenants = machine.tenants().await;
+        assert_eq!(tenants.len(), 1);
+        assert_eq!(tenants[0].0, Id::from("org-1"));
+        assert_eq!(tenants[0].1.group_id.as_deref(), Some("tenant-1"));
+        assert_eq!(tenants[0].1.status, TenantStatus::Registering);
+        assert_eq!(tenants[0].1.replicas.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_control_command_is_rejected() {
+        let machine = Arc::new(MemStateMachine::default());
+        let applied = apply_one(&machine, tenant_command("tenant.move", "{}")).await;
+
+        assert!(matches!(applied, Applied::Rejected { .. }));
+        assert!(machine.tenants().await.is_empty());
     }
 }
