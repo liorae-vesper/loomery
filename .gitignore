@@ -3,3 +3,4 @@ target/
 lcov.info
 benchmark-results/
 __pycache__/
+.pi/
