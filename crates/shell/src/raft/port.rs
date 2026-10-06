@@ -155,6 +155,16 @@ impl RaftGroup {
         self.writer.clone()
     }
 
+    /// The state machine this group applies into.
+    ///
+    /// Projections read applied state through it — e.g. the control group's
+    /// tenant records ([`crate::raft::MemStateMachine::tenants`]) for the
+    /// router.
+    #[must_use]
+    pub fn state_machine(&self) -> Arc<MemStateMachine> {
+        Arc::clone(&self.state_machine)
+    }
+
     /// Stops the shared proposal writer and the group's `OpenRaft` task.
     /// Queued/in-flight proposals are interrupted with unknown outcomes;
     /// shutdown does not promise to drain or commit the proposal queue.
