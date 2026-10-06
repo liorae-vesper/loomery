@@ -36,6 +36,7 @@ use crate::group::ProposeOutcome;
 /// reads the state machine's *applied* state directly, so a caller that just
 /// proposed and is asking "did it commit?" gets the applied answer, not the log
 /// tail's.
+#[derive(Clone)]
 pub struct RaftGroup {
     raft: Raft<TypeConfig>,
     writer: ProposalWriter,

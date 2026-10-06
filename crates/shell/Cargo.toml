@@ -10,6 +10,8 @@ description = "Imperative shell: consesus, storage, gateway and workers"
 loomery-core.workspace = true
 loomery-genesis.workspace = true
 anyhow = "1.0.104"
+argon2 = "0.5"
+axum = "0.8"
 dashmap = "6.2.1"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["rt", "macros", "time", "sync", "net", "rt-multi-thread", "fs"] }
@@ -29,6 +31,7 @@ tonic-prost-build = "0.14"
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["process", "io-util", "io-std"] }
+tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
 rcgen = "0.14"
 
