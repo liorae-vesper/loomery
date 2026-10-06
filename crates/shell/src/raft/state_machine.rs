@@ -36,6 +36,10 @@ use loomery_core::dedup::Registry;
 use loomery_core::envelope::Command;
 use loomery_core::envelope::Event;
 use loomery_core::id::Id;
+use loomery_core::invitation;
+use loomery_core::invitation::Invitation;
+use loomery_core::invitation::InvitationCode;
+use loomery_core::invitation::InvitationState;
 use loomery_core::key::Key;
 use loomery_core::membership;
 use loomery_core::membership::ADD_OWNER;
@@ -181,6 +185,8 @@ enum AggregateState {
     Task(TaskState),
     /// The control-plane tenant-placement aggregate.
     Tenant(TenantState),
+    /// The invitation aggregate (email onboarding).
+    Invitation(InvitationState),
 }
 
 /// The serializable projection of [`GroupState`] used as snapshot data.
@@ -356,6 +362,9 @@ fn apply_command(group: &mut GroupState, command: Command, log_index: u64) -> Ap
         tenant::REGISTER | tenant::ACTIVATE | tenant::TOMBSTONE => {
             apply_tenant(group, command, log_index)
         }
+        invitation::CREATE | invitation::ACCEPT | invitation::EXPIRE => {
+            apply_invitation(group, command, log_index)
+        }
         other => Applied::Rejected {
             code: "unknown_command".to_owned(),
             message: format!("no aggregate plan handles `{other}`"),
@@ -526,6 +535,13 @@ drive_plan!(
 );
 drive_plan!(apply_task, Task, TaskState, TaskCode, Task);
 drive_plan!(apply_tenant, Tenant, TenantState, TenantCode, Tenant);
+drive_plan!(
+    apply_invitation,
+    Invitation,
+    InvitationState,
+    InvitationCode,
+    Invitation
+);
 
 /// Records a committed command in the dedup window and mirrors it for snapshots.
 fn record(group: &mut GroupState, key: Key, fingerprint: Key, log_index: u64) {
