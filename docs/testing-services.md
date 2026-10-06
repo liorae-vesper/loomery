@@ -15,9 +15,10 @@ tests require the env vars below, so nothing here runs in `mise run test`.
 ## 1. Start the services
 
 ```sh
-mise run svc-up          # docker compose up -d + readiness wait
-mise run test-services   # up, lint the adapters, run the integration tests
-mise run svc-down        # stop and delete the state
+mise run svc-up                # docker compose up -d + readiness wait
+mise run test-services         # up, lint the adapters, run the integration tests
+mise run bench-services-stress # up, then the load profiles (see §6)
+mise run svc-down              # stop and delete the state
 ```
 
 Ports are overridable so the stack can coexist with other local services:
@@ -80,6 +81,16 @@ skipping quietly, so a green run always means the services actually answered.
   one with a different id grows the stream by exactly **two** messages.
 - **Keycloak identity** — `ada`'s token authenticates as a non-admin, `admin`'s
   token authenticates as an admin, and a garbage or missing token is rejected.
+- **Concurrent authentication** — six workers authenticate tokens round-robin
+  and assert that every result is *that token's* identity, with the negative
+  paths still classed as `Unknown` and `Missing`.
+- **Broker dedup under replay** — a booted group's events are published, then
+  replayed from a fresh cursor: the stream grows by exactly the distinct count
+  and not at all on the replay.
+- **The command plane under load** — two tenants take commands concurrently
+  through the real `CommandPlane` (a Keycloak authentication per command); the
+  test asserts that each event's recorded actor matches the token that submitted
+  it, then publishes and replays those events to the broker.
 - **TLS (opt-in)** — with `LOOMERY_TEST_HTTPS_PROBE` set, one real HTTPS request
   proves the `rustls-no-provider` stack and the installed `ring` provider complete
   a handshake:
@@ -101,7 +112,20 @@ The `Test services` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.
 starts the same compose stack on the runner, waits for readiness, runs the
 integration tests, and always tears the stack down.
 
-## 6. Limits
+## 6. Stress profiles
+
+[`benchmarks/services-stress.md`](benchmarks/services-stress.md) documents three
+load profiles over the same adapters (`mise run bench-services-stress`):
+concurrent authentication, Raft → outbox → JetStream with a crash replay, and the
+whole command plane with a real Keycloak authentication per command. Each profile
+asserts its invariants (identity integrity, dedup on replay, per-actor agreement)
+and exits non-zero when one fails.
+
+They are not part of CI: they need a warmed-up stack and their numbers depend on
+the host. The same invariants run at a tenth of the size in the integration suite
+above, which *is* in the `Test services` job.
+
+## 7. Limits
 
 - The adapters are behind `test-services`; the default `mise run verify/test`
   and the coverage gate do not compile or score them.

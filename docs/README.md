@@ -39,6 +39,7 @@ networked deployment.
 - [Failure injection](benchmarks/failure-injection.md) — crashes during writes, quorum loss, lost replies and flush-callback failures.
 - [Persistence hardening](benchmarks/persistence-hardening.md) — long-history restart validation in both modes, and the gaps left open.
 - [Multi-group probe](benchmarks/multigroup.md) — co-resident group read/write capacity, methodology and limits.
+- [Services stress profiles](benchmarks/services-stress.md) — the Keycloak and NATS adapters under load, the invariants asserted and the measured results.
 - [Example workload](benchmarks/consensus.json) — configuration for the release harness.
 
 The paired runner is executable tooling in
