@@ -29,6 +29,7 @@ pub mod dedup;
 pub mod envelope;
 pub mod error;
 pub mod id;
+pub mod invitation;
 pub mod key;
 pub mod membership;
 pub mod org;
