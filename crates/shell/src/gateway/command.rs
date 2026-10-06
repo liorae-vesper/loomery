@@ -153,8 +153,11 @@ impl CommandPlane {
     /// [`CommandError::Auth`] when authentication or the admin claim fails,
     /// [`CommandError::InvalidKey`] for a malformed client key, and
     /// [`CommandError::PreCompute`] if edge hashing fails.
-    pub fn build_command(&self, request: CommandRequest) -> Result<Command, CommandError> {
-        let identity = self.authenticator.authenticate(request.token.as_deref())?;
+    pub async fn build_command(&self, request: CommandRequest) -> Result<Command, CommandError> {
+        let identity = self
+            .authenticator
+            .authenticate(request.token.as_deref())
+            .await?;
 
         if is_admin_only(&request.command_type) && !identity.is_admin {
             return Err(AuthError::Forbidden.into());
@@ -222,7 +225,7 @@ impl CommandPlane {
     /// [`CommandError::Propose`] (an **unknown** outcome — re-read before
     /// retrying).
     pub async fn submit(&self, request: CommandRequest) -> Result<CommandOutcome, CommandError> {
-        let command = self.build_command(request)?;
+        let command = self.build_command(request).await?;
         let group = self.group_for(&command.organization_id)?;
         let causation_key = command.causation_key.clone();
         let fingerprint = command.fingerprint();
@@ -340,24 +343,25 @@ mod tests {
         Arc::new(router)
     }
 
-    #[test]
-    fn building_a_command_hashes_the_password_before_consensus() {
+    #[tokio::test]
+    async fn building_a_command_hashes_the_password_before_consensus() {
         let plane = command_plane(Arc::new(Router::new()), Arc::new(NoGroups));
         let mut request = command_request("user.provision", "member");
         request.payload = json!({ "display_name": "Ada", "password": "s3cret" });
 
-        let command = plane.build_command(request).unwrap();
+        let command = plane.build_command(request).await.unwrap();
 
         assert!(command.payload.data.contains("password_hash"));
         assert!(!command.payload.data.contains("s3cret"));
     }
 
-    #[test]
-    fn a_command_is_minted_with_a_causation_key_and_a_user_actor() {
+    #[tokio::test]
+    async fn a_command_is_minted_with_a_causation_key_and_a_user_actor() {
         let plane = command_plane(Arc::new(Router::new()), Arc::new(NoGroups));
 
         let command = plane
             .build_command(command_request("task.create", "member"))
+            .await
             .unwrap();
 
         assert_eq!(command.causation_key, command.correlation_key);
@@ -370,34 +374,40 @@ mod tests {
         assert_eq!(command.command_type, "task.create");
     }
 
-    #[test]
-    fn a_client_supplied_causation_key_is_validated() {
+    #[tokio::test]
+    async fn a_client_supplied_causation_key_is_validated() {
         let plane = command_plane(Arc::new(Router::new()), Arc::new(NoGroups));
         let key = Key::new(&Uuid::from_u128(1), "client-intent");
 
         let mut request = command_request("task.create", "member");
         request.causation_id = Some(key.to_string());
-        assert_eq!(plane.build_command(request).unwrap().causation_key, key);
+        assert_eq!(
+            plane.build_command(request).await.unwrap().causation_key,
+            key
+        );
 
         let mut request = command_request("task.create", "member");
         request.causation_id = Some("not-a-key".to_owned());
         assert!(matches!(
-            plane.build_command(request),
+            plane.build_command(request).await,
             Err(CommandError::InvalidKey)
         ));
     }
 
-    #[test]
-    fn admin_only_commands_require_the_admin_claim() {
+    #[tokio::test]
+    async fn admin_only_commands_require_the_admin_claim() {
         let plane = command_plane(Arc::new(Router::new()), Arc::new(NoGroups));
 
         assert!(matches!(
-            plane.build_command(command_request("organization.archive", "member")),
+            plane
+                .build_command(command_request("organization.archive", "member"))
+                .await,
             Err(CommandError::Auth(AuthError::Forbidden))
         ));
         assert!(
             plane
                 .build_command(command_request("organization.archive", "admin"))
+                .await
                 .is_ok()
         );
     }

@@ -260,7 +260,7 @@ async fn an_invited_user_is_provisioned_and_can_work_on_the_board() {
     assert_eq!(membership.workspace_id.as_deref(), Some(&*workspace_id));
 
     // --- the invitee authenticates and works on the board -------------------
-    let identity = authenticator.authenticate(Some("invitee")).unwrap();
+    let identity = authenticator.authenticate(Some("invitee")).await.unwrap();
     assert_eq!(identity.user_id, invitee);
 
     plane

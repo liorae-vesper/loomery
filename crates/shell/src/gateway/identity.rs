@@ -9,6 +9,8 @@
 //! ([`StaticAuthenticator`] is the test/dev implementation).
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 
 use loomery_core::id::Id;
 use loomery_core::org;
@@ -38,6 +40,12 @@ pub enum AuthError {
     Forbidden,
 }
 
+/// The future an [`Authenticator`] returns.
+///
+/// Boxed because the gateway holds `Arc<dyn Authenticator>` and a real
+/// authenticator (Keycloak) performs I/O.
+pub type AuthFuture<'a> = Pin<Box<dyn Future<Output = Result<Identity, AuthError>> + Send + 'a>>;
+
 /// Turns a bearer token into an [`Identity`].
 pub trait Authenticator: Send + Sync {
     /// Authenticates a bearer token (`None` when the header is absent).
@@ -45,7 +53,7 @@ pub trait Authenticator: Send + Sync {
     /// # Errors
     ///
     /// [`AuthError::Missing`] or [`AuthError::Unknown`].
-    fn authenticate(&self, token: Option<&str>) -> Result<Identity, AuthError>;
+    fn authenticate(&self, token: Option<&str>) -> AuthFuture<'_>;
 }
 
 /// A fixed token table — for tests and local development only.
@@ -70,9 +78,11 @@ impl StaticAuthenticator {
 }
 
 impl Authenticator for StaticAuthenticator {
-    fn authenticate(&self, token: Option<&str>) -> Result<Identity, AuthError> {
-        let token = token.ok_or(AuthError::Missing)?;
-        self.tokens.get(token).cloned().ok_or(AuthError::Unknown)
+    fn authenticate(&self, token: Option<&str>) -> AuthFuture<'_> {
+        let identity = token
+            .ok_or(AuthError::Missing)
+            .and_then(|token| self.tokens.get(token).cloned().ok_or(AuthError::Unknown));
+        Box::pin(std::future::ready(identity))
     }
 }
 
@@ -100,21 +110,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_registered_token_authenticates() {
+    #[tokio::test]
+    async fn a_registered_token_authenticates() {
         let authenticator = StaticAuthenticator::new().with_token("t1", identity(false));
         assert_eq!(
-            authenticator.authenticate(Some("t1")).unwrap(),
+            authenticator.authenticate(Some("t1")).await.unwrap(),
             identity(false)
         );
     }
 
-    #[test]
-    fn missing_and_unknown_tokens_are_rejected() {
+    #[tokio::test]
+    async fn missing_and_unknown_tokens_are_rejected() {
         let authenticator = StaticAuthenticator::new().with_token("t1", identity(false));
-        assert_eq!(authenticator.authenticate(None), Err(AuthError::Missing));
         assert_eq!(
-            authenticator.authenticate(Some("nope")),
+            authenticator.authenticate(None).await,
+            Err(AuthError::Missing)
+        );
+        assert_eq!(
+            authenticator.authenticate(Some("nope")).await,
             Err(AuthError::Unknown)
         );
     }
