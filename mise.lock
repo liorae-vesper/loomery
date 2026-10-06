@@ -7,6 +7,11 @@ version = "0.22.2"
 backend = "cargo:cargo-audit"
 specifiers = ["0.22.2"]
 
+[[tools."cargo:cargo-bundle-licenses"]]
+version = "4.2.0"
+backend = "cargo:cargo-bundle-licenses"
+specifiers = ["4.2.0"]
+
 [[tools."cargo:cargo-crap"]]
 version = "0.5.0"
 backend = "cargo:cargo-crap"

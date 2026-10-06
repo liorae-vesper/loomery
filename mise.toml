@@ -5,6 +5,7 @@ locked = true
 
 [tools]
 "cargo:cargo-audit" = "0.22.2"
+"cargo:cargo-bundle-licenses" = "4.2.0"
 "cargo:cargo-crap" = "0.5.0"
 "cargo:cargo-deny" = "0.20.2"
 "cargo:cargo-llvm-cov" = "0.9.1"
@@ -29,6 +30,21 @@ run = "cargo test --workspace"
 [tasks.audit]
 description = "Checks dependencies for security advisories"
 run = "cargo audit"
+
+[tasks.licenses]
+description = "Regenerates the bundled third-party license texts"
+run = """
+RUST_LOG=error cargo bundle-licenses --format yaml --output THIRDPARTY.yml --features test-services --prefer Apache-2.0,MIT --previous THIRDPARTY.yml
+"""
+
+[tasks.licenses-check]
+description = "Fails if the bundled third-party license texts are stale"
+run = """
+tmp="$(mktemp)"
+RUST_LOG=error cargo bundle-licenses --format yaml --output "$tmp" --features test-services --prefer Apache-2.0,MIT --previous THIRDPARTY.yml
+diff -u THIRDPARTY.yml "$tmp"
+rm -f "$tmp"
+"""
 
 [tasks.coverage]
 description = "Generates a coverage report (llvm-cov, floor 80%)"

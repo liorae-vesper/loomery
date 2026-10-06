@@ -24,13 +24,15 @@ allow = [
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
-    # Root-certificate *data* for rustls' platform verifier (`webpki-root-certs`,
-    # `webpki-roots`), pulled by reqwest's TLS and async-nats. CDLA-Permissive-2.0
-    # is a permissive data license: use, modify and share, with the sole
-    # condition that the agreement text accompanies the redistributed data
-    # (§2.1), satisfied by shipping the crate's LICENSE in third-party notices.
-    # It is not OSI-approved (it is a data license), but Fedora's license data
-    # accepted it in 2025-05.
+    # Root-certificate *data* (`webpki-root-certs`, a wasm32-only dependency of
+    # reqwest's rustls platform verifier). cargo-deny resolves every target, even
+    # though Loomery never builds for wasm32, so the license has to be allowed.
+    # CDLA-Permissive-2.0 is a permissive data license: use, modify and share,
+    # with the sole condition that the agreement text accompanies the
+    # redistributed data (§2.1) — satisfied by the committed THIRDPARTY.yml
+    # bundle (`mise run licenses`, see docs/third-party-licenses.md). It is not
+    # OSI-approved (it is a data license), but Fedora's license data accepted it
+    # in 2025-05.
     "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8      # High threshold to verify license headers
