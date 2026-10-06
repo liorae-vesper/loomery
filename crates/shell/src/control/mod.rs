@@ -8,6 +8,9 @@
 mod controller;
 mod router;
 
+#[cfg(test)]
+mod e2e_tests;
+
 pub use controller::incomplete;
 pub use controller::provision;
 pub use controller::resume;
