@@ -569,7 +569,7 @@ enforced by `mise run crap` in CI. The frozen command/event taxonomy is
 recorded in [`domain-model.md`](domain-model.md).
 
 ### Shell (Phases 1–7)
-- [ ] Phase 1 control plane *(next — orchestration, router and RYW)*
+- [x] Phase 1 control plane *(orchestration, router, RYW, gateway, outbox and sagas landed; OIDC and NATS bindings are deployment wiring)*
   - [x] Control group on OpenRaft (`RaftLogStorage`/`RaftStateMachine` +
         `RaftNetwork` over tonic): `shell::control`
     - [x] levels 1–2 of the spike: in-memory `RaftLogStorage` +
@@ -586,7 +586,7 @@ recorded in [`domain-model.md`](domain-model.md).
   - [x] Tenant lifecycle + reconciliation: `shell::control::{provision, resume,
         incomplete}` — register → genesis → activate → route, idempotent by
         derived keys, with the route fenced behind genesis
-  - [ ] RYW `X-Min-Index` hold (gateway)
+  - [x] RYW `X-Min-Index` hold (gateway)
   - [x] Genesis script (`crates/genesis`): the deterministic ①②③ plan —
         derived keys/ids, commands, and progress read back from the committed
         events by causation key
@@ -594,11 +594,15 @@ recorded in [`domain-model.md`](domain-model.md).
         (`crates/shell/src/bootstrap.rs`) over `GroupOps`, with crash-resume
         and replay tests; the control-plane controller and `resume` call it,
         and `incomplete()` is the reconciliation work list
-  - [ ] Outbox slice: `shell::outbox` publisher + `async-nats` transport (D8/D11)
-  - [ ] Saga-runner seed + `InvitationSaga` (acceptance → assignment + membership)
-  - [ ] axum gateway: command plane, causation minting, edge pre-compute
+  - [x] Outbox slice: `shell::outbox` tailer + `Publisher` seam (D8/D11); the
+        NATS binding is deployment wiring
+  - [x] Saga-runner seed + `InvitationAcceptance` (acceptance → assignment +
+        membership), replay-safe by derived identity
+  - [x] axum gateway: command plane, causation minting, edge pre-compute
         (argon2), admin claim enforcement, RYW middleware
-  - [ ] E2E gate candidates green in tests: register → genesis → workspace +
+  - [x] persistence hardening validation: 300-command history survives restart
+        in both modes; see `docs/benchmarks/persistence-hardening.md`
+  - [x] E2E gate candidates green in tests: register → genesis → workspace +
         Owner; invite → accept → provisioned → login; crash-resume
         no-duplicate; dedup-hit with RYW; admin enforcement
 - [ ] Phase 2 work core

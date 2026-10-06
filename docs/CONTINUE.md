@@ -52,10 +52,18 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
    `shell::control` holds the tenant router projection, `provision`
    (register → genesis → activate → route) and `incomplete`/`resume` for the
    startup and retry sweeps. The periodic sweep loop itself is host wiring.
-3. Implement the gateway and read-your-writes `X-Min-Index` wait/leader fallback.
-   Local reads exist; gateway session-token enforcement is still planned.
-4. Add the committed-log outbox, NATS delivery, invitation choreography and saga
-   runner according to design D8/D11.
+3. ~~Implement the gateway and read-your-writes `X-Min-Index` wait/leader
+   fallback.~~ **Done:** `shell::gateway` authenticates (behind an
+   `Authenticator`), enforces the admin claim, hashes passwords with argon2 at
+   the edge, mints/validates the causation key, answers `409` on key reuse,
+   routes to the active tenant and applies the `X-Min-Index` gate. OIDC is the
+   remaining deployment wiring.
+4. ~~Add the committed-log outbox, NATS delivery, invitation choreography and
+   saga runner according to design D8/D11.~~ **Done:** the outbox publishes
+   applied events with the D11 identity and a resumable cursor, `SagaRunner`
+   consumes with ack/retry classification, and `InvitationAcceptance` provisions
+   assignment + membership replay-safely. The NATS JetStream binding is
+   deployment wiring behind `LOOMERY_NATS_URL`.
 5. Extend persistence validation to large histories, interrupted snapshot
    creation/installation/purge and storage failures before changing the default.
    Multi-group mixed read/write capacity has not been benchmarked.
