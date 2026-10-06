@@ -1,8 +1,9 @@
 # Loomery — Design
 
-**Status: IN PROGRESS** — core infrastructure and bootstrap aggregates are
-implemented. The shell includes OpenRaft, tonic networking and RocksDB storage;
-control-plane orchestration, gateway and outbox remain planned.
+**Status: IN PROGRESS** — the pure core, the shell (OpenRaft, tonic networking,
+RocksDB storage, TLS, batching), the control plane, the gateway and the outbox +
+sagas are implemented. OIDC and NATS bindings, deployment, observability and
+Phases 2–7 remain.
 
 This is the design and planning document for **Loomery**, an event-sourced
 backend for team collaboration built in **Rust** on the **Tokio** async
