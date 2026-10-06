@@ -53,6 +53,7 @@ pub use network::NoopNetworkFactory;
 pub use port::{ProposeError, RaftGroup};
 pub use proposal::ProposalWriter;
 pub use rocks_log_store::RocksLogStore;
+pub use state_machine::AppliedEvent;
 pub use state_machine::MemStateMachine;
 
 /// What clients write to a group.

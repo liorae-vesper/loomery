@@ -25,6 +25,7 @@ pub mod config;
 pub mod control;
 pub mod gateway;
 pub mod group;
+pub mod outbox;
 pub mod raft;
 
 #[cfg(test)]

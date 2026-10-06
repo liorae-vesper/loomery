@@ -131,7 +131,7 @@ struct GroupState {
     streams: BTreeMap<Id, AggregateState>,
     /// Every event the group has applied, in log order — what
     /// [`MemStateMachine::committed_events`] answers from.
-    events: Vec<Event>,
+    applied: Vec<AppliedEvent>,
     /// The dedup window (not serializable; see [`GroupState::dedup`]).
     registry: Registry,
     /// The dedup window in insertion order, mirrored for snapshots.
@@ -144,11 +144,24 @@ impl Default for GroupState {
             last_applied_log: None,
             last_membership: StoredMembership::default(),
             streams: BTreeMap::new(),
-            events: Vec::new(),
+            applied: Vec::new(),
             registry: Registry::new(DEDUP_WINDOW),
             dedup: Vec::new(),
         }
     }
+}
+
+/// One applied event and the log index it landed at.
+///
+/// The outbox needs the index to derive `Nats-Msg-Id` and to keep a resume
+/// cursor (D11); the genesis worker and other readers only want the event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppliedEvent {
+    /// The Raft log index the event's command was applied at (shared by all
+    /// events one command produced).
+    pub log_index: u64,
+    /// The applied event.
+    pub event: Event,
 }
 
 /// The per-stream state of an aggregate, tagged by its plan.
@@ -183,7 +196,7 @@ struct SnapshotData {
     /// The per-stream states.
     streams: BTreeMap<Id, AggregateState>,
     /// The applied-event log.
-    events: Vec<Event>,
+    applied: Vec<AppliedEvent>,
     /// The dedup window, in insertion order.
     dedup: Vec<(Key, Key, usize)>,
 }
@@ -277,12 +290,25 @@ impl MemStateMachine {
     /// whole applied-event log; the filter keeps the answer honest if the group
     /// is ever shared.
     pub async fn committed_events(&self, organization_id: &Id) -> Vec<Event> {
+        self.applied_events(organization_id)
+            .await
+            .into_iter()
+            .map(|applied| applied.event)
+            .collect()
+    }
+
+    /// Every event the group has applied, in log order, **with its log index**.
+    ///
+    /// This is what the outbox tailer consumes: the index is part of the
+    /// message identity (`<group>:<log_index>:e<pos>`, D11) and of the cursor
+    /// that makes a restart resume instead of re-publishing.
+    pub async fn applied_events(&self, organization_id: &Id) -> Vec<AppliedEvent> {
         self.state
             .read()
             .await
-            .events
+            .applied
             .iter()
-            .filter(|event| &event.organization_id == organization_id)
+            .filter(|applied| &applied.event.organization_id == organization_id)
             .cloned()
             .collect()
     }
@@ -357,7 +383,7 @@ fn apply_organization(group: &mut GroupState, command: Command, log_index: u64) 
         Executed(execution) => {
             for event in execution.events {
                 state = Organization::apply(state, event.clone());
-                group.events.push(event);
+                group.applied.push(AppliedEvent { log_index, event });
             }
             group
                 .streams
@@ -394,7 +420,7 @@ fn apply_workspace(group: &mut GroupState, command: Command, log_index: u64) -> 
         Executed(execution) => {
             for event in execution.events {
                 state = Workspace::apply(state, event.clone());
-                group.events.push(event);
+                group.applied.push(AppliedEvent { log_index, event });
             }
             group
                 .streams
@@ -431,7 +457,7 @@ fn apply_membership(group: &mut GroupState, command: Command, log_index: u64) ->
         Executed(execution) => {
             for event in execution.events {
                 state = WorkspaceMembership::apply(state, event.clone());
-                group.events.push(event);
+                group.applied.push(AppliedEvent { log_index, event });
             }
             group
                 .streams
@@ -471,7 +497,7 @@ macro_rules! drive_plan {
                 Executed(execution) => {
                     for event in execution.events {
                         state = <$plan>::apply(state, event.clone());
-                        group.events.push(event);
+                        group.applied.push(AppliedEvent { log_index, event });
                     }
                     group
                         .streams
@@ -542,7 +568,7 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<MemStateMachine> {
             last_applied_log: group.last_applied_log,
             last_membership: group.last_membership.clone(),
             streams: group.streams.clone(),
-            events: group.events.clone(),
+            applied: group.applied.clone(),
             dedup: group.dedup.clone(),
         };
         let last_applied_log = data.last_applied_log;
@@ -637,7 +663,7 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
                 last_applied_log: group.last_applied_log,
                 last_membership: group.last_membership.clone(),
                 streams: group.streams.clone(),
-                events: group.events.clone(),
+                applied: group.applied.clone(),
                 dedup: group.dedup.clone(),
             };
             let stored = StoredSnapshot {
@@ -706,7 +732,7 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
         group.last_applied_log = meta.last_log_id;
         group.last_membership = meta.last_membership.clone();
         group.streams = data.streams;
-        group.events = data.events;
+        group.applied = data.applied;
 
         // Rebuild the dedup window from its serialized insertion order.
         let mut registry = Registry::new(DEDUP_WINDOW);
