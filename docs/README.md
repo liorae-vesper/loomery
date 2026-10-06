@@ -8,6 +8,7 @@ Start with [design.md](design.md) for the architecture and decisions, or
 | Document | Purpose |
 |---|---|
 | [Design](design.md) | Architecture, decisions register and phased roadmap; distinguishes implemented and planned features |
+| [Domain model](domain-model.md) | The six Phase-0 aggregates: commands, events, payloads, state and legal transitions |
 | [Implementation guide](implementation.md) | Build pipeline, Raft startup, storage/network wiring and tenant group lifecycle |
 | [Shell](shell.md) | Current group API, genesis worker, transport and storage behavior |
 | [Raft configuration](raft-configuration.md) | Persistent replica startup, tuning, TLS/mTLS and immutable persistence modes |

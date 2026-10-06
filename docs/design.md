@@ -551,22 +551,22 @@ naming for the first outbox slice:**
 - [x] `loomery_core::dedup::DedupIndex` — bounded FIFO idempotency window
       (`dashmap` + `VecDeque`, deterministic eviction; unit + **proptest**
       model-based and metadata-retention properties)
-- [ ] `loomery_core::org::Organization` — *bootstrap slice* (①
-      `organization.assign_leader` → `leader_assigned`) implemented
-- [ ] `loomery_core::user::User`
-- [ ] `loomery_core::workspace::Workspace` — *bootstrap slice* (②
-      `workspace.create` → `created`) implemented
-- [ ] `loomery_core::task::Task`
-- [ ] `loomery_core::membership` (OrganizationAssignment / WorkspaceMembership) —
-      `WorkspaceMembership` *bootstrap slice* (③ `membership.add_owner` →
-      `owner_added`) implemented
-- [ ] Property tests (`proptest`: replay determinism, fold associativity,
-      random-commands-never-crash) *(dedup window ✓ — model-based eviction
-      + re-insert-never-refreshes)*
+- [x] `loomery_core::org::Organization` — `assign_leader` (①), `rename`, `archive`
+- [x] `loomery_core::user::User` — `provision`, `update_profile`, `deactivate`
+- [x] `loomery_core::workspace::Workspace` — `create` (②), `rename`, `archive`
+- [x] `loomery_core::task::Task` — `create`, `rename`, `complete`, `reopen` (Phase-0 slice)
+- [x] `loomery_core::membership` — `WorkspaceMembership` (`add_owner` ③,
+      `add_member`, `change_role`, `remove_member`) and `OrganizationAssignment`
+      (`assign_member`, `remove_member`)
+- [x] Property tests (`proptest`: transition matrix, replay determinism,
+      random-commands-never-crash, fold associativity) for all six aggregates,
+      plus the dedup window
 
-**Phase 0 gate ⏳** — envelope round-trip and dedup properties pass; the
-coverage floor is met. Full transition-matrix property tests for all six
-aggregates remain incomplete.
+**Phase 0 gate ✅** — envelope round-trip and dedup properties pass, and the
+six aggregates carry unit, transition-matrix, invariant and replay property
+tests (`cargo test -p loomery-core`, 143 tests). The coverage/CRAP floor is
+enforced by `mise run crap` in CI. The frozen command/event taxonomy is
+recorded in [`domain-model.md`](domain-model.md).
 
 ### Shell (Phases 1–7)
 - [ ] Phase 1 control plane *(next — orchestration, router and RYW)*
