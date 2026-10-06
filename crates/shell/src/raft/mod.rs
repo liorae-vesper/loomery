@@ -43,6 +43,8 @@ pub mod transport;
 #[cfg(test)]
 mod append_tests;
 #[cfg(test)]
+mod hardening_tests;
+#[cfg(test)]
 mod persistent_tests;
 #[cfg(test)]
 mod proposal_tests;
