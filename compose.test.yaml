@@ -1,0 +1,41 @@
+# Test-only services for the integration suite.
+#
+# Nothing here runs in the default test suite: the Keycloak authenticator and
+# the NATS publisher live behind the `test-services` cargo feature, and the
+# integration tests require the env vars below. Start them with
+# `mise run svc-up` (see docs/testing-services.md).
+#
+# Ports are overridable so the stack can coexist with other local services:
+#   NATS_PORT=4223 NATS_MONITOR_PORT=8223 KEYCLOAK_PORT=8081 mise run svc-up
+name: loomery-test-services
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    # `-js` enables JetStream (the outbox stream), `-m` the monitoring endpoint.
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "${NATS_PORT:-4222}:4222"
+      - "${NATS_MONITOR_PORT:-8222}:8222"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+    tmpfs:
+      # JetStream state is disposable in tests.
+      - /data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    # `--import-realm` picks up the mounted realm below on first boot.
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./scripts/test-services/keycloak:/opt/keycloak/data/import:ro

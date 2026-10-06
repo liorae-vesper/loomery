@@ -1,0 +1,90 @@
+{
+  "realm": "loomery",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "accessTokenLifespan": 600,
+  "clientScopes": [
+    {
+      "name": "loomery-groups",
+      "description": "Puts the user's groups into the token and the userinfo response",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "claim.name": "groups"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "loomery-gateway",
+      "name": "Loomery gateway",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": true,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "defaultClientScopes": ["profile", "email", "loomery-groups"]
+    }
+  ],
+  "groups": [
+    {
+      "name": "admins",
+      "path": "/admins"
+    }
+  ],
+  "users": [
+    {
+      "username": "ada",
+      "enabled": true,
+      "email": "ada@example.com",
+      "firstName": "Ada",
+      "lastName": "Lovelace",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "ada",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@example.com",
+      "firstName": "Admin",
+      "lastName": "Loomery",
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin",
+          "temporary": false
+        }
+      ],
+      "groups": ["/admins"]
+    }
+  ]
+}

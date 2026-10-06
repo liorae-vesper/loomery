@@ -60,3 +60,29 @@ run = "python3 scripts/bench-batch-matrix.py"
 [tasks.test-consensus-failures]
 description = "Injects replica crashes, quorum loss and lost replies during durable writes"
 run = "python3 scripts/test-consensus-failures.py"
+
+[tasks.svc-up]
+description = "Starts the Keycloak and NATS JetStream test services"
+run = """
+docker compose -f compose.test.yaml up -d
+bash scripts/test-services/wait-for-services.sh
+"""
+
+[tasks.svc-down]
+description = "Stops the test services and removes their state"
+run = "docker compose -f compose.test.yaml down -v"
+
+[tasks.verify-services]
+description = "Lints the test-services adapters (Keycloak, NATS)"
+run = "cargo clippy -p loomery-shell --all-targets --features test-services -- -D warnings"
+
+[tasks.test-services]
+description = "Runs the Keycloak/NATS integration tests against local services"
+run = """
+docker compose -f compose.test.yaml up -d
+bash scripts/test-services/wait-for-services.sh
+cargo clippy -p loomery-shell --all-targets --features test-services -- -D warnings
+export LOOMERY_TEST_NATS_URL="${LOOMERY_TEST_NATS_URL:-nats://127.0.0.1:4222}"
+export LOOMERY_TEST_KEYCLOAK_URL="${LOOMERY_TEST_KEYCLOAK_URL:-http://127.0.0.1:8080}"
+cargo test -p loomery-shell --features test-services --test test_services
+"""

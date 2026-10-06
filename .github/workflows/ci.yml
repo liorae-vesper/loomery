@@ -35,6 +35,30 @@ jobs:
       - name: Run tests
         run: mise run test
 
+  test-services:
+    name: Test services (Keycloak + NATS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Start test services
+        run: docker compose -f compose.test.yaml up -d
+
+      - name: Wait for services
+        run: bash scripts/test-services/wait-for-services.sh
+
+      - name: Run integration tests
+        env:
+          LOOMERY_TEST_NATS_URL: nats://127.0.0.1:4222
+          LOOMERY_TEST_KEYCLOAK_URL: http://127.0.0.1:8080
+        run: cargo test -p loomery-shell --features test-services --test test_services
+
+      - name: Stop test services
+        if: always()
+        run: docker compose -f compose.test.yaml down -v
+
   quality:
     name: Quality (coverage + CRAP)
     runs-on: ubuntu-latest
