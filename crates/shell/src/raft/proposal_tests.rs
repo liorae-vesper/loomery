@@ -96,17 +96,25 @@ async fn concurrent_writers_share_an_entry_and_recover_each_command_in_both_mode
         let recovered = boot(directory.path(), recovery_config).await;
         let writer = recovered.writer();
         let [first, second, third] = commands();
+        let fingerprints = [
+            first.fingerprint(),
+            second.fingerprint(),
+            third.fingerprint(),
+        ];
         let (a, b, c) = tokio::join!(
             writer.propose(first),
             writer.propose(second),
             writer.propose(third)
         );
-        let replayed = ProposeOutcome::Replayed {
-            first_log_index: before + 1,
-        };
-        assert_eq!(a.unwrap(), replayed);
-        assert_eq!(b.unwrap(), replayed);
-        assert_eq!(c.unwrap(), replayed);
+        for (outcome, fingerprint) in [(a, 0), (b, 1), (c, 2)] {
+            assert_eq!(
+                outcome.unwrap(),
+                ProposeOutcome::Replayed {
+                    first_log_index: before + 1,
+                    fingerprint: fingerprints[fingerprint].clone(),
+                }
+            );
+        }
         assert_eq!(
             recovered
                 .state_machine

@@ -283,3 +283,127 @@ async fn an_invited_user_is_provisioned_and_can_work_on_the_board() {
         "the provisioned user can write and read the board"
     );
 }
+
+#[allow(clippy::too_many_lines)] // The flow *is* the test: dedup, conflict, RYW and the admin claim.
+#[tokio::test]
+async fn a_reused_causation_key_is_a_conflict_and_reads_are_your_writes() {
+    let organization_id = Id::from("018f2c3d-4e5f-7071-8293-a4b5c6d7e8f9");
+    let workspace_id = Id::from("018f2c3d-4e5f-7071-8293-a4b5c6d7e8fa");
+    let task_id = Id::from("018f2c3d-4e5f-7071-8293-a4b5c6d7e8fb");
+
+    let mut control = RaftGroup::boot_single_node(1).await.unwrap();
+    let mut tenant = RaftGroup::boot_single_node(1).await.unwrap();
+    let router = Arc::new(Router::new());
+    provision(
+        &mut control,
+        &mut tenant,
+        &router,
+        GROUP,
+        &replicas(),
+        &bootstrap_value(),
+    )
+    .await
+    .unwrap();
+
+    let groups = Arc::new(OneGroup {
+        group: tenant.clone(),
+    });
+    let authenticator = Arc::new(StaticAuthenticator::new().with_token(
+        "member",
+        Identity {
+            user_id: Id::from("018f2c3d-4e5f-7071-8293-a4b5c6d7e8f0"),
+            is_admin: false,
+        },
+    ));
+    let plane = CommandPlane::new(
+        router.clone(),
+        groups.clone(),
+        authenticator,
+        Duration::from_millis(50),
+    );
+
+    // A client-supplied idempotency key (a canonical UUIDv5).
+    let causation_id =
+        loomery_core::key::Key::new(&loomery_core::Uuid::from_u128(1), "create-task").to_string();
+    let request = |payload: serde_json::Value| CommandRequest {
+        organization_id: organization_id.clone(),
+        aggregate_id: task_id.clone(),
+        workspace_id: Some(workspace_id.clone()),
+        command_type: "task.create".to_owned(),
+        payload,
+        causation_id: Some(causation_id.clone()),
+        correlation_id: None,
+        token: Some("member".to_owned()),
+    };
+
+    // 1. the first write appends.
+    let first = plane
+        .submit(request(json!({ "title": "first" })))
+        .await
+        .unwrap();
+    assert!(matches!(
+        first.outcome,
+        crate::group::ProposeOutcome::Appended { .. }
+    ));
+
+    // 2. an exact retry replays and does not duplicate.
+    let retry = plane
+        .submit(request(json!({ "title": "first" })))
+        .await
+        .unwrap();
+    assert!(matches!(
+        retry.outcome,
+        crate::group::ProposeOutcome::Replayed { .. }
+    ));
+    assert_eq!(
+        tenant
+            .committed_events(&organization_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|event| event.event_type == "task.created")
+            .count(),
+        1
+    );
+
+    // 3. the same key with a different intent is a conflict, not a replay.
+    let conflict = plane.submit(request(json!({ "title": "different" }))).await;
+    assert!(matches!(
+        conflict,
+        Err(crate::gateway::CommandError::KeyReused)
+    ));
+
+    // 4. read-your-writes: the caller's own write is already visible locally.
+    let applied = tenant
+        .raft()
+        .metrics()
+        .borrow()
+        .last_applied
+        .map_or(0, |log_id| log_id.index);
+    assert_eq!(
+        crate::gateway::ensure_min_index(&tenant, applied, Duration::from_millis(50)).await,
+        crate::gateway::RywOutcome::Recent
+    );
+    assert!(
+        tenant
+            .committed_events(&organization_id)
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| event.event_type == "task.created")
+    );
+
+    // 5. an admin-only command is rejected for a member.
+    let forbidden = plane
+        .submit(CommandRequest {
+            command_type: loomery_core::org::ARCHIVE.to_owned(),
+            ..request(json!({}))
+        })
+        .await;
+    assert!(matches!(
+        forbidden,
+        Err(crate::gateway::CommandError::Auth(
+            crate::gateway::AuthError::Forbidden
+        ))
+    ));
+}

@@ -97,6 +97,10 @@ pub enum CommandError {
     /// A supplied id was not a canonical `UUIDv5` key.
     #[error("the supplied key is not a canonical UUIDv5")]
     InvalidKey,
+    /// A causation key came back carrying a different intent (D12): a conflict,
+    /// not a replay.
+    #[error("the causation key was reused for a different command")]
+    KeyReused,
     /// Edge pre-computation refused the payload.
     #[error(transparent)]
     PreCompute(#[from] PreComputeError),
@@ -221,12 +225,24 @@ impl CommandPlane {
         let command = self.build_command(request)?;
         let group = self.group_for(&command.organization_id)?;
         let causation_key = command.causation_key.clone();
+        let fingerprint = command.fingerprint();
 
         let mut group = group;
         let outcome = group
             .propose(command)
             .await
             .map_err(CommandError::Propose)?;
+
+        // A replay whose recorded fingerprint differs is a reused key on a
+        // different request — answer a conflict, never the recorded result.
+        if let ProposeOutcome::Replayed {
+            fingerprint: recorded,
+            ..
+        } = &outcome
+            && recorded != &fingerprint
+        {
+            return Err(CommandError::KeyReused);
+        }
 
         Ok(CommandOutcome {
             outcome,

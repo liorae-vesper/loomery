@@ -203,7 +203,13 @@ impl GroupOps for RaftGroup {
 pub(super) fn outcome(applied: Applied) -> anyhow::Result<ProposeOutcome> {
     Ok(match applied {
         Applied::Appended { first_log_index } => ProposeOutcome::Appended { first_log_index },
-        Applied::Replayed { first_log_index } => ProposeOutcome::Replayed { first_log_index },
+        Applied::Replayed {
+            first_log_index,
+            fingerprint,
+        } => ProposeOutcome::Replayed {
+            first_log_index,
+            fingerprint,
+        },
         Applied::Rejected { code, message } => {
             return Err(anyhow::Error::new(ProposeError::Rejected { code, message }));
         }

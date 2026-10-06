@@ -404,6 +404,7 @@ fn apply_organization(group: &mut GroupState, command: Command, log_index: u64) 
         }
         Replayed { index } => Applied::Replayed {
             first_log_index: to_u64(index),
+            fingerprint: recorded_fingerprint(group, &key, fingerprint.clone()),
         },
         loomery_core::aggregate::Processed::Error(error) => rejected(error.code, &error.message),
     }
@@ -441,6 +442,7 @@ fn apply_workspace(group: &mut GroupState, command: Command, log_index: u64) -> 
         }
         Replayed { index } => Applied::Replayed {
             first_log_index: to_u64(index),
+            fingerprint: recorded_fingerprint(group, &key, fingerprint.clone()),
         },
         loomery_core::aggregate::Processed::Error(error) => rejected(error.code, &error.message),
     }
@@ -478,6 +480,7 @@ fn apply_membership(group: &mut GroupState, command: Command, log_index: u64) ->
         }
         Replayed { index } => Applied::Replayed {
             first_log_index: to_u64(index),
+            fingerprint: recorded_fingerprint(group, &key, fingerprint.clone()),
         },
         loomery_core::aggregate::Processed::Error(error) => rejected(error.code, &error.message),
     }
@@ -518,6 +521,7 @@ macro_rules! drive_plan {
                 }
                 Replayed { index } => Applied::Replayed {
                     first_log_index: to_u64(index),
+                    fingerprint: recorded_fingerprint(group, &key, fingerprint.clone()),
                 },
                 Processed::Error(error) => rejected(error.code, &error.message),
             }
@@ -542,6 +546,15 @@ drive_plan!(
     InvitationCode,
     Invitation
 );
+
+/// The fingerprint recorded for `key`, or `fallback` when the registry has no
+/// entry (a replay always has one; this only guards a raced eviction).
+fn recorded_fingerprint(group: &GroupState, key: &Key, fallback: Key) -> Key {
+    group
+        .registry
+        .lookup(key)
+        .map_or(fallback, |entry| entry.fingerprint().clone())
+}
 
 /// Records a committed command in the dedup window and mirrors it for snapshots.
 fn record(group: &mut GroupState, key: Key, fingerprint: Key, log_index: u64) {
@@ -859,7 +872,8 @@ mod tests {
         assert_eq!(
             results[1],
             Applied::Replayed {
-                first_log_index: 42
+                first_log_index: 42,
+                fingerprint: first.fingerprint(),
             }
         );
         assert!(matches!(results[2], Applied::Rejected { .. }));

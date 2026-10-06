@@ -24,6 +24,7 @@
 //! in the state-machine module.
 
 use loomery_core::envelope::Command;
+use loomery_core::key::Key;
 use openraft::TokioRuntime;
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +88,9 @@ pub enum Applied {
     Replayed {
         /// Raft index containing the original command.
         first_log_index: u64,
+        /// Fingerprint the original command recorded, so a caller can tell a
+        /// replay from a reused key carrying a different intent (D12).
+        fingerprint: Key,
     },
     /// The command was committed but the aggregate refused it.
     Rejected {

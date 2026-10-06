@@ -11,9 +11,10 @@ use std::future::Future;
 
 use loomery_core::envelope::{Command, Event};
 use loomery_core::id::Id;
+use loomery_core::key::Key;
 
 /// What a proposal did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProposeOutcome {
     /// The command was appended and applied.
     Appended {
@@ -26,6 +27,11 @@ pub enum ProposeOutcome {
     Replayed {
         /// Raft index containing the original command.
         first_log_index: u64,
+        /// Fingerprint the original command recorded. A caller that gets a
+        /// replay compares this with its own command's fingerprint: a mismatch
+        /// means the key was reused for a different intent (D12), which is a
+        /// conflict, not a replay.
+        fingerprint: Key,
     },
 }
 

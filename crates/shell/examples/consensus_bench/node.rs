@@ -290,9 +290,9 @@ async fn sample(
     let (index, error, replayed) = match result {
         Ok(Ok(response)) => match response {
             ProposeOutcome::Appended { first_log_index } => (Some(first_log_index), None, false),
-            ProposeOutcome::Replayed { first_log_index } if allow_replay => {
-                (Some(first_log_index), None, true)
-            }
+            ProposeOutcome::Replayed {
+                first_log_index, ..
+            } if allow_replay => (Some(first_log_index), None, true),
             other @ ProposeOutcome::Replayed { .. } => {
                 (None, Some(format!("unexpected outcome: {other:?}")), true)
             }

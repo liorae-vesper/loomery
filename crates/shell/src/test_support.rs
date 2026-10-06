@@ -62,12 +62,15 @@ impl FakeGroup {
 
     fn apply(&mut self, command: &Command) -> anyhow::Result<ProposeOutcome> {
         // The state machine's dedup window: same intent, no new events.
-        if self
+        if let Some(previous) = self
             .appended
             .iter()
-            .any(|previous| previous.causation_key == command.causation_key)
+            .find(|previous| previous.causation_key == command.causation_key)
         {
-            return Ok(ProposeOutcome::Replayed { first_log_index: 0 });
+            return Ok(ProposeOutcome::Replayed {
+                first_log_index: 0,
+                fingerprint: previous.fingerprint(),
+            });
         }
 
         self.appended.push(command.clone());

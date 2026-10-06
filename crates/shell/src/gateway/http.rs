@@ -210,7 +210,7 @@ impl IntoResponse for HttpError {
                     }
                     CommandError::Auth(AuthError::Forbidden) => StatusCode::FORBIDDEN,
                     CommandError::UnknownOrganization => StatusCode::NOT_FOUND,
-                    CommandError::NotActive => StatusCode::CONFLICT,
+                    CommandError::NotActive | CommandError::KeyReused => StatusCode::CONFLICT,
                     CommandError::GroupUnavailable | CommandError::Propose(_) => {
                         StatusCode::SERVICE_UNAVAILABLE
                     }
