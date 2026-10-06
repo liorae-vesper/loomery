@@ -32,7 +32,9 @@ pub mod id;
 pub mod key;
 pub mod membership;
 pub mod org;
+pub mod task;
 pub mod timestamp;
+pub mod user;
 pub mod versioning;
 pub mod workspace;
 

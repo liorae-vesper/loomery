@@ -452,3 +452,76 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod robustness {
+    use super::AggregatePlan;
+    use super::process;
+    use crate::actor::Actor;
+    use crate::dedup::Registry;
+    use crate::envelope::Command;
+    use crate::envelope::Payload;
+    use crate::id::Id;
+    use crate::key::Key;
+    use crate::membership::OrganizationAssignment;
+    use crate::membership::OrganizationAssignmentState;
+    use crate::membership::WorkspaceMembership;
+    use crate::membership::WorkspaceMembershipState;
+    use crate::org::Organization;
+    use crate::org::OrganizationCode;
+    use crate::org::OrganizationState;
+    use crate::task::Task;
+    use crate::task::TaskState;
+    use crate::timestamp::Timestamp;
+    use crate::user::User;
+    use crate::user::UserState;
+    use crate::workspace::Workspace;
+    use crate::workspace::WorkspaceState;
+    use proptest::prelude::*;
+    use uuid::Uuid;
+
+    const NS: Uuid = Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);
+
+    fn command(command_type: &str, data: &str) -> Command {
+        Command {
+            envelope_version: 1,
+            id: Id::from("cmd-fuzz"),
+            aggregate_id: Id::from("agg-fuzz"),
+            organization_id: Id::from("org-fuzz"),
+            workspace_id: Some(Id::from("ws-fuzz")),
+            occurred_at: Timestamp::from(1_700_000_000_000),
+            causation_key: Key::new(&NS, command_type),
+            correlation_key: Key::new(&NS, "fuzz"),
+            actor: Actor::System,
+            command_type: command_type.to_owned(),
+            payload: Payload {
+                version: 1,
+                data: data.to_owned(),
+            },
+        }
+    }
+
+    proptest! {
+        // Arbitrary command types and payload bytes never make any Phase-0 plan
+        // panic: each `prepare` either executes or returns a domain error, on a
+        // fresh state and (through `process`) with the dedup check in front.
+        #[test]
+        fn arbitrary_commands_never_panic(command_type in ".*", data in ".*") {
+            let command = command(&command_type, &data);
+            let registry = Registry::new(8);
+
+            let _ = Organization::prepare(OrganizationState::default(), command.clone());
+            let _ = User::prepare(UserState::default(), command.clone());
+            let _ = Workspace::prepare(WorkspaceState::default(), command.clone());
+            let _ = WorkspaceMembership::prepare(WorkspaceMembershipState::default(), command.clone());
+            let _ = OrganizationAssignment::prepare(OrganizationAssignmentState::default(), command.clone());
+            let _ = Task::prepare(TaskState::default(), command.clone());
+
+            let _ = process::<OrganizationState, OrganizationCode, Organization>(
+                OrganizationState::default(),
+                &registry,
+                command,
+            );
+        }
+    }
+}
