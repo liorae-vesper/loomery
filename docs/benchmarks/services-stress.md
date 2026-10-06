@@ -97,10 +97,13 @@ Two things the runs show that are worth recording:
 - **Not an isolated component measurement.** Host CPU, the Keycloak dev-mode
   server, the broker and the JVM all share the machine. Percentiles include
   queueing in every one of them.
-- **A failure is a finding, not a flake.** If the host or Keycloak saturates, a
-  valid token can fail to authenticate and the run fails loudly. Lower
-  `LOOMERY_STRESS_WORKERS` rather than retrying, and treat the lower ceiling as
-  the result.
+- **A failed valid token would be a finding, not a flake — and none appeared in
+  the runs above.** Every `auth` run resolved all 8,000 calls with zero
+  mismatches and exactly the planned class counts. The point is what to do if one
+  ever does fail: it means the host or Keycloak saturated, so lower
+  `LOOMERY_STRESS_WORKERS` and report the lower ceiling, rather than retrying
+  until a clean run appears. The harness fails loudly (it never retries or
+  ignores an error), so a green run means every call really answered.
 - **Small profiles are dominated by setup.** Boot, token acquisition and stream
   info calls are included in wall-clock time, so the default (larger) profiles
   are the ones to compare; `--quick` exists for smoke runs, not for numbers.
