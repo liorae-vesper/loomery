@@ -1,8 +1,9 @@
 # Shell reference
 
 `crates/shell` owns the imperative boundary around the deterministic core:
-consensus, storage, peer networking and the genesis worker. It remains a library;
-there is no deployed gateway or control-plane process yet.
+consensus, storage, peer networking and the genesis worker. It remains a library:
+the gateway, control-plane, outbox and saga modules exist, but no process is
+deployed yet.
 [implementation.md](implementation.md) traces build, startup and storage/network
 wiring with a complete example. For a walkthrough,
 read the [group port](tutorials/shell-group.md),
@@ -28,6 +29,10 @@ read the [group port](tutorials/shell-group.md),
 | `raft/tls.rs` | Certificate/identity validation and tonic TLS configuration |
 | `raft/suite.rs`, `raft/persistent_tests.rs`, `raft/tls_tests.rs` | Storage, recovery, networking and TLS tests |
 | `raft/append_tests.rs`, `raft/proposal_tests.rs` | Flush callbacks, batching, limits and batched recovery |
+| `control/` | Tenant records projected into the `Router`; `provision`/`incomplete`/`resume` |
+| `gateway/` | Identity + admin claim, argon2 pre-compute, command plane, `X-Min-Index` gate, axum adapter |
+| `outbox/` | Applied-event tailer, D11 message identity and a resumable cursor |
+| `saga/` | Consumer, `SagaRunner` retry classification and the invitation acceptance saga |
 | `test_support.rs` | Test-only fake group and fixtures |
 
 Dependencies point from shell to genesis/core; the core never imports the shell.
@@ -56,7 +61,9 @@ Commands in a batch share a Raft read-barrier index. See
   events before deciding whether to propose the same intent again.
 - `Replayed` is successful deduplication, not another appended event.
 
-Read-your-writes gateway enforcement is planned in [design.md §2.3](design.md#23-consistency-eventual--read-your-writes).
+Read-your-writes is enforced in the gateway ([`gateway.md`](gateway.md)):
+`ensure_min_index` waits for the `X-Min-Index` position to be applied, then
+serves, forwards to the leader or answers `503`.
 
 ## Genesis worker
 
@@ -131,7 +138,9 @@ TLS/mTLS and immutable mode protection. The
 [controlled benchmark](benchmarks/README.md) exercises real replica processes,
 leader failures and whole-cluster recovery.
 
-The gateway, tenant router/control group, RYW middleware, outbox, NATS saga
-runner and observability remain planned. Domain aggregates currently implement
-the bootstrap slice. The authoritative roadmap is [design.md §8](design.md#8-progress-tracker);
-next work is summarized in [CONTINUE.md](CONTINUE.md).
+The gateway, tenant router/control group, RYW middleware, outbox and saga
+runner are implemented ([gateway.md](gateway.md), [control-plane.md](control-plane.md),
+[outbox-and-sagas.md](outbox-and-sagas.md)); the OIDC and NATS bindings are
+deployment wiring, and observability is still to come. The authoritative roadmap
+is [design.md §8](design.md#8-progress-tracker); next work is summarized in
+[CONTINUE.md](CONTINUE.md).

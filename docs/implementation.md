@@ -16,7 +16,11 @@ and planned components, use [design.md](design.md).
 The [workspace manifest](../Cargo.toml) discovers `crates/*`, shares package
 settings and enforces lints. The shell is a library, not a complete application
 server. The embedding application owns its Tokio runtime, listeners, group
-lifecycle and shutdown. The gateway, control-plane router and outbox are planned.
+lifecycle and shutdown. The gateway, control-plane router, outbox and sagas are
+implemented in the shell library ([`gateway.md`](gateway.md),
+[`control-plane.md`](control-plane.md), [`outbox-and-sagas.md`](outbox-and-sagas.md));
+the host still owns the HTTP server, the broker connection and its group
+registry.
 
 ```sh
 mise install
@@ -217,9 +221,10 @@ helper: it uses memory and a no-op network, and initializes its single voter.
 ### Add a group when a tenant is created
 
 The APIs above can create and register groups at runtime. The tenant-creation
-controller, durable placement records and router are **not implemented yet**.
-The following is the intended host orchestration, not an existing `create_tenant`
-API or a set of implemented control-plane commands:
+controller, placement records and router **are** implemented
+([`shell::control`](../crates/shell/src/control), [`control-plane.md`](control-plane.md));
+the host still owns replica booting, transport registration and the periodic
+reconciliation sweep. The following is the host orchestration around them:
 
 1. Record the tenant identity and intended replica placement in the control
    plane, with a provisioning status. Retain the same organization ID,
@@ -269,9 +274,10 @@ The intended sequence is:
    the tombstone so retained databases cannot resurrect the tenant.
 2. Resolve in-flight requests and any required committed outbox delivery or
    archival before stopping the group. The desired deletion/retention policy
-   must define what happens to pending integration work; the outbox is not yet
-   implemented. Cross-group coordination uses the planned choreography model,
-   not an atomic transaction spanning the control and tenant groups.
+   must define what happens to pending integration work; the outbox and saga
+   runner exist ([`outbox-and-sagas.md`](outbox-and-sagas.md)) but the NATS
+   binding is deployment wiring. Cross-group coordination uses that choreography
+   model, not an atomic transaction spanning the control and tenant groups.
 3. On **every replica host**, remove the group from the host's application
    registry, call `group.shutdown().await?`, unregister its peer-RPC route and
    release every clone of its group/writer/Raft/storage handles. Hosts report completion
@@ -401,9 +407,10 @@ re-read before retrying. The [genesis worker](tutorials/genesis-worker.md) follo
 that rule to resume provisioning without duplicating completed steps.
 
 `committed_events` reads the local state machine directly. It does not ask a
-quorum and may lag on followers. The planned RYW gateway must wait for the
-requested minimum applied index or forward to the leader; it is not implemented
-by this read method.
+quorum and may lag on followers. The gateway applies the read-your-writes gate
+around it (`gateway::ensure_min_index`, the `X-Min-Index` header): it waits for
+the requested minimum applied index, or answers a leader hint / `503` rather
+than stale data. The read method itself stays a local read.
 
 ## 8. How storage, snapshots and restart connect
 

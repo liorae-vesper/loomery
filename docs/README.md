@@ -35,6 +35,8 @@ networked deployment.
 - [Command batching](benchmarks/batching.md) — bounded proposal batches, semantics and paired throughput results.
 - [Batch-size matrix](benchmarks/batch-matrix.md) — configurable count/concurrency sweeps, randomized repeats and observed batch distributions.
 - [Failure injection](benchmarks/failure-injection.md) — crashes during writes, quorum loss, lost replies and flush-callback failures.
+- [Persistence hardening](benchmarks/persistence-hardening.md) — long-history restart validation in both modes, and the gaps left open.
+- [Multi-group probe](benchmarks/multigroup.md) — co-resident group read/write capacity, methodology and limits.
 - [Example workload](benchmarks/consensus.json) — configuration for the release harness.
 
 The paired runner is executable tooling in

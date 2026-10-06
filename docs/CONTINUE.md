@@ -7,8 +7,11 @@ workspace with a deterministic core and an imperative Tokio/OpenRaft shell.
 ## Implemented
 
 - Core envelope, identity, timestamp, actor, errors, aggregate execution,
-  versioning contracts and the bounded dedup registry. Organization, workspace
-  and membership implement the genesis slice; full domain coverage is pending.
+  versioning contracts and the bounded dedup registry. The six Phase-0
+  aggregates are implemented (organization, user, workspace, membership +
+  organization assignment, task) with transition-matrix, invariant and replay
+  property tests, plus the invitation and tenant-placement aggregates; see
+  [domain-model.md](domain-model.md).
 - Deterministic genesis script and async bootstrap worker. The worker re-reads
   applied events before retrying an unknown outcome, using derived causation
   keys to avoid duplicate provisioning.
@@ -40,6 +43,22 @@ workspace with a deterministic core and an imperative Tokio/OpenRaft shell.
   convergence checks after recovery. Append tests inject a flush callback error
   and require Raft to stop without acknowledging or applying the batch.
   See [failure injection](benchmarks/failure-injection.md).
+- Control plane: tenant placement records, the `organization_id → group` router
+  projection, and a tenant-creation controller with startup/retry reconciliation
+  ([control-plane.md](control-plane.md)).
+- Gateway: identity + admin claim, argon2 edge pre-compute, a command plane with
+  causation minting and `409` on key reuse, and the `X-Min-Index`
+  read-your-writes gate over axum ([gateway.md](gateway.md)).
+- Outbox and sagas: committed events publish with the D11 dedup identity and a
+  resumable cursor; `SagaRunner` consumes with ack/retry classification and the
+  invitation acceptance saga provisions assignment + membership replay-safely
+  ([outbox-and-sagas.md](outbox-and-sagas.md)).
+- Phase-1 end-to-end acceptance in the default suite: onboarding, invitation and
+  consistency (dedup replay, key reuse conflict, RYW, admin claim).
+- Persistence hardening: a 300-command history survives restart in both modes
+  ([persistence-hardening.md](benchmarks/persistence-hardening.md)); a
+  co-resident multi-group probe records read/write capacity
+  ([multigroup.md](benchmarks/multigroup.md)).
 
 See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
 [checkpoint policy](research/checkpoint-policy.md) and
@@ -47,7 +66,10 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
 
 ## Next work
 
-1. Finish Phase 0 aggregates and their transition-matrix/replay property tests.
+1. ~~Finish Phase 0 aggregates and their transition-matrix/replay property
+   tests.~~ **Done:** all six, plus the invitation and tenant-placement
+   aggregates, each with unit, transition-matrix, invariant and replay
+   property tests.
 2. ~~Build control-plane tenant lifecycle and router projections.~~ **Done:**
    `shell::control` holds the tenant router projection, `provision`
    (register → genesis → activate → route) and `incomplete`/`resume` for the
@@ -66,7 +88,11 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
    deployment wiring behind `LOOMERY_NATS_URL`.
 5. Extend persistence validation to large histories, interrupted snapshot
    creation/installation/purge and storage failures before changing the default.
-   Multi-group mixed read/write capacity has not been benchmarked.
+   **Partly done:** a 300-command history survives restart in both modes, and a
+   co-resident multi-group capacity probe is recorded. The remaining gaps
+   (interrupted snapshot build/purge injection, large-history soak,
+   deployment-level capacity) are listed in
+   [benchmarks/persistence-hardening.md](benchmarks/persistence-hardening.md).
 
 D1 (OpenRaft/tonic) and D2 (RocksDB) are selected. FTS and vector-store decisions
 remain Phase 4 work. Preserve the original research when revisiting decisions.
