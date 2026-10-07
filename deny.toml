@@ -11,6 +11,17 @@ unmaintained = "all"  # Fail on any unmaintained crate (direct or transitive)
 unsound = "all"       # Fail on any unsound crate (direct or transitive)
 yanked = "deny"       # Deny yanked crate versions (common attack vector)
 
+# RUSTSEC-2023-0071 ("Marvin") is a *private-key* timing side channel in the
+# `rsa` crate: "information about the private key is leaked through timing
+# information", and its own workaround section says to avoid the crate "in
+# settings where attackers can observe timing". Loomery never holds an RSA
+# private key in this process: the gateway only *verifies* RS*/PS* signatures
+# against public keys fetched from the identity provider's JWKS, which is what
+# jsonwebtoken's pure-Rust `rust_crypto` backend does (crates/shell/Cargo.toml).
+# The other backend would import the non-OSI `OpenSSL` license and a cmake/C
+# build. Revisit if anything here ever signs or decrypts with RSA.
+ignore = ["RUSTSEC-2023-0071"]
+
 [licenses]
 # cargo-deny 0.20+ denies EVERY license unless explicitly allowed below;
 # the old severity keys (unlicensed/copyleft/allow-osi-fsf-free/default) were removed.

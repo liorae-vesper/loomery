@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MPL-2.0
+#
+# cargo-audit configuration. cargo-audit reads `audit.toml` from the `.cargo`
+# directory of the working directory (or `$CARGO_HOME`), which is why this file
+# lives here rather than at the repository root.
+#
+# RUSTSEC-2023-0071 is ignored for the same reason deny.toml records it: the
+# advisory describes a *private-key* timing side channel in the `rsa` crate, and
+# Loomery only verifies signatures against public JWKS keys — no RSA private key
+# ever enters the process. See deny.toml for the full rationale.
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]

@@ -27,6 +27,10 @@ rocksdb = { version = "0.24", default-features = false, features = ["bindgen-run
 tokio-stream = { version = "0.1", features = ["net"] }
 async-nats = { version = "0.50.0", optional = true, default-features = false, features = ["jetstream", "nkeys"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "form", "rustls-no-provider"], optional = true }
+# JWT/JWKS validation for the runtime OIDC adapter. The crypto backend is a
+# feature in 10+: `rust_crypto` is pure Rust under MIT/Apache, while `aws_lc_rs`
+# would pull the non-OSI `OpenSSL` license and a cmake/C build (see deny.toml).
+jsonwebtoken = { version = "11.1", optional = true, default-features = false, features = ["rust_crypto"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"
@@ -36,12 +40,23 @@ tokio = { version = "1.53.1", features = ["process", "io-util", "io-std"] }
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
 rcgen = "0.14"
+# The offline OIDC tests generate their own key pair and publish a JWKS, so the
+# adapter is exercised against a real signature without a live provider. All
+# three crates are already in the tree (jsonwebtoken's `rust_crypto` backend).
+rsa = "0.9"
+rand = "0.8"
+base64 = "0.22"
 
 [lints]
 workspace = true
 
 [features]
-# Real Keycloak and NATS JetStream adapters for the integration suite
-# (`mise run test-services`). The default build and suite never enable them.
+# The default build and the default suite stay self-contained: neither of the
+# optional runtimes below is compiled without an explicit feature.
 default = []
-test-services = ["dep:async-nats", "dep:reqwest"]
+# The NATS JetStream runtime: outbox publisher, saga consumer and its worker.
+nats = ["dep:async-nats"]
+# Provider-agnostic OIDC: discovery, JWKS and local JWT validation.
+oidc = ["dep:reqwest", "dep:jsonwebtoken"]
+# The compose-backed integration suite (Keycloak + NATS) and the stress harness.
+test-services = ["nats", "oidc"]
