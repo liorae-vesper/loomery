@@ -220,6 +220,48 @@ async fn assign_member(group: &mut RaftGroup, organization_id: &Id, user_id: &Id
     group.propose(command).await.expect("assign the member");
 }
 
+/// Gives `user_id` `role` in `workspace_id`, as genesis ③ and the invitation
+/// flow do.
+async fn join_workspace(
+    group: &mut RaftGroup,
+    organization_id: &Id,
+    workspace_id: &Id,
+    user_id: &Id,
+    role: loomery_core::membership::Role,
+) {
+    let command = Command {
+        envelope_version: 1,
+        id: Id::new(),
+        aggregate_id: loomery_core::membership::workspace_membership_id(
+            organization_id,
+            workspace_id,
+            user_id,
+        ),
+        organization_id: organization_id.clone(),
+        workspace_id: Some(workspace_id.clone()),
+        occurred_at: Timestamp::from(1_700_000_000_000),
+        causation_key: Key::new(
+            &STRESS_NS,
+            &format!("join:{organization_id}:{workspace_id}:{user_id}"),
+        ),
+        correlation_key: Key::new(&STRESS_NS, "test-services"),
+        actor: Actor::System,
+        command_type: loomery_core::membership::ADD_MEMBER.to_owned(),
+        payload: Payload {
+            version: 1,
+            data: format!(
+                r#"{{"user_id":"{user_id}","role":"{}"}}"#,
+                match role {
+                    loomery_core::membership::Role::Owner => "Owner",
+                    loomery_core::membership::Role::Member => "Member",
+                    loomery_core::membership::Role::Viewer => "Viewer",
+                }
+            ),
+        },
+    };
+    group.propose(command).await.expect("join the workspace");
+}
+
 /// Boots a single-node group and returns it with its organization.
 async fn boot(index: usize) -> (Id, RaftGroup) {
     let organization = organization(index);
@@ -415,9 +457,18 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
     // Both authenticated users are members of both tenants, so the writes are
     // authorized (the membership check is what a real deployment gets from the
     // invitation flow).
+    let workspace_id = Id::from(Key::new(&STRESS_NS, "plane-workspace"));
     for (_, organization_id, group) in &mut tenants {
         for identity in &identities {
             assign_member(group, organization_id, &identity.user_id).await;
+            join_workspace(
+                group,
+                organization_id,
+                &workspace_id,
+                &identity.user_id,
+                loomery_core::membership::Role::Member,
+            )
+            .await;
         }
     }
 
@@ -446,6 +497,7 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
         let tokens = tokens.clone();
         let next = Arc::clone(&next);
         let run = run.clone();
+        let workspace_id = workspace_id.clone();
         tasks.push(tokio::spawn(async move {
             let mut accepted = 0usize;
             loop {
@@ -460,7 +512,7 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
                         &STRESS_NS,
                         &format!("plane-task-{run}-{index}"),
                     )),
-                    workspace_id: None,
+                    workspace_id: Some(workspace_id.clone()),
                     command_type: "task.create".to_owned(),
                     payload: json!({ "title": format!("task {index}") }),
                     causation_id: None,
@@ -528,12 +580,13 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
                 .expect("the outbox flush"),
         );
     }
-    // One published message per command, plus one per assignment made above.
-    let assigned = USERS.len() * tenants.len();
+    // One published message per command, plus one per assignment and one per
+    // workspace join made above.
+    let granted = USERS.len() * tenants.len() * 2;
     assert_eq!(
         flushed,
-        total + assigned,
-        "one published message per command and per assignment"
+        total + granted,
+        "one published message per command, assignment and workspace join"
     );
 
     let after_first = publisher.stored_messages().await.expect("stream info");
@@ -692,6 +745,7 @@ async fn the_nats_consumer_peeks_until_acked() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Provision, write over the gateway, publish, restart: the sequence is the test.
 async fn a_host_publishes_committed_events_to_the_real_broker() {
     let url = required("LOOMERY_TEST_NATS_URL");
     let root = tempfile::tempdir().expect("a temporary data directory");
@@ -749,7 +803,20 @@ async fn a_host_publishes_committed_events_to_the_real_broker() {
     .expect("provision a tenant");
     host.start_workers().await.expect("start the workers");
 
-    // A real write through the gateway, then a real publish to JetStream.
+    // A real write through the gateway, then a real publish to JetStream. The
+    // command names the workspace genesis created (a client reads it from the
+    // board), which is what the role check is scoped to.
+    let workspace_id = host
+        .groups()
+        .group(&group)
+        .expect("the tenant is hosted")
+        .state_machine()
+        .committed_events(&organization_id)
+        .await
+        .into_iter()
+        .find(|event| event.event_type == "workspace.created")
+        .map(|event| event.aggregate_id.to_string())
+        .expect("genesis creates the workspace");
     let request = axum::http::Request::builder()
         .method("POST")
         .uri(format!("/organizations/{organization_id}/commands"))
@@ -757,6 +824,7 @@ async fn a_host_publishes_committed_events_to_the_real_broker() {
         .header("content-type", "application/json")
         .body(axum::body::Body::from(
             json!({
+                "workspace_id": workspace_id,
                 "aggregate_id": Id::from(Key::new(&STRESS_NS, &format!("{run}-task"))).to_string(),
                 "command_type": "task.create",
                 "payload": { "title": "from the host" },

@@ -314,6 +314,49 @@ mod stress {
         Ok(())
     }
 
+    /// Gives `user_id` `role` in `workspace_id`, as genesis ③ and the invitation
+    /// flow do.
+    async fn join_workspace(
+        group: &mut RaftGroup,
+        organization_id: &Id,
+        workspace_id: &Id,
+        user_id: &Id,
+        role: loomery_core::membership::Role,
+    ) -> anyhow::Result<()> {
+        let command = Command {
+            envelope_version: 1,
+            id: Id::new(),
+            aggregate_id: loomery_core::membership::workspace_membership_id(
+                organization_id,
+                workspace_id,
+                user_id,
+            ),
+            organization_id: organization_id.clone(),
+            workspace_id: Some(workspace_id.clone()),
+            occurred_at: Timestamp::from(1_700_000_000_000),
+            causation_key: Key::new(
+                &NS,
+                &format!("join:{organization_id}:{workspace_id}:{user_id}"),
+            ),
+            correlation_key: Key::new(&NS, "services-stress"),
+            actor: Actor::System,
+            command_type: loomery_core::membership::ADD_MEMBER.to_owned(),
+            payload: Payload {
+                version: 1,
+                data: format!(
+                    r#"{{"user_id":"{user_id}","role":"{}"}}"#,
+                    match role {
+                        loomery_core::membership::Role::Owner => "Owner",
+                        loomery_core::membership::Role::Member => "Member",
+                        loomery_core::membership::Role::Viewer => "Viewer",
+                    }
+                ),
+            },
+        };
+        group.propose(command).await?;
+        Ok(())
+    }
+
     /// A `task.create` command for the outbox scenario.
     fn task_command(org: &Id, label: &str) -> Command {
         Command {
@@ -575,6 +618,9 @@ mod stress {
     struct Tenant {
         group_id: String,
         organization_id: Id,
+        /// The workspace the profile's commands name (the role check is scoped to
+        /// it; a deployment reads it from the board).
+        workspace_id: Id,
         group: RaftGroup,
     }
 
@@ -634,6 +680,7 @@ mod stress {
             tenants.push(Tenant {
                 group_id: group_id(index),
                 organization_id,
+                workspace_id: Id::from(Key::new(&NS, &format!("outbox-workspace-{index}"))),
                 group,
             });
         }
@@ -844,13 +891,23 @@ mod stress {
             // organization they write to (a real deployment gets this from the
             // invitation flow).
             let mut group = group;
+            let workspace_id = Id::from(Key::new(&NS, &format!("workspace-{index}")));
             for identity in &expected {
                 assign_member(&mut group, &organization(index), &identity.user_id).await?;
+                join_workspace(
+                    &mut group,
+                    &organization(index),
+                    &workspace_id,
+                    &identity.user_id,
+                    loomery_core::membership::Role::Member,
+                )
+                .await?;
             }
             registry.insert(group_id(index), group.clone());
             tenants.push(Tenant {
                 group_id: group_id(index),
                 organization_id: organization(index),
+                workspace_id,
                 group,
             });
         }
@@ -864,6 +921,12 @@ mod stress {
 
         // Every command authenticates against Keycloak before it is proposed.
         let total = groups.saturating_mul(commands);
+        let workspaces: Arc<Vec<Id>> = Arc::new(
+            tenants
+                .iter()
+                .map(|tenant| tenant.workspace_id.clone())
+                .collect(),
+        );
         let latencies = Arc::new(Latencies::default());
         let failures = Arc::new(Mutex::new(Vec::new()));
         let next = Arc::new(AtomicUsize::new(0));
@@ -872,6 +935,7 @@ mod stress {
         for _ in 0..workers {
             let plane = Arc::clone(&plane);
             let sessions = sessions.clone();
+            let workspaces = Arc::clone(&workspaces);
             let (next, latencies, failures) = (
                 Arc::clone(&next),
                 Arc::clone(&latencies),
@@ -884,10 +948,11 @@ mod stress {
                         break;
                     }
                     let slot = index.rem_euclid(USERS.len());
+                    let tenant = index.div_euclid(commands);
                     let request = CommandRequest {
-                        organization_id: organization(index.div_euclid(commands)),
+                        organization_id: organization(tenant),
                         aggregate_id: Id::from(Key::new(&NS, &format!("e2e-task-{index}"))),
-                        workspace_id: None,
+                        workspace_id: workspaces.get(tenant).cloned(),
                         command_type: COMMAND.to_owned(),
                         payload: json!({ "title": format!("task {index}") }),
                         causation_id: None,

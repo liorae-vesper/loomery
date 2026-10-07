@@ -167,14 +167,19 @@ in hand.
 
 ## Access control
 
-| Which caller | Reads | Writes | Provision |
-|---|---|---|---|
-| Anyone with a valid token | ❌ unless a member | ❌ unless a member | ❌ |
-| A member of the organization (assignment or workspace role) | ✅ | ✅ | ❌ |
-| A system administrator (`is_admin`) | ✅ | ✅ | ✅ |
+| Which caller | Reads | Workspace commands | Membership/archive | Invite | Provision |
+|---|---|---|---|---|---|
+| Anyone with a valid token | ❌ unless a member | ❌ | ❌ | ❌ | ❌ |
+| `Viewer` in the workspace | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `Member` in the workspace | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `Owner` of any workspace of the organization | ✅ | ✅ | ✅ | ✅ | ❌ |
+| A system administrator (`is_admin`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 `invitation.accept` is the single write open to non-members: the invitee is a
 stranger until the acceptance (and the saga that follows) makes them a member.
+The role tables live in one place
+([`required_workspace_role`](../crates/shell/src/gateway/identity.rs)), and the
+membership index that answers them is derived from the applied events.
 
 ## Known gaps
 
@@ -185,19 +190,16 @@ Stated rather than hidden, each with the work that closes it:
   means driving `RaftGroup::raft` membership and a shared placement, which is
   the deployment runbook's job (Phase 7). `HostConfig::node_address` is already
   the address a placement records.
-- **Authorization is organization-wide.** Membership (or the admin claim) gates
-  everything; *per-workspace roles* are not consulted yet — an organization
-  member may read and write every workspace of it. That arrives with the read
-  models, where the query API can ask for the role a command needs.
+- **Reads are organization-wide.** Writes are checked against the role in the
+  workspace they name, but a *read* only needs organization membership, so a
+  `Viewer` of one workspace can read the organization's whole event log. Scoping
+  reads to workspaces belongs to the read models, which is also where a query API
+  can ask for a role.
 - **The invitation trusts its payload.** `invitation.accept` accepts the
   `user_id` it is given, so it cannot check that the accepting caller *is* the
   invited person; binding an email or the authenticated actor to the invitation
   is the invitation work. This is why the membership exemption is exactly one
   command wide.
-- **The membership check scans applied state.** `is_organization_member` looks
-  up the assignment stream's derived id (O(1)) and scans the group's aggregate
-  states for a workspace role. Correct, and cheap at today's sizes; the read
-  models replace it with an indexed query.
 - **No observability stack.** Worker reports, reconciliation and startup go to
   stderr; tracing and OpenTelemetry are Phase 7.
 - **Snapshot-backed recovery is still experimental** (`group.storage.state_persistence`):

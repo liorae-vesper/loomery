@@ -14,9 +14,13 @@ use std::pin::Pin;
 
 use loomery_core::id::Id;
 use loomery_core::invitation;
+use loomery_core::membership;
+use loomery_core::membership::Role;
 use loomery_core::org;
+use loomery_core::task;
 use loomery_core::tenant;
 use loomery_core::user;
+use loomery_core::workspace;
 
 /// Who is calling.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +104,37 @@ pub fn is_admin_only(command_type: &str) -> bool {
     )
 }
 
+/// The workspace role a command requires, in the workspace it names.
+///
+/// `None` means the command is not workspace-scoped: organization membership is
+/// the whole gate. A scoped command that names **no** workspace is refused rather
+/// than treated as unscoped, because there would be no role to check.
+#[must_use]
+pub fn required_workspace_role(command_type: &str) -> Option<Role> {
+    match command_type {
+        // Membership management and archiving are the owner's business.
+        membership::ADD_OWNER
+        | membership::ADD_MEMBER
+        | membership::CHANGE_ROLE
+        | membership::REMOVE_MEMBER
+        | workspace::ARCHIVE => Some(Role::Owner),
+        // Everyday work: a Member may, a Viewer may not (a Viewer reads).
+        workspace::RENAME | task::CREATE | task::RENAME | task::COMPLETE | task::REOPEN => {
+            Some(Role::Member)
+        }
+        _ => None,
+    }
+}
+
+/// Whether a command requires owning the organization (or the admin claim).
+///
+/// Roles live on workspace memberships, so "organization administrator" means
+/// owning at least one of its workspaces — which is what inviting people is.
+#[must_use]
+pub fn requires_organization_ownership(command_type: &str) -> bool {
+    matches!(command_type, invitation::CREATE)
+}
+
 /// Commands a caller may submit **without belonging to the organization**.
 ///
 /// Onboarding is the one flow that starts before membership: an invitee accepts
@@ -148,6 +183,30 @@ mod tests {
             authenticator.authenticate(Some("nope")).await,
             Err(AuthError::Unknown)
         );
+    }
+
+    #[test]
+    fn the_role_policy_is_explicit() {
+        assert_eq!(
+            required_workspace_role(membership::CHANGE_ROLE),
+            Some(Role::Owner)
+        );
+        assert_eq!(
+            required_workspace_role(workspace::ARCHIVE),
+            Some(Role::Owner)
+        );
+        assert_eq!(required_workspace_role(task::CREATE), Some(Role::Member));
+        assert_eq!(
+            required_workspace_role(workspace::RENAME),
+            Some(Role::Member)
+        );
+        assert_eq!(
+            required_workspace_role("task.created"),
+            None,
+            "events are not commands"
+        );
+        assert!(requires_organization_ownership(invitation::CREATE));
+        assert!(!requires_organization_ownership(invitation::ACCEPT));
     }
 
     #[test]

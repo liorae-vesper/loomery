@@ -340,8 +340,17 @@ mod tests {
 
     async fn app() -> AxumRouter {
         let mut group = RaftGroup::boot_single_node(1).await.unwrap();
-        // `member` owns the organization, so it may read and write it.
+        // `member` belongs to the organization and is a Member of the workspace
+        // the requests name, so it may read and write.
         crate::test_support::assign_member(&mut group, &Id::from(ORG), &Id::from("user-1")).await;
+        crate::test_support::join_workspace(
+            &mut group,
+            &Id::from(ORG),
+            &Id::from(WS),
+            &Id::from("user-1"),
+            loomery_core::membership::Role::Member,
+        )
+        .await;
         let control_router = Router::new();
         control_router.apply(
             Id::from(ORG),

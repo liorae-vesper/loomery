@@ -623,7 +623,12 @@ recorded in [`domain-model.md`](domain-model.md).
         the host reconciles an interrupted onboarding from state (at boot and
         every 30 s) instead of needing the original caller
   - [x] Authorization: reads and writes require organization membership (or the
-        admin claim), with `invitation.accept` as the single onboarding exemption
+        admin claim), with `invitation.accept` as the single onboarding exemption;
+        workspace-scoped commands are checked against the caller's **role** in the
+        workspace they name (`Viewer` reads, `Member` works, `Owner` manages), and
+        `invitation.create` requires owning a workspace of the organization. The
+        membership index those checks read is derived from the applied events, so
+        they are map lookups rather than scans
 - [ ] Phase 2 work core
 - [ ] Phase 3 notifications
 - [ ] Phase 4 knowledge base & RAG

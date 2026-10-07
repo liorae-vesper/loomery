@@ -78,8 +78,10 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
 - Provisioning is an admin-only gateway route (`POST /organizations`) wired to a
   `Provisioner` seam; the placement records the genesis leader, so an interrupted
   onboarding is finished from state at boot and by a 30 s sweep. Reads and writes
-  require organization membership (or the admin claim); `invitation.accept` is
-  the single onboarding exemption.
+  require organization membership (or the admin claim); workspace-scoped
+  commands are checked against the caller's role there (`Viewer` reads, `Member`
+  works, `Owner` manages), and `invitation.accept` is the single onboarding
+  exemption.
 - The runtime lives behind `nats`/`oidc` features (`test-services` enables both),
   so the default suite stays self-contained; the adapters are covered offline
   (a throwaway provider and fakes) and live (`mise run test-services`).
@@ -107,8 +109,9 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
    assignment + membership replay-safely. The NATS JetStream binding is
    deployment wiring behind `LOOMERY_NATS_URL`.
 0. Runtime follow-ups: multi-node control groups and placements (the runbook
-   work), per-workspace roles in authorization, and binding an invitation to the
-   accepting caller (today `invitation.accept` trusts its payload's `user_id`).
+   work), scoping *reads* to workspaces (a `Viewer` currently reads the whole
+   organization), and binding an invitation to the accepting caller (today
+   `invitation.accept` trusts its payload's `user_id`).
 5. Extend persistence validation to large histories, interrupted snapshot
    creation/installation/purge and storage failures before changing the default.
    **Partly done:** a 300-command history survives restart in both modes, and a

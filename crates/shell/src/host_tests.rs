@@ -33,6 +33,7 @@ use tower::ServiceExt;
 
 use crate::config::HostConfig;
 use crate::config::HttpConfig;
+use crate::gateway::GroupRegistry;
 use crate::gateway::Identity;
 use crate::gateway::ProvisionRequest;
 use crate::gateway::StaticAuthenticator;
@@ -189,8 +190,10 @@ fn provision_request(token: &str) -> Request<Body> {
         .unwrap()
 }
 
-/// A `POST /organizations/{id}/commands` request for a `task.create`.
-fn command_request(aggregate_id: &str) -> Request<Body> {
+/// A `POST /organizations/{id}/commands` request for a `task.create` in
+/// `workspace_id` — the scope is required, because the command is role-checked
+/// inside the workspace it names.
+fn command_request(workspace_id: &str, aggregate_id: &str) -> Request<Body> {
     Request::builder()
         .method("POST")
         .uri(format!("/organizations/{ORGANIZATION}/commands"))
@@ -198,6 +201,7 @@ fn command_request(aggregate_id: &str) -> Request<Body> {
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
+                "workspace_id": workspace_id,
                 "aggregate_id": aggregate_id,
                 "command_type": "task.create",
                 "payload": { "title": "a host test task" },
@@ -205,6 +209,26 @@ fn command_request(aggregate_id: &str) -> Request<Body> {
             .unwrap(),
         ))
         .unwrap()
+}
+
+/// The workspace genesis created for the organization.
+///
+/// A client discovers it by reading the board; the tests read it from the events.
+async fn genesis_workspace(
+    host: &Host<StaticAuthenticator, RecordingPublisher, EmptyConsumer>,
+) -> String {
+    let group = host
+        .groups()
+        .group("tenant-1")
+        .expect("the tenant is hosted");
+    group
+        .committed_events(&Id::from(ORGANIZATION))
+        .await
+        .expect("the board")
+        .into_iter()
+        .find(|event| event.event_type == "workspace.created")
+        .map(|event| event.aggregate_id.to_string())
+        .expect("genesis creates the workspace")
 }
 
 /// A `GET /organizations/{id}/events` request.
@@ -273,10 +297,11 @@ async fn a_host_provisions_serves_and_reads_its_writes() {
     );
 
     // ...accepts a write, and answers it from applied state (read-your-writes).
+    let workspace = genesis_workspace(&host).await;
     let task_id = "018f2c3d-4e5f-7071-8293-a4b5c6d7e8fb";
     assert_eq!(
         host.router()
-            .oneshot(command_request(task_id))
+            .oneshot(command_request(&workspace, task_id))
             .await
             .unwrap()
             .status(),
@@ -506,10 +531,11 @@ async fn the_outbox_worker_publishes_what_the_gateway_wrote() {
     .unwrap();
     host.start_workers().await.unwrap();
 
+    let workspace = genesis_workspace(&host).await;
     let task_id = "018f2c3d-4e5f-7071-8293-a4b5c6d7e8fc";
     assert_eq!(
         host.router()
-            .oneshot(command_request(task_id))
+            .oneshot(command_request(&workspace, task_id))
             .await
             .unwrap()
             .status(),
@@ -593,9 +619,13 @@ async fn a_stranger_token_cannot_read_or_write_a_tenant() {
     );
 
     // The member still can, so the gate is authorization, not a broken plane.
+    let workspace = genesis_workspace(&host).await;
     assert_eq!(
         host.router()
-            .oneshot(command_request("018f2c3d-4e5f-7071-8293-a4b5c6d7e8fe"))
+            .oneshot(command_request(
+                &workspace,
+                "018f2c3d-4e5f-7071-8293-a4b5c6d7e8fe"
+            ))
             .await
             .unwrap()
             .status(),
@@ -668,6 +698,189 @@ async fn an_invitee_may_accept_before_they_are_a_member() {
         response.status(),
         StatusCode::OK,
         "the acceptance is exempt from the membership gate"
+    );
+
+    host.shutdown().await.unwrap();
+}
+
+/// A `POST /organizations/{id}/commands` request with an explicit body.
+fn submit(token: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(format!("/organizations/{ORGANIZATION}/commands"))
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // The policy has four paths; the sequence is the test.
+async fn workspace_roles_decide_what_a_member_may_do() {
+    let root = tempfile::tempdir().unwrap();
+    let host = Arc::new(
+        Host::boot(
+            configuration(root.path()),
+            authenticator(),
+            None::<Arc<RecordingPublisher>>,
+            None::<Arc<EmptyConsumer>>,
+        )
+        .await
+        .unwrap(),
+    );
+    host.provision_with(ProvisionRequest {
+        organization_id: Id::from(ORGANIZATION),
+        leader_user_id: Id::from(MEMBER),
+        group_id: Some("tenant-1".to_owned()),
+    })
+    .await
+    .unwrap();
+    let workspace = genesis_workspace(&host).await;
+
+    // The genesis owner may invite and may manage the workspace's membership —
+    // that is what being an Owner means.
+    assert_eq!(
+        host.router()
+            .oneshot(submit(
+                "member",
+                &json!({
+                    "workspace_id": workspace,
+                    "aggregate_id": "018f2c3d-4e5f-7071-8293-a4b5c6d7e8ff",
+                    "command_type": "invitation.create",
+                    "payload": { "email": "stranger@example.com", "role": "Member" },
+                }),
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        host.router()
+            .oneshot(submit(
+                "member",
+                &json!({
+                    "workspace_id": workspace,
+                    "aggregate_id": loomery_core::membership::workspace_membership_id(
+                        &Id::from(ORGANIZATION),
+                        &Id::from(workspace.as_str()),
+                        &Id::from(STRANGER),
+                    )
+                    .to_string(),
+                    "command_type": "membership.add_member",
+                    "payload": { "user_id": STRANGER, "role": "Viewer" },
+                }),
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK,
+        "an Owner may add a Viewer"
+    );
+
+    // A Viewer reads, but does not write...
+    assert_eq!(
+        host.router()
+            .oneshot(events_request(Some("stranger")))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        host.router()
+            .oneshot(submit(
+                "stranger",
+                &json!({
+                    "workspace_id": workspace,
+                    "aggregate_id": "018f2c3d-4e5f-7071-8293-a4b5c6d7e8f0",
+                    "command_type": "task.create",
+                    "payload": { "title": "a viewer's task" },
+                }),
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN,
+        "a Viewer may not write"
+    );
+
+    // ...nor manage the workspace, and nor may a plain Member.
+    assert_eq!(
+        host.router()
+            .oneshot(submit(
+                "stranger",
+                &json!({
+                    "workspace_id": workspace,
+                    "aggregate_id": "018f2c3d-4e5f-7071-8293-a4b5c6d7e8f1",
+                    "command_type": "membership.change_role",
+                    "payload": { "user_id": STRANGER, "role": "Member" },
+                }),
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // ...but the Owner may promote them, and the new role takes effect.
+    let membership_id = loomery_core::membership::workspace_membership_id(
+        &Id::from(ORGANIZATION),
+        &Id::from(workspace.as_str()),
+        &Id::from(STRANGER),
+    )
+    .to_string();
+    assert_eq!(
+        host.router()
+            .oneshot(submit(
+                "member",
+                &json!({
+                    "workspace_id": workspace,
+                    "aggregate_id": membership_id,
+                    "command_type": "membership.change_role",
+                    "payload": { "user_id": STRANGER, "role": "Member" },
+                }),
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK,
+        "an Owner may change a role"
+    );
+    assert_eq!(
+        host.router()
+            .oneshot(submit(
+                "stranger",
+                &json!({
+                    "workspace_id": workspace,
+                    "aggregate_id": "018f2c3d-4e5f-7071-8293-a4b5c6d7e8f3",
+                    "command_type": "task.create",
+                    "payload": { "title": "now allowed" },
+                }),
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK,
+        "the promoted Member may write"
+    );
+
+    // A scoped command that names no workspace cannot be checked, so it is
+    // refused rather than treated as unscoped.
+    assert_eq!(
+        host.router()
+            .oneshot(submit(
+                "member",
+                &json!({
+                    "aggregate_id": "018f2c3d-4e5f-7071-8293-a4b5c6d7e8f2",
+                    "command_type": "task.create",
+                    "payload": { "title": "unscoped" },
+                }),
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
     );
 
     host.shutdown().await.unwrap();

@@ -102,11 +102,28 @@ cluster.
 | `POST` | `/organizations/{organization_id}/commands` | JSON command body; `Authorization: Bearer <token>` |
 | `GET` | `/organizations/{organization_id}/events` | bearer token + optional `X-Min-Index` |
 
-**Authorization, not just authentication.** A caller must belong to the
-organization — an `OrganizationAssignment` (the invitation flow) or a workspace
-role (the genesis owner's) — or carry the admin claim; otherwise `403`. The one
-exception is `invitation.accept`, the command an invitee submits *before* they are
-a member: the acceptance is what makes them one (the saga assigns them).
+**Authorization, not just authentication.** Three checks, in order:
+
+1. **Membership** — a caller must belong to the organization (an
+   `OrganizationAssignment` from the invitation flow, or a workspace role) or
+   carry the admin claim; otherwise `403`. This gates reads and writes alike.
+2. **Role**, for a workspace-scoped command — the caller's role *in the workspace
+   the command names* must satisfy the requirement, and the command must name one:
+   a scoped command without a scope is refused rather than treated as unscoped.
+   The table is one place
+   ([`required_workspace_role`](../crates/shell/src/gateway/identity.rs)):
+
+   | Command | Required role |
+   |---|---|
+   | `workspace.rename`, `task.*` | `Member` or better (a `Viewer` reads) |
+   | `workspace.archive`, `membership.add_owner`/`add_member`/`change_role`/`remove_member` | `Owner` |
+3. **Organization ownership**, for administrative commands — `invitation.create`
+   requires owning at least one workspace of the organization (roles live on
+   workspace memberships, so "organization administrator" means exactly that).
+
+`invitation.accept` is the single write exempt from all three: the invitee is a
+stranger until the acceptance (and the saga that follows) makes them a member.
+The admin claim bypasses every check.
 
 `POST /organizations` is wired to the host's `Provisioner` seam, so the gateway
 needs to know nothing about groups or genesis; a host without it answers `503`.

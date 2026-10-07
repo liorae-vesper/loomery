@@ -49,6 +49,7 @@ use loomery_core::membership::AssignmentCode;
 use loomery_core::membership::MembershipCode;
 use loomery_core::membership::OrganizationAssignment;
 use loomery_core::membership::OrganizationAssignmentState;
+use loomery_core::membership::Role;
 use loomery_core::membership::WorkspaceMembership;
 use loomery_core::membership::WorkspaceMembershipState;
 use loomery_core::org;
@@ -149,6 +150,143 @@ struct GroupState {
     registry: Registry,
     /// The dedup window in insertion order, mirrored for snapshots.
     dedup: Vec<(Key, Key, usize)>,
+    /// Who belongs to which organization, and with which workspace roles.
+    ///
+    /// Derived from the applied log — never serialized, rebuilt from it after a
+    /// snapshot install — so the gateway's authorization queries are a map lookup
+    /// instead of a scan over every aggregate stream (most of which are tasks).
+    members: Members,
+}
+
+/// The membership index: one record per `(organization, user)`.
+type Members = BTreeMap<(Id, Id), MemberRecord>;
+
+/// What one `(organization, user)` pair is: assigned to the organization, and
+/// the roles held in its workspaces.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct MemberRecord {
+    /// Whether an `organization.member_assigned` stands (removal clears it).
+    assigned: bool,
+    /// The role held in each workspace of the organization.
+    roles: BTreeMap<Id, Role>,
+}
+
+impl MemberRecord {
+    /// Whether the user belongs to the organization at all.
+    fn is_member(&self) -> bool {
+        self.assigned || !self.roles.is_empty()
+    }
+
+    /// Whether the user owns any workspace of the organization.
+    fn is_owner(&self) -> bool {
+        self.roles.values().any(|role| *role == Role::Owner)
+    }
+}
+
+impl GroupState {
+    /// Appends an applied event to the group's log **and** to the membership
+    /// index.
+    fn append(&mut self, log_index: u64, event: Event) {
+        note_membership(&mut self.members, &event);
+        self.applied.push(AppliedEvent { log_index, event });
+    }
+
+    /// Rebuilds the membership index from the applied log.
+    ///
+    /// A snapshot carries the log but not the index (it is derived), so a
+    /// snapshot install rebuilds it here rather than trusting a serialized copy.
+    fn rebuild_members(&mut self) {
+        let mut members = Members::new();
+        for entry in &self.applied {
+            note_membership(&mut members, &entry.event);
+        }
+        self.members = members;
+    }
+}
+
+/// Folds one event into the membership index.
+///
+/// These are the events the membership plans produce; one that does not decode
+/// is skipped, exactly as `apply` skips it.
+fn note_membership(members: &mut Members, event: &Event) {
+    let organization_id = event.organization_id.clone();
+    let workspace_id = event.workspace_id.clone();
+
+    match event.event_type.as_str() {
+        membership::MEMBER_ASSIGNED => {
+            if let Ok(assigned) =
+                serde_json::from_str::<membership::MemberAssigned>(&event.payload.data)
+            {
+                update(members, &organization_id, &assigned.user_id, |record| {
+                    record.assigned = true;
+                });
+            }
+        }
+        membership::ORG_MEMBER_REMOVED => {
+            if let Ok(removed) =
+                serde_json::from_str::<membership::OrgMemberRemoved>(&event.payload.data)
+            {
+                update(members, &organization_id, &removed.user_id, |record| {
+                    record.assigned = false;
+                });
+            }
+        }
+        membership::OWNER_ADDED => {
+            if let (Some(workspace_id), Ok(added)) = (
+                workspace_id,
+                serde_json::from_str::<membership::OwnerAdded>(&event.payload.data),
+            ) {
+                update(members, &organization_id, &added.user_id, |record| {
+                    record.roles.insert(workspace_id, Role::Owner);
+                });
+            }
+        }
+        membership::MEMBER_ADDED => {
+            if let (Some(workspace_id), Ok(added)) = (
+                workspace_id,
+                serde_json::from_str::<membership::MemberAdded>(&event.payload.data),
+            ) {
+                update(members, &organization_id, &added.user_id, |record| {
+                    record.roles.insert(workspace_id, added.role);
+                });
+            }
+        }
+        membership::ROLE_CHANGED => {
+            if let (Some(workspace_id), Ok(changed)) = (
+                workspace_id,
+                serde_json::from_str::<membership::RoleChanged>(&event.payload.data),
+            ) {
+                update(members, &organization_id, &changed.user_id, |record| {
+                    record.roles.insert(workspace_id, changed.role);
+                });
+            }
+        }
+        membership::MEMBER_REMOVED => {
+            if let (Some(workspace_id), Ok(removed)) = (
+                workspace_id,
+                serde_json::from_str::<membership::MemberRemoved>(&event.payload.data),
+            ) {
+                update(members, &organization_id, &removed.user_id, |record| {
+                    record.roles.remove(&workspace_id);
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Applies `change` to one `(organization, user)` record, creating it on demand.
+fn update(
+    members: &mut Members,
+    organization_id: &Id,
+    user_id: &Id,
+    change: impl FnOnce(&mut MemberRecord),
+) {
+    change(
+        members
+            .entry((organization_id.clone(), user_id.clone()))
+            .or_default(),
+    );
 }
 
 impl Default for GroupState {
@@ -160,6 +298,7 @@ impl Default for GroupState {
             applied: Vec::new(),
             registry: Registry::new(DEDUP_WINDOW),
             dedup: Vec::new(),
+            members: Members::new(),
         }
     }
 }
@@ -330,36 +469,47 @@ impl MemStateMachine {
 
     /// Whether `user_id` belongs to `organization_id`.
     ///
-    /// Membership is an aggregate (`OrganizationAssignment`), and its stream id is
-    /// derived from the business tuple (D12), so the answer needs no index: the
-    /// id is computed and looked up. A user who was never assigned (or was
-    /// removed — removal is a compensating event that clears the flag) is not a
-    /// member.
+    /// Membership has two sources: the organization assignment the invitation saga
+    /// writes, and a role in one of the organization's workspaces — genesis ③
+    /// gives the owner theirs, `membership.add_member` gives later members theirs.
+    /// Both are folded into the index as events are applied.
     pub async fn is_organization_member(&self, organization_id: &Id, user_id: &Id) -> bool {
-        let state = self.state.read().await;
+        self.state
+            .read()
+            .await
+            .members
+            .get(&(organization_id.clone(), user_id.clone()))
+            .is_some_and(MemberRecord::is_member)
+    }
 
-        // 1. the organization assignment the invitation saga writes, addressed by
-        //    its derived id (D12).
-        let assignment = state.streams.get(&membership::organization_assignment_id(
-            organization_id,
-            user_id,
-        ));
-        if matches!(assignment, Some(AggregateState::Assignment(assigned)) if assigned.is_assigned())
-        {
-            return true;
-        }
+    /// Whether `user_id` owns any workspace of `organization_id`.
+    ///
+    /// The organization has no role of its own: roles live on workspace
+    /// memberships, so "may administer this organization" means owning at least
+    /// one of its workspaces. The admin claim is a separate, global bypass that
+    /// the gateway applies.
+    pub async fn is_organization_owner(&self, organization_id: &Id, user_id: &Id) -> bool {
+        self.state
+            .read()
+            .await
+            .members
+            .get(&(organization_id.clone(), user_id.clone()))
+            .is_some_and(MemberRecord::is_owner)
+    }
 
-        // 2. or a role in one of the organization's workspaces: genesis ③ gives
-        //    the owner theirs, and `membership.add_member` gives later members
-        //    theirs. Membership streams carry no organization id, which is sound
-        //    because one group hosts one organization (D1) — the same invariant
-        //    the router and the outbox rely on.
-        state.streams.values().any(|aggregate| match aggregate {
-            AggregateState::Membership(membership) => {
-                membership.user_id.as_ref() == Some(user_id) && membership.is_member()
-            }
-            _ => false,
-        })
+    /// The role `user_id` holds in `workspace_id`, if any.
+    pub async fn workspace_role(
+        &self,
+        organization_id: &Id,
+        workspace_id: &Id,
+        user_id: &Id,
+    ) -> Option<Role> {
+        self.state
+            .read()
+            .await
+            .members
+            .get(&(organization_id.clone(), user_id.clone()))
+            .and_then(|record| record.roles.get(workspace_id).copied())
     }
 
     /// The control group's tenant records, keyed by organization id, for the
@@ -467,7 +617,7 @@ fn apply_organization(group: &mut GroupState, command: Command, log_index: u64) 
         Executed(execution) => {
             for event in execution.events {
                 state = Organization::apply(state, event.clone());
-                group.applied.push(AppliedEvent { log_index, event });
+                group.append(log_index, event);
             }
             group
                 .streams
@@ -505,7 +655,7 @@ fn apply_workspace(group: &mut GroupState, command: Command, log_index: u64) -> 
         Executed(execution) => {
             for event in execution.events {
                 state = Workspace::apply(state, event.clone());
-                group.applied.push(AppliedEvent { log_index, event });
+                group.append(log_index, event);
             }
             group
                 .streams
@@ -543,7 +693,7 @@ fn apply_membership(group: &mut GroupState, command: Command, log_index: u64) ->
         Executed(execution) => {
             for event in execution.events {
                 state = WorkspaceMembership::apply(state, event.clone());
-                group.applied.push(AppliedEvent { log_index, event });
+                group.append(log_index, event);
             }
             group
                 .streams
@@ -584,7 +734,7 @@ macro_rules! drive_plan {
                 Executed(execution) => {
                     for event in execution.events {
                         state = <$plan>::apply(state, event.clone());
-                        group.applied.push(AppliedEvent { log_index, event });
+                        group.append(log_index, event);
                     }
                     group
                         .streams
@@ -850,6 +1000,7 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
         }
         group.registry = registry;
         group.dedup = data.dedup;
+        group.rebuild_members();
         if let Some(last_applied) = meta.last_log_id {
             self.applied.send_replace(last_applied.index);
         }
@@ -1011,6 +1162,218 @@ mod tests {
         assert_eq!(restored.committed_events(&organization()).await.len(), 1);
         let replay = apply_one(&restored, command).await;
         assert!(matches!(replay, Applied::Replayed { .. }));
+    }
+}
+
+#[cfg(test)]
+mod membership_index_tests {
+    use super::*;
+    use crate::group::GroupOps;
+    use crate::raft::RaftGroup;
+    use crate::test_support::{assign_member, join_workspace};
+    use loomery_core::Uuid;
+    use loomery_core::envelope::Payload;
+    use loomery_core::key::Key;
+    use loomery_core::timestamp::Timestamp;
+
+    /// The namespace these tests' derived keys use.
+    const KEY_NS: Uuid = Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);
+
+    /// The index is derived from applied events, so it must answer membership,
+    /// roles and ownership without touching the aggregate streams.
+    #[tokio::test]
+    async fn the_membership_index_answers_roles_and_ownership() {
+        let mut group = RaftGroup::boot_single_node(1).await.unwrap();
+        let organization_id = Id::from("org-1");
+        let workspace_id = Id::from("ws-1");
+        let member = Id::from("user-1");
+        let owner = Id::from("user-0");
+        let state = group.state_machine();
+
+        assert!(
+            !state
+                .is_organization_member(&organization_id, &member)
+                .await,
+            "nothing is assigned yet"
+        );
+
+        assign_member(&mut group, &organization_id, &member).await;
+        join_workspace(
+            &mut group,
+            &organization_id,
+            &workspace_id,
+            &member,
+            Role::Viewer,
+        )
+        .await;
+        join_workspace(
+            &mut group,
+            &organization_id,
+            &workspace_id,
+            &owner,
+            Role::Owner,
+        )
+        .await;
+
+        assert!(
+            state
+                .is_organization_member(&organization_id, &member)
+                .await
+        );
+        assert_eq!(
+            state
+                .workspace_role(&organization_id, &workspace_id, &member)
+                .await,
+            Some(Role::Viewer)
+        );
+        assert!(state.is_organization_owner(&organization_id, &owner).await);
+        assert!(
+            !state.is_organization_owner(&organization_id, &member).await,
+            "a Viewer is not an owner"
+        );
+        assert_eq!(
+            state
+                .workspace_role(&organization_id, &Id::from("other-ws"), &member)
+                .await,
+            None
+        );
+        assert!(
+            !state
+                .is_organization_member(&organization_id, &Id::from("stranger"))
+                .await
+        );
+
+        // A role change is folded in place...
+        change_role(
+            &mut group,
+            &organization_id,
+            &workspace_id,
+            &member,
+            Role::Member,
+        )
+        .await;
+        assert_eq!(
+            state
+                .workspace_role(&organization_id, &workspace_id, &member)
+                .await,
+            Some(Role::Member)
+        );
+
+        // ...removing the workspace role leaves the organization assignment...
+        leave_workspace(&mut group, &organization_id, &workspace_id, &member).await;
+        assert_eq!(
+            state
+                .workspace_role(&organization_id, &workspace_id, &member)
+                .await,
+            None
+        );
+        assert!(
+            state
+                .is_organization_member(&organization_id, &member)
+                .await,
+            "the assignment still stands"
+        );
+
+        // ...and leaving the organization clears it.
+        leave_organization(&mut group, &organization_id, &member).await;
+        assert!(
+            !state
+                .is_organization_member(&organization_id, &member)
+                .await
+        );
+        assert!(
+            state.is_organization_owner(&organization_id, &owner).await,
+            "the other Owner is untouched"
+        );
+    }
+
+    /// Proposes a membership command straight into the group, as the saga does.
+    async fn propose(
+        group: &mut RaftGroup,
+        organization_id: &Id,
+        workspace_id: Option<&Id>,
+        user_id: &Id,
+        command_type: &str,
+        payload: String,
+    ) {
+        let aggregate_id = match workspace_id {
+            Some(workspace_id) => {
+                membership::workspace_membership_id(organization_id, workspace_id, user_id)
+            }
+            None => membership::organization_assignment_id(organization_id, user_id),
+        };
+        let command = Command {
+            envelope_version: 1,
+            id: Id::new(),
+            aggregate_id,
+            organization_id: organization_id.clone(),
+            workspace_id: workspace_id.cloned(),
+            occurred_at: Timestamp::from(1_700_000_000_000),
+            causation_key: Key::new(&KEY_NS, &format!("{command_type}:{user_id}")),
+            correlation_key: Key::new(&KEY_NS, "membership-index"),
+            actor: loomery_core::actor::Actor::System,
+            command_type: command_type.to_owned(),
+            payload: Payload {
+                version: 1,
+                data: payload,
+            },
+        };
+        group.propose(command).await.unwrap();
+    }
+
+    async fn change_role(
+        group: &mut RaftGroup,
+        organization_id: &Id,
+        workspace_id: &Id,
+        user_id: &Id,
+        role: Role,
+    ) {
+        propose(
+            group,
+            organization_id,
+            Some(workspace_id),
+            user_id,
+            membership::CHANGE_ROLE,
+            format!(r#"{{"user_id":"{user_id}","role":"{}"}}"#, role_name(role)),
+        )
+        .await;
+    }
+
+    async fn leave_workspace(
+        group: &mut RaftGroup,
+        organization_id: &Id,
+        workspace_id: &Id,
+        user_id: &Id,
+    ) {
+        propose(
+            group,
+            organization_id,
+            Some(workspace_id),
+            user_id,
+            membership::REMOVE_MEMBER,
+            format!(r#"{{"user_id":"{user_id}"}}"#),
+        )
+        .await;
+    }
+
+    async fn leave_organization(group: &mut RaftGroup, organization_id: &Id, user_id: &Id) {
+        propose(
+            group,
+            organization_id,
+            None,
+            user_id,
+            membership::ORG_REMOVE_MEMBER,
+            format!(r#"{{"user_id":"{user_id}"}}"#),
+        )
+        .await;
+    }
+
+    fn role_name(role: Role) -> &'static str {
+        match role {
+            Role::Owner => "Owner",
+            Role::Member => "Member",
+            Role::Viewer => "Viewer",
+        }
     }
 }
 

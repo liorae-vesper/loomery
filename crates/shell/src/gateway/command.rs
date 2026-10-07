@@ -38,6 +38,8 @@ use super::identity::Authenticator;
 use super::identity::Identity;
 use super::identity::is_admin_only;
 use super::identity::is_membership_exempt;
+use super::identity::required_workspace_role;
+use super::identity::requires_organization_ownership;
 use super::precompute;
 use super::precompute::PreComputeError;
 
@@ -274,6 +276,54 @@ impl CommandPlane {
         Err(CommandError::Auth(AuthError::Forbidden))
     }
 
+    /// Applies the command-level role policy, on top of organization membership.
+    ///
+    /// Two shapes: a workspace-scoped command must come from someone whose role
+    /// in *that* workspace satisfies the requirement, and an organization-level
+    /// administrative command must come from someone who owns a workspace of the
+    /// organization. The admin claim bypasses both.
+    ///
+    /// # Errors
+    ///
+    /// [`CommandError::Auth`] with [`AuthError::Forbidden`] when the caller's
+    /// role is insufficient, or when a scoped command names no workspace.
+    async fn authorize_command(
+        &self,
+        command: &Command,
+        identity: &Identity,
+        group: &RaftGroup,
+    ) -> Result<(), CommandError> {
+        if identity.is_admin {
+            return Ok(());
+        }
+
+        if requires_organization_ownership(&command.command_type)
+            && !group
+                .state_machine()
+                .is_organization_owner(&command.organization_id, &identity.user_id)
+                .await
+        {
+            return Err(CommandError::Auth(AuthError::Forbidden));
+        }
+
+        let Some(required) = required_workspace_role(&command.command_type) else {
+            return Ok(());
+        };
+        let Some(workspace_id) = command.workspace_id.as_ref() else {
+            return Err(CommandError::Auth(AuthError::Forbidden));
+        };
+
+        let role = group
+            .state_machine()
+            .workspace_role(&command.organization_id, workspace_id, &identity.user_id)
+            .await;
+
+        match role {
+            Some(role) if role.satisfies(required) => Ok(()),
+            _ => Err(CommandError::Auth(AuthError::Forbidden)),
+        }
+    }
+
     /// Routes the command to the organization's group and proposes it.
     ///
     /// # Errors
@@ -287,6 +337,7 @@ impl CommandPlane {
         if !is_membership_exempt(&command.command_type) {
             self.authorize(&command.organization_id, &identity, &group)
                 .await?;
+            self.authorize_command(&command, &identity, &group).await?;
         }
         let causation_key = command.causation_key.clone();
         let fingerprint = command.fingerprint();
@@ -479,6 +530,15 @@ mod tests {
         let mut group = RaftGroup::boot_single_node(1).await.unwrap();
         crate::test_support::assign_member(&mut group, &Id::from("org-1"), &Id::from("user-1"))
             .await;
+        // The command is workspace-scoped, so the caller needs a role there.
+        crate::test_support::join_workspace(
+            &mut group,
+            &Id::from("org-1"),
+            &Id::from("ws-1"),
+            &Id::from("user-1"),
+            loomery_core::membership::Role::Member,
+        )
+        .await;
         let router = active_router();
         let registry = Arc::new(OneGroup {
             group_id: "tenant-1".to_owned(),

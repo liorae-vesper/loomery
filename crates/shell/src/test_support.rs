@@ -65,6 +65,54 @@ pub(crate) async fn assign_member(
     group.propose(command).await.unwrap();
 }
 
+/// Gives `user_id` `role` in `workspace_id`, exactly as the invitation flow and
+/// genesis ③ do: the stream id is derived from the business tuple (D12).
+pub(crate) async fn join_workspace(
+    group: &mut crate::raft::RaftGroup,
+    organization_id: &loomery_core::id::Id,
+    workspace_id: &loomery_core::id::Id,
+    user_id: &loomery_core::id::Id,
+    role: loomery_core::membership::Role,
+) {
+    use crate::group::GroupOps;
+    use loomery_core::actor::Actor;
+    use loomery_core::envelope::Command;
+    use loomery_core::envelope::Payload;
+    use loomery_core::id::Id;
+    use loomery_core::key::Key;
+    use loomery_core::membership;
+    use loomery_core::timestamp::Timestamp;
+
+    let command = Command {
+        envelope_version: 1,
+        id: Id::new(),
+        aggregate_id: membership::workspace_membership_id(organization_id, workspace_id, user_id),
+        organization_id: organization_id.clone(),
+        workspace_id: Some(workspace_id.clone()),
+        occurred_at: Timestamp::from(1_700_000_000_000),
+        causation_key: Key::new(
+            &KEY_NS,
+            &format!("join:{organization_id}:{workspace_id}:{user_id}"),
+        ),
+        correlation_key: Key::new(&KEY_NS, "test-support"),
+        actor: Actor::System,
+        command_type: membership::ADD_MEMBER.to_owned(),
+        payload: Payload {
+            version: 1,
+            data: format!(
+                r#"{{"user_id":"{user_id}","role":"{}"}}"#,
+                match role {
+                    membership::Role::Owner => "Owner",
+                    membership::Role::Member => "Member",
+                    membership::Role::Viewer => "Viewer",
+                }
+            ),
+        },
+    };
+
+    group.propose(command).await.unwrap();
+}
+
 /// The group, faked: it appends commands, "applies" the event an aggregate
 /// would produce, and can lose a response so the tests can crash the worker at
 /// the worst possible moment.

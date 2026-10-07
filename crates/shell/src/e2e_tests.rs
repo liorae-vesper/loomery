@@ -305,6 +305,16 @@ async fn a_reused_causation_key_is_a_conflict_and_reads_are_your_writes() {
     .await
     .unwrap();
 
+    // The caller works in the workspace it addresses (the invitation flow gives
+    // this role in a deployment).
+    crate::test_support::join_workspace(
+        &mut tenant,
+        &organization_id,
+        &workspace_id,
+        &Id::from("018f2c3d-4e5f-7071-8293-a4b5c6d7e8f0"),
+        loomery_core::membership::Role::Member,
+    )
+    .await;
     let groups = Arc::new(OneGroup {
         group: tenant.clone(),
     });
