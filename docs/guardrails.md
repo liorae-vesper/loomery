@@ -42,7 +42,25 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
    `cargo deny check`.
 3. **`hk fix`** runs `cargo fmt` to auto-format.
 4. **CI** — [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs
-   verify, tests, quality (`mise run crap`) and audit as separate jobs.
+   verify, tests, licenses, quality (`mise run crap`), audit and the service
+   integration tests as separate jobs.
+5. **`act`** runs that same workflow locally, and is what a change is checked
+   against before it lands:
+
+   ```sh
+   act -P ubuntu-latest=loomery-act-runner:latest --pull=false
+   ```
+
+   `-j <job>` selects **one** job — passing it several times runs only the last
+   one, which makes a "verify, test and licenses all pass" claim easy to get
+   wrong. Run the workflow without `-j` to check all of them, and confirm the job
+   count in the output (`🏁  Job succeeded` appears once per job).
+
+   The runner image is built from `catthehacker/ubuntu:act-latest` with
+   `protobuf-compiler`, `libclang-dev` and `clang` added
+   (`loomery-act-runner:latest`); `--pull=false` uses it as-is. The
+   `test-services` job reaches the compose stack through the host network, so
+   `mise run svc-up` must be running for it to pass.
 
 ## Coverage data flow
 
