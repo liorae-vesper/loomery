@@ -179,6 +179,11 @@ tools pinned by `mise.lock` (installed with `mise install`), plus `protoc`,
 is installed at run time, so the pipeline reads the same as
 `docker run … mise run <task>`.
 
+The image build step uploads `loomery-ci.tar.gz` as a build artifact. Each
+parallel step downloads and loads that archive into its own Docker daemon,
+so hosted agents do not need to share local images or use a separate registry.
+Image tags include the Buildkite build ID to isolate concurrent builds.
+
 ---
 
 ## Documentation

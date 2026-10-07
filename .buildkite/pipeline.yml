@@ -56,29 +56,29 @@
 # Agents need a Docker daemon. Add an `agents:` block to the steps below
 # (`agents: { queue: docker }`, say) if your cluster routes on queues.
 #
-# Each step depends on the image built by `build-ci-image` in the same build,
-# which only holds if the steps land on an agent that shares that daemon. For
-# ephemeral or hosted agents, build and push the image once —
-#
-#   docker build --file .buildkite/Dockerfile --tag registry.example/loomery-ci:1.98.1 .
-#   docker push registry.example/loomery-ci:1.98.1
-#
-# — and point LOOMERY_CI_IMAGE at that reference instead.
+# Hosted agents have separate Docker daemons. `depends_on` orders the jobs but
+# does not share local images, so `build-ci-image` uploads a compressed Docker
+# image archive. Every consumer downloads it before the Docker command hook
+# loads it. Artifacts are scoped to this build; the image tag also includes the
+# build ID to keep concurrent builds on self-hosted daemons from colliding.
 
 env:
-  # Tag of the image built from .buildkite/Dockerfile by `build-ci-image`.
-  # Versioned with latest so we cache them. If the layer changes, buildkite builds a new one.
-  LOOMERY_CI_IMAGE: "loomery-ci:latest"
+  LOOMERY_CI_IMAGE: "loomery-ci:${BUILDKITE_BUILD_ID}"
 
 steps:
   - label: ":docker: Build CI image"
     key: "build-ci-image"
-    command: 'docker buildx build --file .buildkite/Dockerfile --tag "${LOOMERY_CI_IMAGE}" .'
+    command: |
+      docker buildx build --load --progress plain --file .buildkite/Dockerfile --tag "${LOOMERY_CI_IMAGE}" .
+      docker save --output loomery-ci.tar "${LOOMERY_CI_IMAGE}"
+      gzip -1 loomery-ci.tar
+    artifact_paths: "loomery-ci.tar.gz"
     plugins:
       - docker#v5.14.0:
           image: "docker:28-cli"
           always-pull: true
-          # Build on the host daemon, so the image is there for the steps below.
+          # Load onto this daemon so `docker save` can export the image.
+          chown: true
           volumes:
             - "/var/run/docker.sock:/var/run/docker.sock"
 
@@ -87,8 +87,12 @@ steps:
     depends_on: "build-ci-image"
     command: "mise run verify"
     plugins:
+      - artifacts#v1.9.4:
+          download: "loomery-ci.tar.gz"
+          step: "build-ci-image"
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
+          load: "loomery-ci.tar.gz"
           # The checkout is mounted into the container and root owns whatever
           # cargo writes there; hand it back to the agent user afterwards so the
           # agent can clean up.
@@ -99,8 +103,12 @@ steps:
     depends_on: "build-ci-image"
     command: "mise run test"
     plugins:
+      - artifacts#v1.9.4:
+          download: "loomery-ci.tar.gz"
+          step: "build-ci-image"
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
+          load: "loomery-ci.tar.gz"
           chown: true
 
   - label: ":key: Test services (Keycloak + NATS)"
@@ -112,13 +120,19 @@ steps:
     concurrency: 1
     concurrency_group: "loomery/test-services"
     plugins:
+      - artifacts#v1.9.4:
+          download: "loomery-ci.tar.gz"
+          step: "build-ci-image"
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
+          load: "loomery-ci.tar.gz"
           # `docker compose` talks to the host daemon, which resolves the bind
           # mount in compose.test.yaml (./scripts/test-services/keycloak) against
           # the compose project directory. Running the command from the same
           # absolute path as the host checkout keeps that path valid on the host.
-          workdir: "${BUILDKITE_BUILD_CHECKOUT_PATH}"
+          # Expand on this job's agent, not on the pipeline-upload agent.
+          workdir: "$${BUILDKITE_BUILD_CHECKOUT_PATH}"
+          expand-volume-vars: true
           # Host networking puts the published service ports on 127.0.0.1 for
           # the tests, exactly where scripts/test-services/wait-for-services.sh
           # and the integration suite look for them.
@@ -132,8 +146,12 @@ steps:
     depends_on: "build-ci-image"
     command: "mise run licenses-check"
     plugins:
+      - artifacts#v1.9.4:
+          download: "loomery-ci.tar.gz"
+          step: "build-ci-image"
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
+          load: "loomery-ci.tar.gz"
           chown: true
 
   - label: ":bar_chart: Quality (coverage + CRAP)"
@@ -141,8 +159,12 @@ steps:
     depends_on: "build-ci-image"
     command: "mise run crap"
     plugins:
+      - artifacts#v1.9.4:
+          download: "loomery-ci.tar.gz"
+          step: "build-ci-image"
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
+          load: "loomery-ci.tar.gz"
           chown: true
 
   - label: ":shield: Audit"
@@ -150,6 +172,10 @@ steps:
     depends_on: "build-ci-image"
     command: "mise run audit"
     plugins:
+      - artifacts#v1.9.4:
+          download: "loomery-ci.tar.gz"
+          step: "build-ci-image"
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
+          load: "loomery-ci.tar.gz"
           chown: true

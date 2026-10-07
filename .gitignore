@@ -4,3 +4,4 @@ lcov.info
 benchmark-results/
 __pycache__/
 .pi/
+loomery-ci.tar*
