@@ -107,6 +107,27 @@ pub enum Role {
     Viewer,
 }
 
+impl Role {
+    /// Whether this role may do what `required` describes.
+    ///
+    /// The order is `Owner ≥ Member ≥ Viewer`: an Owner may do everything a
+    /// Member may, and a Member everything a Viewer may (which is reading).
+    #[must_use]
+    pub const fn satisfies(self, required: Self) -> bool {
+        self.rank() >= required.rank()
+    }
+
+    /// The role's position in that order.
+    #[must_use]
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Owner => 2,
+            Self::Member => 1,
+            Self::Viewer => 0,
+        }
+    }
+}
+
 /// The payload of `membership.add_owner`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddOwner {
@@ -636,6 +657,19 @@ fn reject<C>(code: C, message: &str) -> DomainError<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn roles_are_ordered_by_authority() {
+        assert!(Role::Owner.satisfies(Role::Owner));
+        assert!(Role::Owner.satisfies(Role::Member));
+        assert!(Role::Owner.satisfies(Role::Viewer));
+        assert!(Role::Member.satisfies(Role::Member));
+        assert!(Role::Member.satisfies(Role::Viewer));
+        assert!(!Role::Member.satisfies(Role::Owner));
+        assert!(Role::Viewer.satisfies(Role::Viewer));
+        assert!(!Role::Viewer.satisfies(Role::Member));
+        assert!(!Role::Viewer.satisfies(Role::Owner));
+    }
     use crate::actor::Actor;
     use crate::key::Key;
     use crate::timestamp::Timestamp;
