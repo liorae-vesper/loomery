@@ -41,26 +41,35 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
    `hk check` hook): `cargo check`, clippy with `-D warnings`, fmt check,
    `cargo deny check`.
 3. **`hk fix`** runs `cargo fmt` to auto-format.
-4. **CI** — [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs
-   verify, tests, licenses, quality (`mise run crap`), audit and the service
-   integration tests as separate jobs.
-5. **`act`** runs that same workflow locally, and is what a change is checked
-   against before it lands:
+4. **CI** — [`.buildkite/pipeline.yml`](../.buildkite/pipeline.yml) runs verify,
+   tests, licenses, quality (`mise run crap`), audit and the service integration
+   tests as separate steps. Every step runs inside the image built from
+   [`.buildkite/Dockerfile`](../.buildkite/Dockerfile), which carries the
+   toolchain `mise.lock` pins, `protobuf-compiler` for `tonic-prost-build` (the
+   shell's `build.rs` compiles `proto/raft.proto`), `libclang-dev` for the
+   build-time `bindgen` inside `librocksdb-sys`, and the Docker CLI the
+   integration step drives the compose stack with. No step installs anything.
+5. **That image is how a change is checked before it lands** — build it once and
+   run the same tasks inside it, so the local check and CI share one toolchain:
 
    ```sh
-   act -P ubuntu-latest=loomery-act-runner:latest --pull=false
+   docker build --file .buildkite/Dockerfile --tag loomery-ci .
+   docker run --rm -v "$PWD:/workdir" -w /workdir -v loomery-ci-target:/target \
+     -e CARGO_TARGET_DIR=/target loomery-ci mise run verify
    ```
 
-   `-j <job>` selects **one** job — passing it several times runs only the last
-   one, which makes a "verify, test and licenses all pass" claim easy to get
-   wrong. Run the workflow without `-j` to check all of them, and confirm the job
-   count in the output (`🏁  Job succeeded` appears once per job).
+   Swap the task for any one the pipeline calls (`mise run test`,
+   `mise run licenses-check`, `mise run crap`, `mise run audit`). The container
+   runs as root, exactly as the pipeline's steps do, so `CARGO_TARGET_DIR` points
+   at a named volume: build artifacts stay out of the working tree instead of
+   appearing in `target/` owned by root. To iterate on the pipeline itself,
+   `bk pipeline validate --file .buildkite/pipeline.yml` checks it locally,
+   without a Buildkite account.
 
-   The runner image is built from `catthehacker/ubuntu:act-latest` with
-   `protobuf-compiler`, `libclang-dev` and `clang` added
-   (`loomery-act-runner:latest`); `--pull=false` uses it as-is. The
-   `test-services` job reaches the compose stack through the host network, so
-   `mise run svc-up` must be running for it to pass.
+   The `test services` step runs the compose stack through the host Docker daemon
+   and the host network (see
+   [`.buildkite/scripts/test-services.sh`](../.buildkite/scripts/test-services.sh)),
+   so `mise run svc-up` must be running for it to pass when run by hand.
 
 ## Coverage data flow
 

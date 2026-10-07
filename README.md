@@ -162,8 +162,8 @@ associativity/determinism for the aggregate algebra.
 
 ## Continuous integration
 
-GitHub Actions runs six parallel jobs (`.github/workflows/ci.yml`), each
-driven by a mise task rather than hardcoded commands:
+Buildkite runs six parallel steps (`.buildkite/pipeline.yml`), each driven by a
+mise task rather than hardcoded commands:
 
 - **verify** — `mise run verify`
 - **test** — `mise run test`
@@ -172,10 +172,12 @@ driven by a mise task rather than hardcoded commands:
 - **quality** — `mise run crap` (coverage + CRAP gate)
 - **audit** — `mise run audit`
 
-CI uses [`jdx/mise-action`](https://github.com/jdx/mise-action) to install the
-locked toolchain (with default caching) and
-[`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache) to cache cargo
-build artifacts.
+Every step runs inside the image built from
+[`.buildkite/Dockerfile`](.buildkite/Dockerfile): the Rust toolchain and cargo
+tools pinned by `mise.lock` (installed with `mise install`), plus `protoc`,
+`libclang` and the Docker CLI the build and the integration suite need. Nothing
+is installed at run time, so the pipeline reads the same as
+`docker run … mise run <task>`.
 
 ---
 

@@ -122,9 +122,12 @@ cargo test -p loomery-shell --features test-services --test test_services
 
 ## 5. CI
 
-The `Test services` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
-starts the same compose stack on the runner, waits for readiness, runs the
-integration tests, and always tears the stack down.
+The `Test services` step in [`.buildkite/pipeline.yml`](../.buildkite/pipeline.yml)
+starts the same compose stack from inside the CI image, waits for readiness,
+runs the integration tests, and always tears the stack down — see
+[`.buildkite/scripts/test-services.sh`](../.buildkite/scripts/test-services.sh).
+The step mounts the host Docker socket and joins the host network, so the stack
+the container starts is reachable at `127.0.0.1` exactly as above.
 
 ## 6. Stress profiles
 
