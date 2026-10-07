@@ -32,10 +32,23 @@
 #              save: pipeline
 #              soft-fail: true
 #
-# Configure in the Buildkite UI:
+# This file only runs if a step uploads it. The steps stored in the Buildkite
+# dashboard *are* the pipeline, and whichever you write there replaces this file
+# entirely — they are not a fallback for it. In the YAML steps editor they need
+# to be the upload step Buildkite gives a pipeline created against this
+# repository:
 #
-#   * Pipeline command: the default (`buildkite-agent pipeline upload`), which
-#     uploads this file.
+#   steps:
+#     - label: "\:pipeline\: Pipeline upload"
+#       command: buildkite-agent pipeline upload
+#
+# Dashboard steps interpolate only a subset of variables (`BUILDKITE_BRANCH`,
+# `BUILDKITE_COMMIT` and friends), so a `$VAR` written there can expand to
+# nothing — where the same `$VAR` inside this file is expanded from the job
+# environment when the file is uploaded.
+#
+# Also configure in the Buildkite UI:
+#
 #   * GitHub integration: build pull requests, and pushes to `main` only
 #     (the old workflow's `branches: [main]`).
 #   * Builds → "Cancel Intermediate Builds": the old `cancel-in-progress`.
