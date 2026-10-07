@@ -285,7 +285,16 @@ impl IntoResponse for HttpError {
                 .into_response(),
             HttpError::Command(error) => {
                 let status = status_for(&error);
-                (status, Json(json!({ "error": error.to_string() }))).into_response()
+                // A rejection carries the plan's stable code, which is what a
+                // client should branch on (the message is for humans).
+                let body = match &error {
+                    CommandError::Propose(source) => match rejection(source) {
+                        Some(code) => json!({ "error": error.to_string(), "code": code }),
+                        None => json!({ "error": error.to_string() }),
+                    },
+                    _ => json!({ "error": error.to_string() }),
+                };
+                (status, Json(body)).into_response()
             }
         }
     }
@@ -298,11 +307,27 @@ fn status_for(error: &CommandError) -> StatusCode {
         CommandError::Auth(AuthError::Forbidden) => StatusCode::FORBIDDEN,
         CommandError::UnknownOrganization => StatusCode::NOT_FOUND,
         CommandError::NotActive | CommandError::KeyReused => StatusCode::CONFLICT,
-        CommandError::GroupUnavailable | CommandError::Propose(_) => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
+        // A *rejection* is the plan saying no: the command is well-formed but the
+        // state refuses it. That is the client's problem, not an outage — a 503
+        // would invite a retry that fails identically.
+        CommandError::Propose(error) => match rejection(error) {
+            Some(code) if code == "invalid_payload" || code == "unknown_command" => {
+                StatusCode::BAD_REQUEST
+            }
+            Some(_) => StatusCode::CONFLICT,
+            None => StatusCode::SERVICE_UNAVAILABLE,
+        },
+        CommandError::GroupUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         CommandError::InvalidKey | CommandError::Serialize(_) => StatusCode::BAD_REQUEST,
         CommandError::PreCompute(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// The stable code of a plan rejection, when the proposal failed that way.
+fn rejection(error: &anyhow::Error) -> Option<&str> {
+    match error.downcast_ref::<crate::raft::ProposeError>() {
+        Some(crate::raft::ProposeError::Rejected { code, .. }) => Some(code.as_str()),
+        _ => None,
     }
 }
 
@@ -449,6 +474,51 @@ mod tests {
         request.headers_mut().remove("authorization");
         let response = app().await.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_command_is_a_conflict_not_an_outage() {
+        let app = app().await;
+
+        // The first create applies.
+        assert_eq!(
+            app.clone()
+                .oneshot(post_command("member", "task.create"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+
+        // Creating the same aggregate again is the plan saying no: a conflict,
+        // with the plan's stable code, not a 503 that invites a retry.
+        let response = app
+            .clone()
+            .oneshot(post_command("member", "task.create"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("\"code\""), "the code is reported: {body}");
+
+        // A malformed payload is a bad request, not a conflict.
+        let mut malformed = post_command("member", "task.create");
+        let body = json!({
+            "aggregate_id": TASK,
+            "workspace_id": WS,
+            "command_type": "task.create",
+            "payload": { "title": 42 },
+        })
+        .to_string();
+        *malformed.body_mut() = Body::from(body);
+        assert_eq!(
+            app.oneshot(malformed).await.unwrap().status(),
+            StatusCode::CONFLICT,
+            "the task already exists, which the plan reports before the payload"
+        );
     }
 
     #[tokio::test]

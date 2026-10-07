@@ -66,7 +66,9 @@ is the idempotency identity: an exact retry replays, and minted keys are
 | `UnknownOrganization` | `404` |
 | `NotActive`, `KeyReused` | `409` |
 | `InvalidKey`, `Serialize` | `400` |
-| `GroupUnavailable`, `Propose` | `503` |
+| `Propose` (a plan rejection) | `409`, with the plan's code in the body — or `400` for `invalid_payload`/`unknown_command` |
+| `Propose` (anything else: timeout, lost leadership) | `503` — the outcome is unknown, so re-read before retrying |
+| `GroupUnavailable` | `503` |
 | `PreCompute` | `500` |
 
 ## 3. Edge pre-compute (`precompute.rs`)
@@ -124,6 +126,12 @@ cluster.
 `invitation.accept` is the single write exempt from all three: the invitee is a
 stranger until the acceptance (and the saga that follows) makes them a member.
 The admin claim bypasses every check.
+
+**Failures are classified.** `401` no or unknown token, `403` a failed check,
+`404` unknown organization, `409` the plan refused the command (its stable code
+travels in the body, so a client branches on the code and not the message),
+`400` a malformed request or payload, `503` the group is unavailable or the
+proposal's outcome is unknown — retry that one.
 
 `POST /organizations` is wired to the host's `Provisioner` seam, so the gateway
 needs to know nothing about groups or genesis; a host without it answers `503`.
