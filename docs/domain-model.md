@@ -11,7 +11,7 @@ Three names are already frozen by the genesis script
 (`docs/tutorials/genesis-worker.md`); they are marked **(frozen)** below and must
 keep their exact spelling and payload shape.
 
-> Provisional decisions are flagged in [§6](#6-provisional-decisions). When one
+> Provisional decisions are flagged in [§6](#6-decisions-taken). When one
 > is settled, remove the flag and treat the name as frozen.
 
 ---
@@ -115,7 +115,7 @@ pub struct OrganizationState {
 | archived | ❌ `Archived` | ❌ `Archived` | ❌ `AlreadyArchived` |
 
 ¹ Whether renaming an unprovisioned organization is legal depends on where
-registration lives; see [§6](#6-provisional-decisions). The conservative rule is
+registration lives; see [§6](#6-decisions-taken). The conservative rule is
 to allow `rename` only once the organization exists (a leader was assigned or a
 name was set).
 
@@ -298,7 +298,7 @@ pub struct OrganizationAssignmentState {
 > The `organization.*` namespace is shared with the Organization aggregate on
 > purpose: dispatch is by `command_type`, and each type maps to exactly one
 > plan. If that reads badly in practice, `organization_assignment.*` is the
-> alternative — see [§6](#6-provisional-decisions).
+> alternative — see [§6](#6-decisions-taken).
 
 **Codes:** `UnknownCommand`, `InvalidPayload`, `UnserializableEvent`,
 `AlreadyAssigned`, `NotAssigned`, `UserMismatch`.

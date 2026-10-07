@@ -8,6 +8,7 @@ Start with [design.md](design.md) for the architecture and decisions, or
 | Document | Purpose |
 |---|---|
 | [Design](design.md) | Architecture, decisions register and phased roadmap; distinguishes implemented and planned features |
+| [Architecture at a glance](architecture.md) | Mermaid diagrams: crate graph, write/read paths, authorization, onboarding, group internals, host wiring, deployment |
 | [Domain model](domain-model.md) | The six Phase-0 aggregates: commands, events, payloads, state and legal transitions |
 | [Implementation guide](implementation.md) | Build pipeline, Raft startup, storage/network wiring and tenant group lifecycle |
 | [Shell](shell.md) | Current group API, genesis worker, transport and storage behavior |

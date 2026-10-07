@@ -41,6 +41,10 @@ non-negotiable principles:
 
 ## 2. Architecture
 
+For a picture of how the built pieces fit together — crate graph, the write and
+read paths, authorization, onboarding, group internals, host wiring and
+deployment — see [architecture.md](architecture.md).
+
 Loomery follows Gary Bernhardt's **Functional Core, Imperative Shell**. All
 business logic lives in pure, deterministic functions; side effects (storage,
 consensus, networking, integration) are pushed to the outer shell.

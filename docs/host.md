@@ -1,5 +1,8 @@
 # The runtime host
 
+The wiring described here is drawn in
+[architecture.md](architecture.md#the-runtime-host).
+
 `loomery-server` is Loomery's entry point: it reads one configuration, builds the
 real adapters, and hands them to [`loomery_shell::host::Host`], which owns the
 wiring. Everything the earlier phases built — the control plane, the Raft groups,
