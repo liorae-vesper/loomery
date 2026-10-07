@@ -54,6 +54,32 @@ fn config() -> GroupConfig {
     config.raft.election_timeout_max = 300;
     config
 }
+/// Reopens a persistent group, waiting out the release of the previous handle.
+///
+/// The store is released when the last handle to it goes away — the state machine
+/// owns one, and `Raft::shutdown` only *aborts* the tasks holding others, which
+/// takes effect when each task is next polled. A reopen can therefore race that
+/// release (this flaked in CI, not locally), so the wait is explicit and bounded:
+/// a store still locked after the deadline is a real leak, and its error surfaces.
+async fn reopen(
+    node_id: u64,
+    directory: &std::path::Path,
+    config: GroupConfig,
+) -> anyhow::Result<RaftGroup> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match RaftGroup::boot_persistent(node_id, "tenant".into(), directory, config.clone()).await
+        {
+            Ok(group) => return Ok(group),
+            Err(error) if tokio::time::Instant::now() < deadline => {
+                eprintln!("reopen attempt failed, retrying: {error}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
 async fn three_replicas_commit_and_recover_genesis() {
@@ -153,10 +179,9 @@ async fn three_replicas_commit_and_recover_genesis() {
         server.await.unwrap();
     }
     drop(groups);
-    let recovered =
-        RaftGroup::boot_persistent(1, "tenant".into(), &root.path().join("1"), group_config)
-            .await
-            .unwrap();
+    let recovered = reopen(1, &root.path().join("1"), group_config)
+        .await
+        .unwrap();
     assert_eq!(
         recovered
             .committed_events(&organization())
