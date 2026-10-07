@@ -72,7 +72,8 @@ loomery/
 ├── crates/
 │   ├── core/          # loomery-core — the pure, deterministic domain core
 │   ├── genesis/       # loomery-genesis — the deterministic bootstrap script
-│   └── shell/         # loomery-shell — Raft, tonic, RocksDB and workers
+│   ├── server/        # loomery-server — the runtime entry point (config + wiring)
+│   └── shell/         # loomery-shell — Raft, tonic, RocksDB, gateway and workers
 ├── docs/              # design docs, research notes, and guardrails
 ├── THIRDPARTY.yml     # bundled third-party license texts (docs/third-party-licenses.md)
 ├── deny.toml          # cargo-deny policy (licenses, advisories, bans)
@@ -137,6 +138,7 @@ Run one with `mise run <task>`.
 | `mise run coverage` | Generate an LCOV coverage report (`cargo llvm-cov --workspace`) |
 | `mise run crap` | Compute **CRAP** scores from coverage; fails above the threshold |
 | `mise run audit` | `cargo audit` for security advisories |
+| `mise run server` | Run the runtime host: `mise run server -- --config host.json` |
 | `mise run licenses` | Regenerate the bundled third-party license texts (`THIRDPARTY.yml`) |
 | `mise run licenses-check` | Fail if `THIRDPARTY.yml` is stale (also a CI job) |
 
@@ -188,6 +190,17 @@ references, tutorials, research and benchmarks. The main entry points are:
 - [Consensus benchmarks](docs/benchmarks/README.md)
 
 ---
+
+## Running it
+
+`loomery-server` wires the crates into a process: the control group, one Raft
+group per tenant, the axum gateway, the outbox workers and the saga runner,
+with a provider-agnostic OIDC adapter for identity.
+
+```sh
+mise run svc-up                        # Keycloak + NATS for local development
+mise run server -- --config host.json  # see docs/host.md for the configuration
+```
 
 ## License
 

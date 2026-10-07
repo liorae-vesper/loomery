@@ -91,6 +91,19 @@ skipping quietly, so a green run always means the services actually answered.
   through the real `CommandPlane` (a Keycloak authentication per command); the
   test asserts that each event's recorded actor matches the token that submitted
   it, then publishes and replays those events to the broker.
+- **The runtime OIDC adapter** — discovery, JWKS and local JWT validation against
+  the live realm: an admin token authenticates with the admin claim, another
+  user's token does not, and a truncated token is refused.
+- **The runtime NATS consumer** — a published message is peeked (returned again
+  until acked) and disappears once acknowledged.
+- **The host against the real broker** — `Host::boot` with the real publisher
+  provisions a tenant, takes a write over the gateway, and the outbox worker
+  publishes it to `JetStream` with a persisted cursor.
+
+> The realm declares the `sub` protocol mapper explicitly. A Keycloak realm
+> imported without it issues access tokens with **no subject claim**, which no
+> resource server can authenticate; the fixture mirrors the built-in `basic`
+> scope for that reason.
 - **TLS (opt-in)** — with `LOOMERY_TEST_HTTPS_PROBE` set, one real HTTPS request
   proves the `rustls-no-provider` stack and the installed `ring` provider complete
   a handshake:

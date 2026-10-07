@@ -99,15 +99,20 @@ cluster.
 | Method | Path | Body / headers |
 |---|---|---|
 | `POST` | `/organizations/{organization_id}/commands` | JSON command body; `Authorization: Bearer <token>` |
-| `GET` | `/organizations/{organization_id}/events` | optional `X-Min-Index` |
+| `GET` | `/organizations/{organization_id}/events` | bearer token + optional `X-Min-Index` |
 
 Inbound ids are **parsed** with `Id::parse`, never adopted, so untrusted strings
 cannot become identity (D10/D12).
 
 ## 6. Limits
 
-- OIDC authentication and the deployment's HTTP server wiring are not
-  implemented; `StaticAuthenticator` is the seam.
+- Authentication is wired: `OidcAuthenticator` validates tokens locally against
+  any provider's JWKS, and `loomery-server` serves this router
+  ([host.md](host.md)). *Authorization* is not: reads and writes both require a
+  valid token, but nothing yet checks that the caller belongs to the
+  organization. That check arrives with the read models.
+- `GET /events` requires a bearer token (an organization's event log is tenant
+  data) and is rate-limited by nothing but the provider's own latency.
 - `GET /events` returns the group's whole applied-event log for the
   organization, so a read is `O(history)`. A real read model (projections)
   replaces this in the gateway's read plane.

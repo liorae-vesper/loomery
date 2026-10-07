@@ -14,6 +14,7 @@ Start with [design.md](design.md) for the architecture and decisions, or
 | [Control plane](control-plane.md) | Tenant placement records, router projection, provisioning and reconciliation |
 | [Gateway](gateway.md) | Identity, admin claim, edge pre-compute, command plane and read-your-writes |
 | [Outbox and sagas](outbox-and-sagas.md) | Committed-event publishing, cursors, retry classification and the invitation saga |
+| [Runtime host](host.md) | `loomery-server`: configuration, wiring, boot sequence and known gaps |
 | [Test services](testing-services.md) | Keycloak and NATS JetStream for the opt-in integration suite |
 | [Third-party licenses](third-party-licenses.md) | The bundled dependency license texts, how they are generated and checked |
 | [Raft configuration](raft-configuration.md) | Persistent replica startup, tuning, TLS/mTLS and immutable persistence modes |

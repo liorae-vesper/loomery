@@ -570,7 +570,7 @@ enforced by `mise run crap` in CI. The frozen command/event taxonomy is
 recorded in [`domain-model.md`](domain-model.md).
 
 ### Shell (Phases 1–7)
-- [x] Phase 1 control plane *(orchestration, router, RYW, gateway, outbox and sagas landed; OIDC and NATS bindings are deployment wiring)*
+- [x] Phase 1 control plane *(orchestration, router, RYW, gateway, outbox and sagas landed; OIDC and NATS have runtime adapters, and `loomery-server` wires them)*
   - [x] Control group on OpenRaft (`RaftLogStorage`/`RaftStateMachine` +
         `RaftNetwork` over tonic): `shell::control`
     - [x] levels 1–2 of the spike: in-memory `RaftLogStorage` +
@@ -606,6 +606,17 @@ recorded in [`domain-model.md`](domain-model.md).
   - [x] E2E gate candidates green in tests: register → genesis → workspace +
         Owner; invite → accept → provisioned → login; crash-resume
         no-duplicate; dedup-hit with RYW; admin enforcement
+  - [x] Runtime host: `shell::host::Host` (control group, tenant groups, router,
+        command plane, outbox workers with a persisted cursor per group, saga
+        runner, graceful shutdown) behind one `HostConfig`, with
+        `loomery-server` as the entry point — see [`host.md`](host.md)
+  - [x] Provider-agnostic OIDC: discovery, JWKS caching and **local** JWT
+        validation (ring-backed `jsonwebtoken`), configurable subject/groups/admin
+        claims, exercised offline against a throwaway provider and live against
+        Keycloak
+  - [x] NATS runtime: the outbox publisher, a durable pull consumer with peek/ack
+        semantics, and an outbox worker that resumes from a persisted cursor
+        instead of relying on the broker's dedup window
 - [ ] Phase 2 work core
 - [ ] Phase 3 notifications
 - [ ] Phase 4 knowledge base & RAG
@@ -630,4 +641,5 @@ integration layers:
 
 ---
 
-*Last updated: 2026-10-01 — opt-in command batching and controlled durability/performance validation.*
+*Last updated: 2026-10-06 — runtime host and binary, provider-agnostic OIDC, NATS
+runtime adapters, service-backed stress profiles and a license bundle.*

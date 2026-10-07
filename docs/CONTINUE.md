@@ -64,6 +64,21 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
 [checkpoint policy](research/checkpoint-policy.md) and
 [benchmark results](benchmarks/checkpoint-spike.md) for details.
 
+### Runtime host
+
+- `shell::host::Host` boots the control group (initializing a fresh data
+  directory), hosts one persistent group per active tenant, warms the identity
+  provider, builds the command plane and serves the gateway; it starts one outbox
+  worker per group (cursor persisted beside the group's database) and the saga
+  runner, and shuts down gracefully. `crates/server` is the binary
+  (`mise run server -- --config host.json`).
+- Identity is provider-agnostic: discovery, JWKS caching and local JWT validation
+  with configurable claim names. The broker runtime is `async-nats` behind the
+  `nats` feature: publisher, durable pull consumer and the tailer worker.
+- The runtime lives behind `nats`/`oidc` features (`test-services` enables both),
+  so the default suite stays self-contained; the adapters are covered offline
+  (a throwaway provider and fakes) and live (`mise run test-services`).
+
 ## Next work
 
 1. ~~Finish Phase 0 aggregates and their transition-matrix/replay property
@@ -86,6 +101,10 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
    consumes with ack/retry classification, and `InvitationAcceptance` provisions
    assignment + membership replay-safely. The NATS JetStream binding is
    deployment wiring behind `LOOMERY_NATS_URL`.
+0. Runtime follow-ups: an HTTP provisioning endpoint (today `Host::provision` is
+   a library call), storing the genesis bootstrap in the tenant record so an
+   interrupted provisioning can be resumed from state, and tenant
+   **authorization** for reads and writes (authentication is wired).
 5. Extend persistence validation to large histories, interrupted snapshot
    creation/installation/purge and storage failures before changing the default.
    **Partly done:** a 300-command history survives restart in both modes, and a

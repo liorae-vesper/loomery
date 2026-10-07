@@ -14,7 +14,7 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 | Pre-commit hooks | `hk` (commit-msg + check/fix hooks) |
 | Commit message lint | `cog verify` (conventional commits, cocogitto) |
 | Combined dev gate | `mise run verify` (see `mise.toml`) |
-| Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap; skips `**/*_tests.rs`) |
+| Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap; skips `**/*_tests.rs`, `loomery-server`'s `main.rs` (the binary is a single file) and the `JetStream` adapter) |
 
 ## The `cargo deny` policy (`deny.toml`)
 
@@ -61,6 +61,13 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
   the repo's convention for in-crate integration tests that need private APIs
   (`persistent_tests.rs`, `tls_tests.rs`, …). Those still run in
   `mise run test`; they are simply not scored as production functions.
+- Two slices are excluded for the same reason in reverse — the coverage run
+  cannot reach them because they need live services: the `loomery-server` binary
+  (argument parsing, signal handling and wiring; its logic is
+  `shell::host::Host`, which *is* scored and unit-tested) and
+  `crates/shell/src/outbox/nats.rs` (the `JetStream` client; the subject and
+  message-id parsing it relies on, the cursor and the worker are scored and
+  tested). Both run in `mise run test-services`.
 
 ---
 
