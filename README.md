@@ -184,6 +184,17 @@ parallel step downloads and loads that archive into its own Docker daemon,
 so hosted agents do not need to share local images or use a separate registry.
 Image tags include the Buildkite build ID to isolate concurrent builds.
 
+[Linux hosted cache volumes](https://buildkite.com/docs/agent/buildkite-hosted/cache-volumes)
+retain Cargo's registry sources, Git dependencies,
+security advisory databases and the complete build output (including RocksDB's
+native library). Each step has its own cache so parallel jobs and coverage flags
+do not overwrite one another. The image build also caches all Docker build
+layers, including the tools installed by mise. The first successful run warms
+each cache; later runs reuse dependencies whose versions and build settings
+still match. Failed jobs do not save their cache volumes.
+Increment the Rust cache names' `v1` suffix when changing native compilers or
+system libraries in the CI image, to force a fresh native build.
+
 ---
 
 ## Documentation

@@ -13,24 +13,12 @@
 #   2. The `test services` job drives a compose stack through the host Docker
 #      daemon, so that one step needs the socket, host networking and the
 #      checkout mounted at its host path (see the step's comments).
-#   3. The converted output also carried `cache#v1.10.0`, the counterpart of the
-#      workflow's Swatinem/rust-cache. It is left out: every backend needs agent
-#      setup this repository cannot know about (`fs` writes under
-#      /var/cache/buildkite by default, s3/gcs/azure need credentials of their
-#      own), and a misconfigured backend fails the step. Once a backend exists,
-#      adding it back per step restores the old behaviour — the cache and docker
-#      plugins use disjoint hooks, so the order of the two does not matter:
-#
-#        plugins:
-#          - docker#v5.14.0:
-#              image: "${LOOMERY_CI_IMAGE}"
-#              chown: true
-#          - cache#v1.12.0:
-#              path: target
-#              manifest: Cargo.lock
-#              restore: pipeline
-#              save: pipeline
-#              soft-fail: true
+# Hosted cache volumes persist dependencies between successful jobs. Rust
+# steps have separate named volumes so parallel writers and coverage's compiler
+# flags do not evict each other's artifacts. Cargo validates cached artifacts
+# against the toolchain, flags and dependency versions; lockfile changes do not
+# discard all unchanged dependencies. Bind mounts expose the host caches inside
+# the Docker containers, at stable paths independent of each agent's checkout.
 #
 # This file only runs if a step uploads it. The steps stored in the Buildkite
 # dashboard *are* the pipeline, and whichever you write there replaces this file
@@ -53,8 +41,8 @@
 #     (the old workflow's `branches: [main]`).
 #   * Builds → "Cancel Intermediate Builds": the old `cancel-in-progress`.
 #
-# Agents need a Docker daemon. Add an `agents:` block to the steps below
-# (`agents: { queue: docker }`, say) if your cluster routes on queues.
+# These steps use Linux hosted agents with Docker and native cache volumes.
+# Add `agents: { queue: linux-small }` if the cluster routes on multiple queues.
 #
 # Hosted agents have separate Docker daemons. `depends_on` orders the jobs but
 # does not share local images, so `build-ci-image` uploads a compressed Docker
@@ -68,10 +56,12 @@ env:
 steps:
   - label: ":docker: Build CI image"
     key: "build-ci-image"
-    command: |
-      docker buildx build --load --progress plain --file .buildkite/Dockerfile --tag "${LOOMERY_CI_IMAGE}" .
-      docker save --output loomery-ci.tar "${LOOMERY_CI_IMAGE}"
-      gzip -1 loomery-ci.tar
+    command: "sh .buildkite/scripts/build-ci-image.sh"
+    cache:
+      name: "ci-image-v1"
+      paths:
+        - "/cache/loomery-buildkit"
+      size: "40g"
     artifact_paths: "loomery-ci.tar.gz"
     plugins:
       - docker#v5.14.0:
@@ -79,13 +69,21 @@ steps:
           always-pull: true
           # Load onto this daemon so `docker save` can export the image.
           chown: true
+          environment:
+            - "LOOMERY_CI_IMAGE"
           volumes:
             - "/var/run/docker.sock:/var/run/docker.sock"
+            - "/cache/loomery-buildkit:/ci-cache"
 
   - label: ":white_check_mark: Verify"
     key: "verify"
     depends_on: "build-ci-image"
     command: "mise run verify"
+    cache: &cargo-cache
+      name: "rust-verify-v1"
+      paths:
+        - "/cache/loomery-cargo"
+      size: "40g"
     plugins:
       - artifacts#v1.9.4:
           download: "loomery-ci.tar.gz"
@@ -93,6 +91,14 @@ steps:
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
           load: "loomery-ci.tar.gz"
+          environment: &cargo-cache-environment
+            - "CARGO_TARGET_DIR=/ci-target"
+          volumes: &cargo-cache-volumes
+            - "/cache/loomery-cargo/target:/ci-target"
+            - "/cache/loomery-cargo/registry:/root/.cargo/registry"
+            - "/cache/loomery-cargo/git:/root/.cargo/git"
+            - "/cache/loomery-cargo/advisory-db:/root/.cargo/advisory-db"
+            - "/cache/loomery-cargo/advisory-dbs:/root/.cargo/advisory-dbs"
           # The checkout is mounted into the container and root owns whatever
           # cargo writes there; hand it back to the agent user afterwards so the
           # agent can clean up.
@@ -102,6 +108,9 @@ steps:
     key: "test"
     depends_on: "build-ci-image"
     command: "mise run test"
+    cache:
+      <<: *cargo-cache
+      name: "rust-test-v1"
     plugins:
       - artifacts#v1.9.4:
           download: "loomery-ci.tar.gz"
@@ -109,12 +118,17 @@ steps:
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
           load: "loomery-ci.tar.gz"
+          environment: *cargo-cache-environment
+          volumes: *cargo-cache-volumes
           chown: true
 
   - label: ":key: Test services (Keycloak + NATS)"
     key: "test-services"
     depends_on: "build-ci-image"
     command: ".buildkite/scripts/test-services.sh"
+    cache:
+      <<: *cargo-cache
+      name: "rust-test-services-v1"
     # The stack publishes 4222/8222/8080 on the host, so only one of these runs
     # at a time, in this build or any other.
     concurrency: 1
@@ -126,6 +140,7 @@ steps:
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
           load: "loomery-ci.tar.gz"
+          environment: *cargo-cache-environment
           # `docker compose` talks to the host daemon, which resolves the bind
           # mount in compose.test.yaml (./scripts/test-services/keycloak) against
           # the compose project directory. Running the command from the same
@@ -140,11 +155,19 @@ steps:
           chown: true
           volumes:
             - "/var/run/docker.sock:/var/run/docker.sock"
+            - "/cache/loomery-cargo/target:/ci-target"
+            - "/cache/loomery-cargo/registry:/root/.cargo/registry"
+            - "/cache/loomery-cargo/git:/root/.cargo/git"
+            - "/cache/loomery-cargo/advisory-db:/root/.cargo/advisory-db"
+            - "/cache/loomery-cargo/advisory-dbs:/root/.cargo/advisory-dbs"
 
   - label: ":scroll: Licenses"
     key: "licenses"
     depends_on: "build-ci-image"
     command: "mise run licenses-check"
+    cache:
+      <<: *cargo-cache
+      name: "rust-licenses-v1"
     plugins:
       - artifacts#v1.9.4:
           download: "loomery-ci.tar.gz"
@@ -152,12 +175,17 @@ steps:
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
           load: "loomery-ci.tar.gz"
+          environment: *cargo-cache-environment
+          volumes: *cargo-cache-volumes
           chown: true
 
   - label: ":bar_chart: Quality (coverage + CRAP)"
     key: "quality"
     depends_on: "build-ci-image"
     command: "mise run crap"
+    cache:
+      <<: *cargo-cache
+      name: "rust-quality-v1"
     plugins:
       - artifacts#v1.9.4:
           download: "loomery-ci.tar.gz"
@@ -165,12 +193,17 @@ steps:
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
           load: "loomery-ci.tar.gz"
+          environment: *cargo-cache-environment
+          volumes: *cargo-cache-volumes
           chown: true
 
   - label: ":shield: Audit"
     key: "audit"
     depends_on: "build-ci-image"
     command: "mise run audit"
+    cache:
+      <<: *cargo-cache
+      name: "rust-audit-v1"
     plugins:
       - artifacts#v1.9.4:
           download: "loomery-ci.tar.gz"
@@ -178,4 +211,6 @@ steps:
       - docker#v5.14.0:
           image: "${LOOMERY_CI_IMAGE}"
           load: "loomery-ci.tar.gz"
+          environment: *cargo-cache-environment
+          volumes: *cargo-cache-volumes
           chown: true
