@@ -132,6 +132,29 @@ impl NatsPublisher {
         Ok(stream.info().await?.state.messages)
     }
 
+    /// How many messages the broker holds for a subject filter.
+    ///
+    /// Every group publishes into the *same* stream (D11), so a stream-wide count
+    /// also moves when another tailer publishes at the same moment. A caller
+    /// asserting a delta around its own subject asks for that subject instead.
+    ///
+    /// # Errors
+    ///
+    /// The stream could not be read.
+    pub async fn stored_messages_for(&self, subject_filter: &str) -> anyhow::Result<u64> {
+        use tokio_stream::StreamExt;
+
+        let stream = self.context.get_stream(&self.stream).await?;
+        let mut subjects = stream.info_with_subjects(subject_filter).await?;
+
+        let mut total: u64 = 0;
+        while let Some(page) = subjects.next().await {
+            let (_subject, count) = page?;
+            total = total.saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+        }
+        Ok(total)
+    }
+
     /// The broker's duplicate window for the stream.
     ///
     /// The outbox relies on it (D11): a re-published message is only absorbed

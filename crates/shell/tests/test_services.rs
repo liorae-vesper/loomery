@@ -46,6 +46,7 @@ use loomery_shell::outbox::NatsConsumer;
 use loomery_shell::outbox::Outbox;
 use loomery_shell::outbox::OutboxMessage;
 use loomery_shell::outbox::Publisher;
+use loomery_shell::outbox::SUBJECT_PREFIX;
 use loomery_shell::outbox::nats::NatsPublisher;
 use loomery_shell::raft::RaftGroup;
 use loomery_shell::saga::Consumer;
@@ -83,7 +84,10 @@ async fn jetstream_stores_each_outbox_message_once_per_dedup_id() {
         payload: payload.as_bytes().to_vec(),
     };
 
-    let before = publisher.stored_messages().await.expect("stream info");
+    let before = publisher
+        .stored_messages_for(&subject)
+        .await
+        .expect("stream info");
 
     publisher
         .publish(message("1", "first"))
@@ -98,7 +102,10 @@ async fn jetstream_stores_each_outbox_message_once_per_dedup_id() {
         .await
         .expect("publish second");
 
-    let after = publisher.stored_messages().await.expect("stream info");
+    let after = publisher
+        .stored_messages_for(&subject)
+        .await
+        .expect("stream info");
     assert_eq!(
         after - before,
         2,
@@ -192,6 +199,26 @@ fn organization(index: usize) -> Id {
 /// A synthetic tenant group id for profile `index`, unique to this run.
 fn tenant(group: &str, index: usize) -> String {
     format!("{group}-{index}")
+}
+
+/// How many messages the broker stores for one group's subjects.
+///
+/// Scoped to the group: one stream carries every group's events (D11), so a
+/// stream-wide count also moves when another test publishes concurrently.
+async fn stored_for_group(publisher: &NatsPublisher, group_id: &str) -> u64 {
+    publisher
+        .stored_messages_for(&format!("{SUBJECT_PREFIX}{group_id}.>"))
+        .await
+        .expect("stream info")
+}
+
+/// [`stored_for_group`] summed over several groups.
+async fn stored_for_groups(publisher: &NatsPublisher, group_ids: &[String]) -> u64 {
+    let mut total = 0u64;
+    for group_id in group_ids {
+        total = total.saturating_add(stored_for_group(publisher, group_id).await);
+    }
+    total
 }
 
 /// Assigns `user_id` to `organization_id`, as the invitation saga does: the
@@ -393,13 +420,13 @@ async fn a_replayed_outbox_batch_is_absorbed_by_the_broker() {
     let applied = group.state_machine().applied_events(&organization_id).await;
     assert_eq!(applied.len(), events, "one event per command");
 
-    let before = publisher.stored_messages().await.expect("stream info");
+    let before = stored_for_group(&publisher, &group_id).await;
     let first = Outbox::new(Arc::clone(&publisher))
         .flush(&group_id, &applied)
         .await
         .expect("the first flush");
     assert_eq!(first, events);
-    let after_first = publisher.stored_messages().await.expect("stream info");
+    let after_first = stored_for_group(&publisher, &group_id).await;
     assert_eq!(
         after_first - before,
         events as u64,
@@ -413,7 +440,7 @@ async fn a_replayed_outbox_batch_is_absorbed_by_the_broker() {
         .await
         .expect("the replay");
     assert_eq!(replayed, events);
-    let after_replay = publisher.stored_messages().await.expect("stream info");
+    let after_replay = stored_for_group(&publisher, &group_id).await;
     assert_eq!(
         after_replay, after_first,
         "the replayed batch must not add messages"
@@ -540,7 +567,11 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
             .await
             .expect("connect to NATS"),
     );
-    let before = publisher.stored_messages().await.expect("stream info");
+    let group_ids: Vec<String> = tenants
+        .iter()
+        .map(|(group_id, ..)| group_id.clone())
+        .collect();
+    let before = stored_for_groups(&publisher, &group_ids).await;
     let mut flushed = 0usize;
     for (index, (group_id, organization_id, group)) in tenants.iter().enumerate() {
         let events = group
@@ -589,7 +620,7 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
         "one published message per command, assignment and workspace join"
     );
 
-    let after_first = publisher.stored_messages().await.expect("stream info");
+    let after_first = stored_for_groups(&publisher, &group_ids).await;
     assert_eq!(
         after_first - before,
         flushed as u64,
@@ -605,7 +636,7 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
             .expect("the replay");
     }
     assert_eq!(
-        publisher.stored_messages().await.expect("stream info"),
+        stored_for_groups(&publisher, &group_ids).await,
         after_first,
         "the replayed batch must not add messages"
     );
@@ -777,7 +808,7 @@ async fn a_host_publishes_committed_events_to_the_real_broker() {
     let observer = NatsPublisher::connect_config(&nats_config(&url))
         .await
         .expect("connect to NATS");
-    let before = observer.stored_messages().await.expect("stream info");
+    let before = stored_for_group(&observer, &group).await;
 
     let authenticator = Arc::new(StaticAuthenticator::new().with_token(
         "member",
@@ -849,7 +880,7 @@ async fn a_host_publishes_committed_events_to_the_real_broker() {
 
     let mut stored = before;
     for _ in 0..200 {
-        stored = observer.stored_messages().await.expect("stream info");
+        stored = stored_for_group(&observer, &group).await;
         if stored > before {
             break;
         }
