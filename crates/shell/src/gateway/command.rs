@@ -37,6 +37,7 @@ use super::identity::AuthError;
 use super::identity::Authenticator;
 use super::identity::Identity;
 use super::identity::is_admin_only;
+use super::identity::is_membership_exempt;
 use super::precompute;
 use super::precompute::PreComputeError;
 
@@ -155,6 +156,15 @@ impl CommandPlane {
     /// [`CommandError::InvalidKey`] for a malformed client key, and
     /// [`CommandError::PreCompute`] if edge hashing fails.
     pub async fn build_command(&self, request: CommandRequest) -> Result<Command, CommandError> {
+        Ok(self.build_command_with_identity(request).await?.0)
+    }
+
+    /// [`CommandPlane::build_command`], also answering who was authenticated (the
+    /// authorization step needs the admin claim, which the actor does not carry).
+    async fn build_command_with_identity(
+        &self,
+        request: CommandRequest,
+    ) -> Result<(Command, Identity), CommandError> {
         let identity = self
             .authenticator
             .authenticate(request.token.as_deref())
@@ -176,24 +186,29 @@ impl CommandPlane {
         let mut payload = request.payload;
         precompute::hash_password(&mut payload)?;
 
-        Ok(Command {
-            envelope_version: 1,
-            id: Id::new(),
-            aggregate_id: request.aggregate_id,
-            organization_id: request.organization_id,
-            workspace_id: request.workspace_id,
-            occurred_at: Timestamp::now(),
-            causation_key,
-            correlation_key,
-            actor: Actor::User {
-                id: identity.user_id,
+        let actor = Actor::User {
+            id: identity.user_id.clone(),
+        };
+
+        Ok((
+            Command {
+                envelope_version: 1,
+                id: Id::new(),
+                aggregate_id: request.aggregate_id,
+                organization_id: request.organization_id,
+                workspace_id: request.workspace_id,
+                occurred_at: Timestamp::now(),
+                causation_key,
+                correlation_key,
+                actor,
+                command_type: request.command_type,
+                payload: Payload {
+                    version: 1,
+                    data: serde_json::to_string(&payload)?,
+                },
             },
-            command_type: request.command_type,
-            payload: Payload {
-                version: 1,
-                data: serde_json::to_string(&payload)?,
-            },
-        })
+            identity,
+        ))
     }
 
     /// Resolves the organization's **active** group on this host.
@@ -231,6 +246,34 @@ impl CommandPlane {
         Ok(self.authenticator.authenticate(token).await?)
     }
 
+    /// Whether `identity` may touch `organization_id`'s group.
+    ///
+    /// The rule is one line of policy: an administrator may, everyone else must be
+    /// assigned to the organization (the genesis leader is assigned by ①, invited
+    /// users by the acceptance saga). It is deliberately *not* finer-grained —
+    /// per-workspace roles are the read-model work.
+    ///
+    /// # Errors
+    ///
+    /// [`CommandError::Auth`] with [`AuthError::Forbidden`] when the caller is
+    /// neither an administrator nor a member.
+    pub async fn authorize(
+        &self,
+        organization_id: &Id,
+        identity: &Identity,
+        group: &RaftGroup,
+    ) -> Result<(), CommandError> {
+        if identity.is_admin
+            || group
+                .state_machine()
+                .is_organization_member(organization_id, &identity.user_id)
+                .await
+        {
+            return Ok(());
+        }
+        Err(CommandError::Auth(AuthError::Forbidden))
+    }
+
     /// Routes the command to the organization's group and proposes it.
     ///
     /// # Errors
@@ -239,8 +282,12 @@ impl CommandPlane {
     /// [`CommandError::Propose`] (an **unknown** outcome — re-read before
     /// retrying).
     pub async fn submit(&self, request: CommandRequest) -> Result<CommandOutcome, CommandError> {
-        let command = self.build_command(request).await?;
+        let (command, identity) = self.build_command_with_identity(request).await?;
         let group = self.group_for(&command.organization_id)?;
+        if !is_membership_exempt(&command.command_type) {
+            self.authorize(&command.organization_id, &identity, &group)
+                .await?;
+        }
         let causation_key = command.causation_key.clone();
         let fingerprint = command.fingerprint();
 
@@ -351,6 +398,7 @@ mod tests {
                     node_id: 1,
                     address: "http://127.0.0.1:7001".to_owned(),
                 }],
+                leader_user_id: None,
                 status: TenantStatus::Active,
             },
         );
@@ -428,7 +476,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_command_is_routed_to_the_tenants_active_group() {
-        let group = RaftGroup::boot_single_node(1).await.unwrap();
+        let mut group = RaftGroup::boot_single_node(1).await.unwrap();
+        crate::test_support::assign_member(&mut group, &Id::from("org-1"), &Id::from("user-1"))
+            .await;
         let router = active_router();
         let registry = Arc::new(OneGroup {
             group_id: "tenant-1".to_owned(),
@@ -445,8 +495,12 @@ mod tests {
         // The event is in the group it was routed to.
         let target = plane.group_for(&Id::from("org-1")).unwrap();
         let events = target.committed_events(&Id::from("org-1")).await.unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event_type, "task.created");
+        let created: Vec<&str> = events
+            .iter()
+            .filter(|event| event.event_type == "task.created")
+            .map(|event| event.event_type.as_str())
+            .collect();
+        assert_eq!(created, ["task.created"], "the command landed in its group");
     }
 
     #[tokio::test]
@@ -463,6 +517,7 @@ mod tests {
             &TenantState {
                 group_id: Some("tenant-1".to_owned()),
                 replicas: Vec::new(),
+                leader_user_id: None,
                 status: TenantStatus::Registering,
             },
         );

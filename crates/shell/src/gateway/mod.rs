@@ -22,6 +22,7 @@ pub mod keycloak;
 #[cfg(feature = "oidc")]
 pub mod oidc;
 pub mod precompute;
+pub mod provision;
 pub mod ryw;
 
 pub use command::CommandError;
@@ -30,6 +31,7 @@ pub use command::CommandPlane;
 pub use command::CommandRequest;
 pub use command::GroupRegistry;
 pub use http::router;
+pub use http::router_with_provisioner;
 pub use identity::AuthError;
 pub use identity::AuthFuture;
 pub use identity::Authenticator;
@@ -50,5 +52,10 @@ pub use precompute::PASSWORD_HASH_FIELD;
 pub use precompute::PreComputeError;
 pub use precompute::hash_password;
 pub use precompute::verify_password;
+pub use provision::ProvisionError;
+pub use provision::ProvisionFuture;
+pub use provision::ProvisionRequest;
+pub use provision::Provisioned;
+pub use provision::Provisioner;
 pub use ryw::RywOutcome;
 pub use ryw::ensure_min_index;

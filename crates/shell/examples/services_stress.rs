@@ -283,6 +283,37 @@ mod stress {
         }
     }
 
+    /// Assigns `user_id` to `organization_id`, as the invitation saga does: the
+    /// stream id is derived from the business tuple (D12), so the gateway's
+    /// membership check finds it.
+    async fn assign_member(
+        group: &mut RaftGroup,
+        organization_id: &Id,
+        user_id: &Id,
+    ) -> anyhow::Result<()> {
+        let command = Command {
+            envelope_version: 1,
+            id: Id::new(),
+            aggregate_id: loomery_core::membership::organization_assignment_id(
+                organization_id,
+                user_id,
+            ),
+            organization_id: organization_id.clone(),
+            workspace_id: None,
+            occurred_at: Timestamp::from(1_700_000_000_000),
+            causation_key: Key::new(&NS, &format!("assign:{organization_id}:{user_id}")),
+            correlation_key: Key::new(&NS, "services-stress"),
+            actor: Actor::System,
+            command_type: loomery_core::membership::ASSIGN_MEMBER.to_owned(),
+            payload: Payload {
+                version: 1,
+                data: format!(r#"{{"user_id":"{user_id}"}}"#),
+            },
+        };
+        group.propose(command).await?;
+        Ok(())
+    }
+
     /// A `task.create` command for the outbox scenario.
     fn task_command(org: &Id, label: &str) -> Command {
         Command {
@@ -805,9 +836,17 @@ mod stress {
                 &TenantState {
                     group_id: Some(group_id(index)),
                     replicas: vec![replica(index)],
+                    leader_user_id: None,
                     status: TenantStatus::Active,
                 },
             );
+            // The users this profile authenticates as must belong to the
+            // organization they write to (a real deployment gets this from the
+            // invitation flow).
+            let mut group = group;
+            for identity in &expected {
+                assign_member(&mut group, &organization(index), &identity.user_id).await?;
+            }
             registry.insert(group_id(index), group.clone());
             tenants.push(Tenant {
                 group_id: group_id(index),

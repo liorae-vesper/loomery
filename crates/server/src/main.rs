@@ -84,14 +84,18 @@ async fn run() -> anyhow::Result<()> {
         (None, None)
     };
 
-    let mut host = Host::boot(config, authenticator, publisher.clone(), consumer.clone()).await?;
+    // The host is shared: the gateway's provisioning route holds it while the
+    // workers and the sweep run.
+    let host =
+        Arc::new(Host::boot(config, authenticator, publisher.clone(), consumer.clone()).await?);
     host.start_workers().await?;
 
-    for (organization_id, tenant) in host.incomplete_tenants().await {
+    // The boot already reconciled what it could; anything left needs an operator
+    // (a record that names no genesis leader).
+    for (organization_id, _) in host.incomplete_tenants().await {
         eprintln!(
-            "loomery-server: {organization_id} is still provisioning ({:?}); \
-             resume it with the original bootstrap",
-            tenant.status
+            "loomery-server: {organization_id} is still provisioning; its record names no \
+             genesis leader, so pass a bootstrap to resume it"
         );
     }
     eprintln!(

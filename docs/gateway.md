@@ -98,8 +98,21 @@ cluster.
 
 | Method | Path | Body / headers |
 |---|---|---|
+| `POST` | `/organizations` | `{ organization_id, leader_user_id, group_id? }`; **admin only** |
 | `POST` | `/organizations/{organization_id}/commands` | JSON command body; `Authorization: Bearer <token>` |
 | `GET` | `/organizations/{organization_id}/events` | bearer token + optional `X-Min-Index` |
+
+**Authorization, not just authentication.** A caller must belong to the
+organization — an `OrganizationAssignment` (the invitation flow) or a workspace
+role (the genesis owner's) — or carry the admin claim; otherwise `403`. The one
+exception is `invitation.accept`, the command an invitee submits *before* they are
+a member: the acceptance is what makes them one (the saga assigns them).
+
+`POST /organizations` is wired to the host's `Provisioner` seam, so the gateway
+needs to know nothing about groups or genesis; a host without it answers `503`.
+It is idempotent — every key and id derives from the business tuple (D12) — which
+is also why replaying it answers the same placement instead of creating a second
+organization.
 
 Inbound ids are **parsed** with `Id::parse`, never adopted, so untrusted strings
 cannot become identity (D10/D12).

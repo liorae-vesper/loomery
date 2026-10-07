@@ -13,6 +13,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use loomery_core::id::Id;
+use loomery_core::invitation;
 use loomery_core::org;
 use loomery_core::tenant;
 use loomery_core::user;
@@ -99,6 +100,23 @@ pub fn is_admin_only(command_type: &str) -> bool {
     )
 }
 
+/// Commands a caller may submit **without belonging to the organization**.
+///
+/// Onboarding is the one flow that starts before membership: an invitee accepts
+/// an invitation while they are still a stranger to the organization, and the
+/// acceptance is what makes them a member (the invitation saga then assigns them).
+/// Everything else needs membership or the admin claim — including every read.
+///
+/// Known limit, stated rather than baked in: the invitation plan trusts the
+/// `user_id` in the accept payload, so it cannot yet check that the accepting
+/// caller *is* the invited person. Binding those two (an email→user lookup, or
+/// deriving the invitee from the authenticated actor) is the invitation work;
+/// the exemption itself is deliberately one command wide.
+#[must_use]
+pub fn is_membership_exempt(command_type: &str) -> bool {
+    matches!(command_type, invitation::ACCEPT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +148,14 @@ mod tests {
             authenticator.authenticate(Some("nope")).await,
             Err(AuthError::Unknown)
         );
+    }
+
+    #[test]
+    fn membership_is_exempt_for_the_onboarding_command_only() {
+        assert!(is_membership_exempt(invitation::ACCEPT));
+        assert!(!is_membership_exempt(invitation::CREATE));
+        assert!(!is_membership_exempt("task.create"));
+        assert!(!is_membership_exempt(org::ARCHIVE));
     }
 
     #[test]

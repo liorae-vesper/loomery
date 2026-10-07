@@ -27,7 +27,6 @@ use loomery_core::tenant::Replica;
 use loomery_core::tenant::TenantState;
 use loomery_core::tenant::TenantStatus;
 use loomery_core::timestamp::Timestamp;
-use loomery_genesis::Bootstrap;
 use loomery_shell::config::HostConfig;
 use loomery_shell::config::HttpConfig;
 use loomery_shell::config::NatsConfig;
@@ -193,6 +192,32 @@ fn organization(index: usize) -> Id {
 /// A synthetic tenant group id for profile `index`, unique to this run.
 fn tenant(group: &str, index: usize) -> String {
     format!("{group}-{index}")
+}
+
+/// Assigns `user_id` to `organization_id`, as the invitation saga does: the
+/// stream id is derived from the business tuple (D12), so the gateway's
+/// membership check finds it.
+async fn assign_member(group: &mut RaftGroup, organization_id: &Id, user_id: &Id) {
+    let command = Command {
+        envelope_version: 1,
+        id: Id::new(),
+        aggregate_id: loomery_core::membership::organization_assignment_id(
+            organization_id,
+            user_id,
+        ),
+        organization_id: organization_id.clone(),
+        workspace_id: None,
+        occurred_at: Timestamp::from(1_700_000_000_000),
+        causation_key: Key::new(&STRESS_NS, &format!("assign:{organization_id}:{user_id}")),
+        correlation_key: Key::new(&STRESS_NS, "test-services"),
+        actor: Actor::System,
+        command_type: loomery_core::membership::ASSIGN_MEMBER.to_owned(),
+        payload: Payload {
+            version: 1,
+            data: format!(r#"{{"user_id":"{user_id}"}}"#),
+        },
+    };
+    group.propose(command).await.expect("assign the member");
 }
 
 /// Boots a single-node group and returns it with its organization.
@@ -380,12 +405,22 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
                     node_id: u64::try_from(index).unwrap_or(0).saturating_add(1),
                     address: format!("http://127.0.0.1:70{index}1"),
                 }],
+                leader_user_id: None,
                 status: TenantStatus::Active,
             },
         );
         hosted.insert(group_id.clone(), group.clone());
         tenants.push((group_id, organization_id, group));
     }
+    // Both authenticated users are members of both tenants, so the writes are
+    // authorized (the membership check is what a real deployment gets from the
+    // invitation flow).
+    for (_, organization_id, group) in &mut tenants {
+        for identity in &identities {
+            assign_member(group, organization_id, &identity.user_id).await;
+        }
+    }
+
     let plane = Arc::new(CommandPlane::new(
         router,
         Arc::new(Hosting { groups: hosted }),
@@ -493,7 +528,13 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
                 .expect("the outbox flush"),
         );
     }
-    assert_eq!(flushed, total, "one published message per command");
+    // One published message per command, plus one per assignment made above.
+    let assigned = USERS.len() * tenants.len();
+    assert_eq!(
+        flushed,
+        total + assigned,
+        "one published message per command and per assignment"
+    );
 
     let after_first = publisher.stored_messages().await.expect("stream info");
     assert_eq!(
@@ -660,6 +701,7 @@ async fn a_host_publishes_committed_events_to_the_real_broker() {
 
     // The host takes the real publisher; the identity provider is faked because
     // this test is about the outbox, not about OIDC (which the test above covers).
+    let member_id = Id::from(Key::new(&STRESS_NS, &format!("{run}-member")));
     let config = HostConfig {
         data_dir: root.path().to_path_buf(),
         http: HttpConfig {
@@ -681,31 +723,28 @@ async fn a_host_publishes_committed_events_to_the_real_broker() {
     let authenticator = Arc::new(StaticAuthenticator::new().with_token(
         "member",
         Identity {
-            user_id: Id::from(Key::new(&STRESS_NS, &format!("{run}-member"))),
+            user_id: member_id.clone(),
             is_admin: false,
         },
     ));
-    let mut host = Host::boot(
-        config,
-        authenticator,
-        Some(Arc::clone(&publisher)),
-        None::<Arc<NatsConsumer>>,
-    )
-    .await
-    .expect("boot the host");
+    let host = Arc::new(
+        Host::boot(
+            config,
+            authenticator,
+            Some(Arc::clone(&publisher)),
+            None::<Arc<NatsConsumer>>,
+        )
+        .await
+        .expect("boot the host"),
+    );
 
-    host.provision(
-        &group,
-        &[Replica {
-            node_id: 1,
-            address: "http://127.0.0.1:7001".to_owned(),
-        }],
-        &Bootstrap {
-            organization_id: organization_id.clone(),
-            leader_user_id: Id::from(Key::new(&STRESS_NS, &format!("{run}-leader"))),
-            occurred_at: Timestamp::from(1_700_000_000_000),
-        },
-    )
+    host.provision_with(loomery_shell::gateway::ProvisionRequest {
+        organization_id: organization_id.clone(),
+        // The owner *is* the caller: genesis ③ makes them a member, so the write
+        // below is authorized.
+        leader_user_id: member_id.clone(),
+        group_id: Some(group.clone()),
+    })
     .await
     .expect("provision a tenant");
     host.start_workers().await.expect("start the workers");

@@ -328,6 +328,40 @@ impl MemStateMachine {
             .collect()
     }
 
+    /// Whether `user_id` belongs to `organization_id`.
+    ///
+    /// Membership is an aggregate (`OrganizationAssignment`), and its stream id is
+    /// derived from the business tuple (D12), so the answer needs no index: the
+    /// id is computed and looked up. A user who was never assigned (or was
+    /// removed — removal is a compensating event that clears the flag) is not a
+    /// member.
+    pub async fn is_organization_member(&self, organization_id: &Id, user_id: &Id) -> bool {
+        let state = self.state.read().await;
+
+        // 1. the organization assignment the invitation saga writes, addressed by
+        //    its derived id (D12).
+        let assignment = state.streams.get(&membership::organization_assignment_id(
+            organization_id,
+            user_id,
+        ));
+        if matches!(assignment, Some(AggregateState::Assignment(assigned)) if assigned.is_assigned())
+        {
+            return true;
+        }
+
+        // 2. or a role in one of the organization's workspaces: genesis ③ gives
+        //    the owner theirs, and `membership.add_member` gives later members
+        //    theirs. Membership streams carry no organization id, which is sound
+        //    because one group hosts one organization (D1) — the same invariant
+        //    the router and the outbox rely on.
+        state.streams.values().any(|aggregate| match aggregate {
+            AggregateState::Membership(membership) => {
+                membership.user_id.as_ref() == Some(user_id) && membership.is_member()
+            }
+            _ => false,
+        })
+    }
+
     /// The control group's tenant records, keyed by organization id, for the
     /// router projection.
     ///
@@ -1027,7 +1061,7 @@ mod control_tests {
         let machine = Arc::new(MemStateMachine::default());
         let register = tenant_command(
             tenant::REGISTER,
-            r#"{"group_id":"tenant-1","replicas":[{"node_id":1,"address":"http://127.0.0.1:7001"}]}"#,
+            r#"{"group_id":"tenant-1","replicas":[{"node_id":1,"address":"http://127.0.0.1:7001"}],"leader_user_id":"018f2c3d-4e5f-7071-8293-a4b5c6d7e8f0"}"#,
         );
 
         let applied = apply_one(&machine, register).await;

@@ -2,11 +2,12 @@
 
 //! The axum adapter: HTTP in, gRPC/Raft out.
 //!
-//! Two routes:
+//! Three routes:
 //!
 //! * `POST /organizations/{organization_id}/commands` — submit a command;
 //! * `GET  /organizations/{organization_id}/events` — read applied events,
-//!   gated by `X-Min-Index` (read-your-writes).
+//!   gated by `X-Min-Index` (read-your-writes);
+//! * `POST /organizations` — provision a tenant (admin only).
 //!
 //! Every inbound id is **parsed**, never adopted: `Id::parse` rejects anything
 //! that is not a canonical UUID, so untrusted strings never become identity
@@ -36,23 +37,92 @@ use super::command::CommandError;
 use super::command::CommandPlane;
 use super::command::CommandRequest;
 use super::identity::AuthError;
+use super::provision::ProvisionError;
+use super::provision::ProvisionRequest;
+use super::provision::Provisioner;
 use super::ryw::RywOutcome;
 use super::ryw::ensure_min_index;
 use crate::group::GroupOps;
 use crate::group::ProposeOutcome;
 
-/// Shared HTTP state: the command plane behind an `Arc`.
+/// Shared HTTP state: the command plane behind an `Arc`, plus the optional
+/// provisioning seam.
 #[derive(Clone)]
 struct GatewayState {
     plane: Arc<CommandPlane>,
+    provisioner: Option<Arc<dyn Provisioner>>,
 }
 
-/// Builds the gateway's axum router.
+/// Builds the gateway's axum router without provisioning.
 pub fn router(plane: Arc<CommandPlane>) -> AxumRouter {
+    router_with_provisioner(plane, None)
+}
+
+/// Builds the gateway's axum router, wiring `POST /organizations` to `provisioner`
+/// when one is given (otherwise that route answers `503`).
+pub fn router_with_provisioner(
+    plane: Arc<CommandPlane>,
+    provisioner: Option<Arc<dyn Provisioner>>,
+) -> AxumRouter {
     AxumRouter::new()
+        .route("/organizations", post(provision_tenant))
         .route("/organizations/{organization_id}/commands", post(submit))
         .route("/organizations/{organization_id}/events", get(events))
-        .with_state(GatewayState { plane })
+        .with_state(GatewayState { plane, provisioner })
+}
+
+/// The provisioning body.
+///
+/// The field names are the wire contract (they mirror
+/// [`ProvisionRequest`]), hence the allow.
+#[allow(clippy::struct_field_names)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProvisionBody {
+    /// The organization to create (canonical UUID).
+    organization_id: String,
+    /// The user who owns its genesis.
+    leader_user_id: String,
+    /// The tenant group's id; the host derives one when absent.
+    group_id: Option<String>,
+}
+
+/// `POST /organizations` — provision a tenant. Admin only.
+async fn provision_tenant(
+    State(state): State<GatewayState>,
+    headers: HeaderMap,
+    Json(body): Json<ProvisionBody>,
+) -> Result<(StatusCode, Json<Value>), HttpError> {
+    let identity = state
+        .plane
+        .authenticate(bearer(&headers).as_deref())
+        .await?;
+    if !identity.is_admin {
+        return Err(CommandError::Auth(super::identity::AuthError::Forbidden).into());
+    }
+
+    let provisioner = state.provisioner.ok_or(HttpError::Unavailable)?;
+    let request = ProvisionRequest {
+        organization_id: parse_id(&body.organization_id)?,
+        leader_user_id: parse_id(&body.leader_user_id)?,
+        group_id: body.group_id,
+    };
+
+    let placement = provisioner
+        .provision(request)
+        .await
+        .map_err(|error| match error {
+            ProvisionError::Refused(message) => HttpError::BadRequest(message),
+            ProvisionError::Unavailable | ProvisionError::Failed(_) => HttpError::Unavailable,
+        })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "organization_id": placement.organization_id.to_string(),
+            "group_id": placement.group_id,
+        })),
+    ))
 }
 
 /// The command submission body.
@@ -109,12 +179,16 @@ async fn events(
     headers: HeaderMap,
 ) -> Result<Json<Value>, HttpError> {
     let organization_id = parse_id(&organization_id)?;
-    // Reads are tenant data: authenticate before anything else.
-    state
+    // Reads are tenant data: authenticate *and* authorize before anything else.
+    let identity = state
         .plane
         .authenticate(bearer(&headers).as_deref())
         .await?;
     let group = state.plane.group_for(&organization_id)?;
+    state
+        .plane
+        .authorize(&organization_id, &identity, &group)
+        .await?;
 
     if let Some(min_index) = min_index(&headers)? {
         match ensure_min_index(&group, min_index, state.plane.ryw_hold()).await {
@@ -136,7 +210,7 @@ async fn events(
 
 /// Parses a canonical id from untrusted input.
 fn parse_id(value: &str) -> Result<Id, HttpError> {
-    Id::parse(value).map_err(|_| HttpError::BadRequest("invalid id"))
+    Id::parse(value).map_err(|_| HttpError::BadRequest("invalid id".to_owned()))
 }
 
 /// Extracts the bearer token, when present.
@@ -157,7 +231,7 @@ fn min_index(headers: &HeaderMap) -> Result<Option<u64>, HttpError> {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .map(Some)
-            .ok_or(HttpError::BadRequest("invalid X-Min-Index")),
+            .ok_or(HttpError::BadRequest("invalid X-Min-Index".to_owned())),
     }
 }
 
@@ -165,7 +239,7 @@ fn min_index(headers: &HeaderMap) -> Result<Option<u64>, HttpError> {
 #[derive(Debug)]
 enum HttpError {
     /// Malformed request input.
-    BadRequest(&'static str),
+    BadRequest(String),
     /// The local replica is behind and the leader is elsewhere.
     ForwardToLeader(u64),
     /// No leader could serve the read.
@@ -265,7 +339,9 @@ mod tests {
     }
 
     async fn app() -> AxumRouter {
-        let group = RaftGroup::boot_single_node(1).await.unwrap();
+        let mut group = RaftGroup::boot_single_node(1).await.unwrap();
+        // `member` owns the organization, so it may read and write it.
+        crate::test_support::assign_member(&mut group, &Id::from(ORG), &Id::from("user-1")).await;
         let control_router = Router::new();
         control_router.apply(
             Id::from(ORG),
@@ -275,6 +351,7 @@ mod tests {
                     node_id: 1,
                     address: "http://127.0.0.1:7001".to_owned(),
                 }],
+                leader_user_id: None,
                 status: TenantStatus::Active,
             },
         );

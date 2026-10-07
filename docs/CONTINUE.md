@@ -75,6 +75,11 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
 - Identity is provider-agnostic: discovery, JWKS caching and local JWT validation
   with configurable claim names. The broker runtime is `async-nats` behind the
   `nats` feature: publisher, durable pull consumer and the tailer worker.
+- Provisioning is an admin-only gateway route (`POST /organizations`) wired to a
+  `Provisioner` seam; the placement records the genesis leader, so an interrupted
+  onboarding is finished from state at boot and by a 30 s sweep. Reads and writes
+  require organization membership (or the admin claim); `invitation.accept` is
+  the single onboarding exemption.
 - The runtime lives behind `nats`/`oidc` features (`test-services` enables both),
   so the default suite stays self-contained; the adapters are covered offline
   (a throwaway provider and fakes) and live (`mise run test-services`).
@@ -101,10 +106,9 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
    consumes with ack/retry classification, and `InvitationAcceptance` provisions
    assignment + membership replay-safely. The NATS JetStream binding is
    deployment wiring behind `LOOMERY_NATS_URL`.
-0. Runtime follow-ups: an HTTP provisioning endpoint (today `Host::provision` is
-   a library call), storing the genesis bootstrap in the tenant record so an
-   interrupted provisioning can be resumed from state, and tenant
-   **authorization** for reads and writes (authentication is wired).
+0. Runtime follow-ups: multi-node control groups and placements (the runbook
+   work), per-workspace roles in authorization, and binding an invitation to the
+   accepting caller (today `invitation.accept` trusts its payload's `user_id`).
 5. Extend persistence validation to large histories, interrupted snapshot
    creation/installation/purge and storage failures before changing the default.
    **Partly done:** a 300-command history survives restart in both modes, and a

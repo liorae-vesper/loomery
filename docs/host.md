@@ -41,6 +41,11 @@ A minimal configuration:
 `--config` names the file; `LOOMERY_*` environment variables override it, so a
 deployment can keep its shape in a file and its endpoints in the environment:
 
+Top-level settings are `node_id` (this replica's Raft id), `data_dir`, the
+control group's `control_group` name, and `node_address` — the address this node
+records in every placement it writes (a single-node host needs it only for the
+record).
+
 | Variable | Overrides |
 |---|---|
 | `LOOMERY_CONFIG` | the configuration path (instead of `--config`) |
@@ -137,29 +142,65 @@ host runs: see [Raft configuration](raft-configuration.md) and
 
 On `SIGTERM`/`Ctrl-C` it stops serving, aborts the workers and closes every group.
 
+## Provisioning
+
+`POST /organizations` (admin only) onboards a tenant:
+
+```sh
+curl -s -X POST http://127.0.0.1:8080/organizations \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'content-type: application/json' \
+  -d '{"organization_id":"'"$ORG"'","leader_user_id":"'"$OWNER"'"}'
+# {"organization_id":"…","group_id":"tenant-…"}
+```
+
+The route is wired to the gateway's `Provisioner` seam, which `Host` implements:
+it records the placement in the control group, runs genesis, activates, routes,
+boots the tenant's group and starts its outbox worker. It is **idempotent** —
+every key and id derives from the business tuple (D12) — so a retry after an
+unknown outcome answers the same placement.
+
+A crash between the placement and genesis is not a problem: the boot
+**reconciles**, finishing any registered-but-inactive tenant from the record
+alone (the placement carries the genesis leader), and the same pass runs every
+30 seconds. `Host::resume_provisioning` remains for an operator with a bootstrap
+in hand.
+
+## Access control
+
+| Which caller | Reads | Writes | Provision |
+|---|---|---|---|
+| Anyone with a valid token | ❌ unless a member | ❌ unless a member | ❌ |
+| A member of the organization (assignment or workspace role) | ✅ | ✅ | ❌ |
+| A system administrator (`is_admin`) | ✅ | ✅ | ✅ |
+
+`invitation.accept` is the single write open to non-members: the invitee is a
+stranger until the acceptance (and the saga that follows) makes them a member.
+
 ## Known gaps
 
 Stated rather than hidden, each with the work that closes it:
 
-- **Provisioning is a library call.** `Host::provision` registers the placement,
-  runs genesis, activates, routes and hosts the group — but no HTTP endpoint
-  exposes it yet, so a new organization is onboarded by an operator or a
-  management API (the next slice of the control plane).
-- **Incomplete tenants are reported, not resumed.** Finishing an interrupted
-  genesis needs the original [`Bootstrap`] (its leader user id is not part of the
-  tenant record). `Host::resume_provisioning` takes it from the operator;
-  storing it in the record is the follow-up.
-- **Reads authenticate but are not yet authorized.** Every read needs a valid
-  token, and the OIDC adapter says *who* is calling — but membership in the
-  organization is not enforced yet. That is the read-model/authorization work
-  ([gateway.md](gateway.md) limits).
-- **One node.** The control group is bootstrapped as a single voter; adding
-  replicas means driving `RaftGroup::raft` membership directly, which the
-  deployment runbook (Phase 7) is where that belongs.
-- **No observability stack.** Worker reports and startup go to stderr; tracing
-  and OpenTelemetry are Phase 7.
+- **Multi-node topologies are manual.** The control group is bootstrapped as a
+  single voter and each tenant group is hosted by one process; adding replicas
+  means driving `RaftGroup::raft` membership and a shared placement, which is
+  the deployment runbook's job (Phase 7). `HostConfig::node_address` is already
+  the address a placement records.
+- **Authorization is organization-wide.** Membership (or the admin claim) gates
+  everything; *per-workspace roles* are not consulted yet — an organization
+  member may read and write every workspace of it. That arrives with the read
+  models, where the query API can ask for the role a command needs.
+- **The invitation trusts its payload.** `invitation.accept` accepts the
+  `user_id` it is given, so it cannot check that the accepting caller *is* the
+  invited person; binding an email or the authenticated actor to the invitation
+  is the invitation work. This is why the membership exemption is exactly one
+  command wide.
+- **The membership check scans applied state.** `is_organization_member` looks
+  up the assignment stream's derived id (O(1)) and scans the group's aggregate
+  states for a workspace role. Correct, and cheap at today's sizes; the read
+  models replace it with an indexed query.
+- **No observability stack.** Worker reports, reconciliation and startup go to
+  stderr; tracing and OpenTelemetry are Phase 7.
 - **Snapshot-backed recovery is still experimental** (`group.storage.state_persistence`):
   see [persistence hardening](benchmarks/persistence-hardening.md).
 
 [`loomery_shell::host::Host`]: ../crates/shell/src/host.rs
-[`Bootstrap`]: ../crates/genesis/src/lib.rs

@@ -469,6 +469,11 @@ pub struct HostConfig {
     pub data_dir: PathBuf,
     /// The control group's id, which is also its database directory name.
     pub control_group: String,
+    /// This node's address as its peers dial it.
+    ///
+    /// Every placement this host writes records it (D1). A single-node host needs
+    /// it only for the record; a multi-node placement is the control plane's.
+    pub node_address: String,
     /// The HTTP gateway.
     pub http: HttpConfig,
     /// Consensus, transport, storage and proposal settings for every group.
@@ -484,6 +489,7 @@ impl Default for HostConfig {
             node_id: 1,
             data_dir: PathBuf::from("data"),
             control_group: "control".to_owned(),
+            node_address: "http://127.0.0.1:7001".to_owned(),
             http: HttpConfig::default(),
             group: GroupConfig::default(),
             nats: None,
@@ -509,6 +515,11 @@ impl HostConfig {
         anyhow::ensure!(
             !self.control_group.contains('.'),
             "control_group is a NATS subject segment (D11): it must not contain a dot"
+        );
+        anyhow::ensure!(
+            !self.node_address.trim().is_empty()
+                && self.node_address.len() <= loomery_core::tenant::MAX_ADDRESS_BYTES,
+            "node_address must be a non-empty address within the placement bounds"
         );
         self.http.validate()?;
         self.group.validate()?;

@@ -24,6 +24,47 @@ pub(crate) fn bootstrap_value() -> Bootstrap {
     }
 }
 
+/// The namespace the test helpers' derived keys use.
+const KEY_NS: loomery_core::Uuid =
+    loomery_core::Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);
+
+/// Assigns `user_id` to `organization_id` in `group`, exactly as the invitation
+/// saga does: the stream id is derived from the business tuple (D12), so the
+/// gateway's membership check finds it.
+pub(crate) async fn assign_member(
+    group: &mut crate::raft::RaftGroup,
+    organization_id: &loomery_core::id::Id,
+    user_id: &loomery_core::id::Id,
+) {
+    use crate::group::GroupOps;
+    use loomery_core::actor::Actor;
+    use loomery_core::envelope::Command;
+    use loomery_core::envelope::Payload;
+    use loomery_core::id::Id;
+    use loomery_core::key::Key;
+    use loomery_core::membership;
+    use loomery_core::timestamp::Timestamp;
+
+    let command = Command {
+        envelope_version: 1,
+        id: Id::new(),
+        aggregate_id: membership::organization_assignment_id(organization_id, user_id),
+        organization_id: organization_id.clone(),
+        workspace_id: None,
+        occurred_at: Timestamp::from(1_700_000_000_000),
+        causation_key: Key::new(&KEY_NS, &format!("assign:{organization_id}:{user_id}")),
+        correlation_key: Key::new(&KEY_NS, "test-support"),
+        actor: Actor::System,
+        command_type: membership::ASSIGN_MEMBER.to_owned(),
+        payload: Payload {
+            version: 1,
+            data: format!(r#"{{"user_id":"{user_id}"}}"#),
+        },
+    };
+
+    group.propose(command).await.unwrap();
+}
+
 /// The group, faked: it appends commands, "applies" the event an aggregate
 /// would produce, and can lose a response so the tests can crash the worker at
 /// the worst possible moment.

@@ -617,6 +617,13 @@ recorded in [`domain-model.md`](domain-model.md).
   - [x] NATS runtime: the outbox publisher, a durable pull consumer with peek/ack
         semantics, and an outbox worker that resumes from a persisted cursor
         instead of relying on the broker's dedup window
+  - [x] Provisioning is an API, not a library call: `POST /organizations`
+        (admin only) through the gateway's `Provisioner` seam
+  - [x] Crash-resumable provisioning: the placement records the genesis leader, so
+        the host reconciles an interrupted onboarding from state (at boot and
+        every 30 s) instead of needing the original caller
+  - [x] Authorization: reads and writes require organization membership (or the
+        admin claim), with `invitation.accept` as the single onboarding exemption
 - [ ] Phase 2 work core
 - [ ] Phase 3 notifications
 - [ ] Phase 4 knowledge base & RAG
@@ -642,4 +649,5 @@ integration layers:
 ---
 
 *Last updated: 2026-10-06 — runtime host and binary, provider-agnostic OIDC, NATS
-runtime adapters, service-backed stress profiles and a license bundle.*
+runtime adapters, provisioning and authorization at the gateway, service-backed
+stress profiles and a license bundle.*
