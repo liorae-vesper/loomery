@@ -19,6 +19,7 @@ use std::time::UNIX_EPOCH;
 use loomery_core::Uuid;
 use loomery_core::actor::Actor;
 use loomery_core::envelope::Command;
+use loomery_core::envelope::Event;
 use loomery_core::envelope::Payload;
 use loomery_core::id::Id;
 use loomery_core::key::Key;
@@ -26,6 +27,10 @@ use loomery_core::tenant::Replica;
 use loomery_core::tenant::TenantState;
 use loomery_core::tenant::TenantStatus;
 use loomery_core::timestamp::Timestamp;
+use loomery_genesis::Bootstrap;
+use loomery_shell::config::HostConfig;
+use loomery_shell::config::HttpConfig;
+use loomery_shell::config::NatsConfig;
 use loomery_shell::control::Router;
 use loomery_shell::gateway::AuthError;
 use loomery_shell::gateway::Authenticator;
@@ -33,14 +38,20 @@ use loomery_shell::gateway::CommandPlane;
 use loomery_shell::gateway::CommandRequest;
 use loomery_shell::gateway::GroupRegistry;
 use loomery_shell::gateway::Identity;
+use loomery_shell::gateway::OidcAuthenticator;
+use loomery_shell::gateway::StaticAuthenticator;
 use loomery_shell::gateway::keycloak::KeycloakAuthenticator;
 use loomery_shell::group::GroupOps;
+use loomery_shell::host::Host;
+use loomery_shell::outbox::NatsConsumer;
 use loomery_shell::outbox::Outbox;
 use loomery_shell::outbox::OutboxMessage;
 use loomery_shell::outbox::Publisher;
 use loomery_shell::outbox::nats::NatsPublisher;
 use loomery_shell::raft::RaftGroup;
+use loomery_shell::saga::Consumer;
 use serde_json::json;
+use tower::ServiceExt;
 
 /// A required service URL; fails loudly if the stack is not running.
 fn required(name: &str) -> String {
@@ -62,11 +73,10 @@ fn run_id() -> String {
 
 #[tokio::test]
 async fn jetstream_stores_each_outbox_message_once_per_dedup_id() {
-    let publisher = NatsPublisher::connect(&required("LOOMERY_TEST_NATS_URL"))
+    let run = run_id();
+    let publisher = NatsPublisher::connect_config(&nats_config(&required("LOOMERY_TEST_NATS_URL")))
         .await
         .expect("connect to NATS");
-
-    let run = run_id();
     let subject = format!("loomery.events.test.{run}");
     let message = |id: &str, payload: &str| OutboxMessage {
         subject: subject.clone(),
@@ -294,13 +304,14 @@ async fn concurrent_authentication_keeps_identities_apart() {
 
 #[tokio::test]
 async fn a_replayed_outbox_batch_is_absorbed_by_the_broker() {
+    let run = run_id();
     let publisher = Arc::new(
-        NatsPublisher::connect(&required("LOOMERY_TEST_NATS_URL"))
+        NatsPublisher::connect_config(&nats_config(&required("LOOMERY_TEST_NATS_URL")))
             .await
             .expect("connect to NATS"),
     );
     let (organization_id, mut group) = boot(0).await;
-    let group_id = tenant(&format!("outbox-{}", run_id()), 0);
+    let group_id = tenant(&format!("outbox-{run}"), 0);
     let events = 25usize;
 
     for index in 0..events {
@@ -438,7 +449,7 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
 
     // The identity never crossed: the actor of every event is the token's user.
     let publisher = Arc::new(
-        NatsPublisher::connect(&nats_url)
+        NatsPublisher::connect_config(&nats_config(&nats_url))
             .await
             .expect("connect to NATS"),
     );
@@ -504,4 +515,245 @@ async fn commands_through_the_plane_hold_up_with_real_auth_and_the_broker() {
         after_first,
         "the replayed batch must not add messages"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The runtime adapters against the real services
+// ---------------------------------------------------------------------------
+
+/// The broker configuration the runtime tests use.
+///
+/// The stream is the production one: `JetStream` rejects two streams whose
+/// subjects overlap, and the tests isolate themselves through per-run *group
+/// ids* (so their subjects differ) and per-run consumers instead.
+fn nats_config(url: &str) -> NatsConfig {
+    NatsConfig {
+        url: url.to_owned(),
+        ..NatsConfig::default()
+    }
+}
+
+/// A canonical event, as the outbox would publish it.
+fn event_for(organization_id: &Id) -> Event {
+    Event {
+        envelope_version: 1,
+        id: Id::from(Key::new(&STRESS_NS, "runtime-live-event")),
+        aggregate_id: Id::from(Key::new(&STRESS_NS, "runtime-live-task")),
+        organization_id: organization_id.clone(),
+        workspace_id: None,
+        occurred_at: Timestamp::from(1_700_000_000_000),
+        causation_key: Key::new(&STRESS_NS, "runtime-live-cause"),
+        correlation_key: Key::new(&STRESS_NS, "runtime-live"),
+        actor: Actor::System,
+        event_type: "task.created".to_owned(),
+        payload: Payload {
+            version: 1,
+            data: r#"{"title":"live"}"#.to_owned(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn a_real_keycloak_token_validates_through_the_oidc_adapter() {
+    let base = required("LOOMERY_TEST_KEYCLOAK_URL");
+    let realm = optional("LOOMERY_TEST_KEYCLOAK_REALM", "loomery");
+    let client = optional("LOOMERY_TEST_KEYCLOAK_CLIENT", "loomery-gateway");
+
+    // Nothing provider-specific: the issuer drives discovery and the key set.
+    let authenticator = OidcAuthenticator::new(loomery_shell::config::OidcConfig {
+        issuer: format!("{base}/realms/{realm}"),
+        ..loomery_shell::config::OidcConfig::default()
+    })
+    .expect("a configured adapter");
+    authenticator.warm().await.expect("discovery and JWKS");
+
+    let admin_token =
+        KeycloakAuthenticator::password_token(&base, &realm, &client, "admin", "admin")
+            .await
+            .expect("admin's token");
+    let admin = authenticator
+        .authenticate(Some(&admin_token))
+        .await
+        .expect("a locally validated token");
+    assert!(admin.is_admin, "the realm puts `admin` in the admins group");
+
+    let ada_token = KeycloakAuthenticator::password_token(&base, &realm, &client, "ada", "ada")
+        .await
+        .expect("ada's token");
+    let ada = authenticator
+        .authenticate(Some(&ada_token))
+        .await
+        .expect("a locally validated token");
+    assert!(!ada.is_admin);
+    assert_ne!(
+        admin.user_id, ada.user_id,
+        "distinct subjects, distinct ids"
+    );
+
+    let truncated: String = admin_token.chars().take(10).collect();
+    assert_eq!(
+        authenticator.authenticate(Some(&truncated)).await,
+        Err(AuthError::Unknown),
+        "a truncated signature is refused"
+    );
+}
+
+#[tokio::test]
+async fn the_nats_consumer_peeks_until_acked() {
+    let url = required("LOOMERY_TEST_NATS_URL");
+    let run = run_id();
+    let group = format!("consumer-{run}");
+    let organization_id = Id::from(Key::new(&STRESS_NS, &group));
+
+    // A durable consumer filtered to this run's group, so other runs' events
+    // cannot appear.
+    let config = NatsConfig {
+        // The stream still holds every event; only this consumer is narrowed, so
+        // it cannot see another run's messages.
+        filter_subject: Some(format!("loomery.events.{group}.>")),
+        durable: format!("saga-{run}"),
+        ..nats_config(&url)
+    };
+    let publisher = NatsPublisher::connect_config(&config)
+        .await
+        .expect("connect to NATS");
+    let consumer = NatsConsumer::connect(&config).await.expect("a consumer");
+
+    let message = OutboxMessage {
+        subject: format!("loomery.events.{group}.task.created"),
+        message_id: format!("{group}:7:e0"),
+        payload: serde_json::to_vec(&event_for(&organization_id)).unwrap(),
+    };
+    publisher.publish(message).await.expect("publish");
+
+    let first = consumer
+        .next()
+        .await
+        .expect("no consume error")
+        .expect("the published message");
+    assert_eq!(first.group_id, group);
+    assert_eq!(first.log_index, 7, "the log index is rebuilt from the id");
+    assert_eq!(first.event.event_type, "task.created");
+
+    // Peek, not consume: the message stays until it is acked.
+    let again = consumer
+        .next()
+        .await
+        .expect("no consume error")
+        .expect("still");
+    assert_eq!(again.message_id, first.message_id);
+
+    consumer.ack(&first).await.expect("ack");
+    assert!(
+        consumer.next().await.expect("no consume error").is_none(),
+        "nothing is left once the message is acked"
+    );
+}
+
+#[tokio::test]
+async fn a_host_publishes_committed_events_to_the_real_broker() {
+    let url = required("LOOMERY_TEST_NATS_URL");
+    let root = tempfile::tempdir().expect("a temporary data directory");
+    let run = run_id();
+    let group = format!("host-{run}");
+    let organization_id = Id::from(Key::new(&STRESS_NS, &group));
+
+    // The host takes the real publisher; the identity provider is faked because
+    // this test is about the outbox, not about OIDC (which the test above covers).
+    let config = HostConfig {
+        data_dir: root.path().to_path_buf(),
+        http: HttpConfig {
+            bind: "127.0.0.1:0".to_owned(),
+            ryw_hold_ms: 50,
+        },
+        ..HostConfig::default()
+    };
+    let publisher = Arc::new(
+        NatsPublisher::connect_config(&nats_config(&url))
+            .await
+            .expect("connect to NATS"),
+    );
+    let observer = NatsPublisher::connect_config(&nats_config(&url))
+        .await
+        .expect("connect to NATS");
+    let before = observer.stored_messages().await.expect("stream info");
+
+    let authenticator = Arc::new(StaticAuthenticator::new().with_token(
+        "member",
+        Identity {
+            user_id: Id::from(Key::new(&STRESS_NS, &format!("{run}-member"))),
+            is_admin: false,
+        },
+    ));
+    let mut host = Host::boot(
+        config,
+        authenticator,
+        Some(Arc::clone(&publisher)),
+        None::<Arc<NatsConsumer>>,
+    )
+    .await
+    .expect("boot the host");
+
+    host.provision(
+        &group,
+        &[Replica {
+            node_id: 1,
+            address: "http://127.0.0.1:7001".to_owned(),
+        }],
+        &Bootstrap {
+            organization_id: organization_id.clone(),
+            leader_user_id: Id::from(Key::new(&STRESS_NS, &format!("{run}-leader"))),
+            occurred_at: Timestamp::from(1_700_000_000_000),
+        },
+    )
+    .await
+    .expect("provision a tenant");
+    host.start_workers().await.expect("start the workers");
+
+    // A real write through the gateway, then a real publish to JetStream.
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/organizations/{organization_id}/commands"))
+        .header("authorization", "Bearer member")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "aggregate_id": Id::from(Key::new(&STRESS_NS, &format!("{run}-task"))).to_string(),
+                "command_type": "task.create",
+                "payload": { "title": "from the host" },
+            })
+            .to_string(),
+        ))
+        .expect("a request");
+    assert_eq!(
+        host.router()
+            .oneshot(request)
+            .await
+            .expect("the gateway answers")
+            .status(),
+        axum::http::StatusCode::OK
+    );
+
+    let mut stored = before;
+    for _ in 0..200 {
+        stored = observer.stored_messages().await.expect("stream info");
+        if stored > before {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        stored > before,
+        "the host's outbox worker published the committed event to JetStream"
+    );
+
+    // The cursor the worker persisted is what a restart resumes from.
+    let cursor =
+        loomery_shell::outbox::cursor::CursorStore::in_group_dir(&root.path().join(&group))
+            .load()
+            .await
+            .expect("the persisted cursor");
+    assert!(cursor.log_index > 0);
+
+    host.shutdown().await.expect("a clean shutdown");
 }

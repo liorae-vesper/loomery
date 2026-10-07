@@ -18,9 +18,13 @@
 
 use std::sync::Arc;
 
-#[cfg(feature = "test-services")]
+pub mod cursor;
+#[cfg(feature = "nats")]
 pub mod nats;
-#[cfg(feature = "test-services")]
+pub mod worker;
+#[cfg(feature = "nats")]
+pub use nats::NatsConsumer;
+#[cfg(feature = "nats")]
 pub use nats::NatsPublisher;
 use std::sync::Mutex;
 
@@ -68,7 +72,10 @@ pub trait Publisher: Send + Sync {
 }
 
 /// The last position published for a group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(deny_unknown_fields)]
 pub struct Cursor {
     /// The Raft log index.
     pub log_index: u64,
@@ -93,10 +100,38 @@ impl Default for Cursor {
     }
 }
 
+/// The prefix of every published subject (D11).
+pub const SUBJECT_PREFIX: &str = "loomery.events.";
+
 /// The subject a domain event publishes to (D11).
 #[must_use]
 pub fn subject_for(group_id: &str, event_type: &str) -> String {
-    format!("loomery.events.{group_id}.{event_type}")
+    format!("{SUBJECT_PREFIX}{group_id}.{event_type}")
+}
+
+/// The inverse of [`subject_for`]: the `(group_id, event_type)` a subject carries.
+///
+/// The group id is the first segment after the prefix, because event types
+/// contain dots (`task.created`) while group ids must not — [`subject_for`] cannot
+/// enforce that, so the rule is stated here and checked where group ids are
+/// configured. Returns `None` for anything that is not a Loomery event subject.
+#[must_use]
+pub fn split_subject(subject: &str) -> Option<(String, String)> {
+    let rest = subject.strip_prefix(SUBJECT_PREFIX)?;
+    let (group_id, event_type) = rest.split_once('.')?;
+    (!group_id.is_empty() && !event_type.is_empty())
+        .then(|| (group_id.to_owned(), event_type.to_owned()))
+}
+
+/// The log index inside `message_id` (`<group_id>:<log_index>:e<pos>`).
+///
+/// The group id is required to disambiguate the parse: it is known from the
+/// subject, and a message id that does not carry it was not produced by
+/// [`message_id`] for that group — so the answer is `None` rather than a guess.
+#[must_use]
+pub fn log_index_for(group_id: &str, message_id: &str) -> Option<u64> {
+    let rest = message_id.strip_prefix(group_id)?.strip_prefix(':')?;
+    rest.split_once(':')?.0.parse().ok()
 }
 
 /// The broker-side dedup id of one event (D11).
@@ -133,6 +168,19 @@ impl<P: Publisher> Outbox<P> {
         Self {
             publisher,
             cursor: Mutex::new(Cursor::start()),
+        }
+    }
+
+    /// Creates an outbox that resumes from a previously published `cursor`.
+    ///
+    /// A host loads the cursor from its [`cursor::CursorStore`] on boot, so a
+    /// restart republishes nothing that already reached the broker — even if the
+    /// broker's dedup window (D11) has since expired.
+    #[must_use]
+    pub fn resuming(publisher: P, cursor: Cursor) -> Self {
+        Self {
+            publisher,
+            cursor: Mutex::new(cursor),
         }
     }
 
@@ -355,6 +403,43 @@ mod tests {
 
         assert_eq!(resumed, 1);
         assert_eq!(publisher.published()[1].message_id, "tenant-1:2:e0");
+    }
+
+    #[test]
+    fn a_subject_round_trips_through_its_parser() {
+        let subject = subject_for("tenant-1", "task.created");
+        assert_eq!(subject, "loomery.events.tenant-1.task.created");
+        assert_eq!(
+            split_subject(&subject),
+            Some(("tenant-1".to_owned(), "task.created".to_owned()))
+        );
+    }
+
+    #[test]
+    fn an_event_type_with_dots_is_kept_whole() {
+        let subject = subject_for("control", "task.created");
+        assert_eq!(
+            split_subject(&subject),
+            Some(("control".to_owned(), "task.created".to_owned()))
+        );
+    }
+
+    #[test]
+    fn subjects_that_are_not_loomery_events_are_refused() {
+        assert_eq!(split_subject("other.tenant-1.task.created"), None);
+        assert_eq!(split_subject("loomery.events.tenant-1"), None);
+        assert_eq!(split_subject("loomery.events..task.created"), None);
+        assert_eq!(split_subject("loomery.events.tenant-1."), None);
+    }
+
+    #[test]
+    fn the_log_index_is_read_from_the_message_id() {
+        assert_eq!(log_index_for("tenant-1", "tenant-1:7:e0"), Some(7));
+        assert_eq!(log_index_for("tenant-1", "tenant-1:9:e12"), Some(9));
+        assert_eq!(log_index_for("tenant-1", "other:9:e12"), None);
+        assert_eq!(log_index_for("tenant-1", "tenant-1"), None);
+        assert_eq!(log_index_for("tenant-1", "tenant-1:not-a-number:e0"), None);
+        assert_eq!(log_index_for("", ""), None);
     }
 
     #[test]

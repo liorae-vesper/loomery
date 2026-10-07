@@ -35,6 +35,7 @@ use crate::raft::RaftGroup;
 
 use super::identity::AuthError;
 use super::identity::Authenticator;
+use super::identity::Identity;
 use super::identity::is_admin_only;
 use super::precompute;
 use super::precompute::PreComputeError;
@@ -215,6 +216,19 @@ impl CommandPlane {
         self.groups
             .group(&route.group_id)
             .ok_or(CommandError::GroupUnavailable)
+    }
+
+    /// Authenticates a caller without proposing anything — the read path.
+    ///
+    /// Reads must not be open: an organization's event log is tenant data. This
+    /// checks *who* is calling; authorizing them against the organization's
+    /// membership is the read-model work (see `docs/gateway.md`).
+    ///
+    /// # Errors
+    ///
+    /// [`CommandError::Auth`] when the token is missing or unknown.
+    pub async fn authenticate(&self, token: Option<&str>) -> Result<Identity, CommandError> {
+        Ok(self.authenticator.authenticate(token).await?)
     }
 
     /// Routes the command to the organization's group and proposes it.

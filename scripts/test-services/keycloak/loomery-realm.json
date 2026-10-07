@@ -43,9 +43,29 @@
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
       "fullScopeAllowed": true,
-      "redirectUris": ["*"],
-      "webOrigins": ["*"],
-      "defaultClientScopes": ["profile", "email", "loomery-groups"]
+      "redirectUris": [
+        "*"
+      ],
+      "webOrigins": [
+        "*"
+      ],
+      "defaultClientScopes": [
+        "basic",
+        "profile",
+        "email",
+        "loomery-groups"
+      ],
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
   "groups": [
@@ -84,7 +104,9 @@
           "temporary": false
         }
       ],
-      "groups": ["/admins"]
+      "groups": [
+        "/admins"
+      ]
     }
   ]
 }

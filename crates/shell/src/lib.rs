@@ -25,6 +25,7 @@ pub mod config;
 pub mod control;
 pub mod gateway;
 pub mod group;
+pub mod host;
 pub mod outbox;
 pub mod raft;
 pub mod saga;
@@ -34,3 +35,5 @@ pub(crate) mod test_support;
 
 #[cfg(test)]
 mod e2e_tests;
+#[cfg(test)]
+mod host_tests;

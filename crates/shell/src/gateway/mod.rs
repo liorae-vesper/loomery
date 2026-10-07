@@ -19,6 +19,8 @@ pub mod http;
 pub mod identity;
 #[cfg(feature = "test-services")]
 pub mod keycloak;
+#[cfg(feature = "oidc")]
+pub mod oidc;
 pub mod precompute;
 pub mod ryw;
 
@@ -36,8 +38,13 @@ pub use identity::StaticAuthenticator;
 pub use identity::is_admin_only;
 #[cfg(feature = "test-services")]
 pub use keycloak::KeycloakAuthenticator;
-#[cfg(feature = "test-services")]
-pub use keycloak::install_tls_provider;
+#[cfg(feature = "oidc")]
+pub use oidc::OidcAuthenticator;
+#[cfg(feature = "oidc")]
+pub use oidc::install_tls_provider;
+
+#[cfg(all(test, feature = "oidc"))]
+mod oidc_tests;
 pub use precompute::PASSWORD_FIELD;
 pub use precompute::PASSWORD_HASH_FIELD;
 pub use precompute::PreComputeError;

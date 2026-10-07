@@ -101,13 +101,19 @@ async fn submit(
     })))
 }
 
-/// `GET /organizations/{organization_id}/events`, gated by `X-Min-Index`.
+/// `GET /organizations/{organization_id}/events`, authenticated and gated by
+/// `X-Min-Index`.
 async fn events(
     State(state): State<GatewayState>,
     Path(organization_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, HttpError> {
     let organization_id = parse_id(&organization_id)?;
+    // Reads are tenant data: authenticate before anything else.
+    state
+        .plane
+        .authenticate(bearer(&headers).as_deref())
+        .await?;
     let group = state.plane.group_for(&organization_id)?;
 
     if let Some(min_index) = min_index(&headers)? {
@@ -332,6 +338,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/organizations/{ORG}/events"))
+                    .header("authorization", "Bearer member")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -359,6 +366,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unauthenticated_reads_are_rejected() {
+        let app = app().await;
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/organizations/{ORG}/events"))
+            .body(Body::empty())
+            .unwrap();
+
+        // An organization's event log is tenant data: no token, no read.
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
     async fn unknown_and_malformed_organizations_are_rejected() {
         // A well-formed but unregistered organization: 404.
         let response = app()
@@ -367,6 +390,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri("/organizations/018f2c3d-4e5f-7071-8293-a4b5c6d7e8ff/events")
+                    .header("authorization", "Bearer member")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -381,6 +405,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri("/organizations/not-a-uuid/events")
+                    .header("authorization", "Bearer member")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -397,6 +422,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/organizations/{ORG}/events"))
+                    .header("authorization", "Bearer member")
                     .header("x-min-index", "100000")
                     .body(Body::empty())
                     .unwrap(),

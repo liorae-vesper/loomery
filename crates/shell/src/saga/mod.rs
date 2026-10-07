@@ -81,6 +81,18 @@ pub trait Consumer: Send + Sync {
     fn ack(&self, message: &SagaMessage) -> impl Future<Output = Result<(), ConsumeError>> + Send;
 }
 
+/// An `Arc` of a consumer is itself a consumer, so a host can share one broker
+/// subscription between the runner and its own bookkeeping.
+impl<T: Consumer + ?Sized> Consumer for Arc<T> {
+    fn next(&self) -> impl Future<Output = Result<Option<SagaMessage>, ConsumeError>> + Send {
+        (**self).next()
+    }
+
+    fn ack(&self, message: &SagaMessage) -> impl Future<Output = Result<(), ConsumeError>> + Send {
+        (**self).ack(message)
+    }
+}
+
 /// How a handler failure should be treated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Retry {

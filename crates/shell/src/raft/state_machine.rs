@@ -27,6 +27,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use tokio::sync::watch;
+
 use loomery_core::aggregate::AggregatePlan;
 use loomery_core::aggregate::Processed;
 use loomery_core::aggregate::Processed::Executed;
@@ -110,6 +112,12 @@ pub struct MemStateMachine {
     snapshot_idx: AtomicU64,
     /// The last snapshot this replica built or received.
     current_snapshot: RwLock<Option<StoredSnapshot>>,
+    /// Notifies the host's workers that the applied log moved.
+    ///
+    /// A `watch` rather than a broadcast because the value *is* the state a
+    /// worker needs (the latest applied index): a worker that wakes late still
+    /// sees the current index and catches up from its own cursor.
+    applied: watch::Sender<u64>,
 }
 
 impl Default for MemStateMachine {
@@ -120,6 +128,7 @@ impl Default for MemStateMachine {
             persistence: crate::config::StatePersistence::Checkpoint,
             snapshot_idx: AtomicU64::new(0),
             current_snapshot: RwLock::new(None),
+            applied: watch::channel(0).0,
         }
     }
 }
@@ -334,6 +343,38 @@ impl MemStateMachine {
                 AggregateState::Tenant(tenant) => Some((organization_id.clone(), tenant.clone())),
                 _ => None,
             })
+            .collect()
+    }
+
+    /// A receiver that changes whenever the applied log advances.
+    ///
+    /// The host's workers wait on this instead of polling. The value is the last
+    /// applied log index, so a worker that wakes late still catches up (from its
+    /// own cursor) rather than missing entries.
+    #[must_use]
+    pub fn applied_watch(&self) -> watch::Receiver<u64> {
+        self.applied.subscribe()
+    }
+
+    /// Applied events at or after `log_index`, in log order.
+    ///
+    /// The outbox tailer resumes from its persisted cursor. Passing the cursor's
+    /// `log_index` returns the boundary entry too, and the outbox skips the
+    /// positions it has already published.
+    pub async fn applied_events_since(
+        &self,
+        organization_id: &Id,
+        log_index: u64,
+    ) -> Vec<AppliedEvent> {
+        self.state
+            .read()
+            .await
+            .applied
+            .iter()
+            .filter(|applied| {
+                &applied.event.organization_id == organization_id && applied.log_index >= log_index
+            })
+            .cloned()
             .collect()
     }
 }
@@ -684,6 +725,11 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
             }
         }
 
+        // Wake the host's workers: the applied log moved (outbox tailer, sagas).
+        // `send_replace` never blocks and always leaves the latest index behind.
+        if let Some(last_applied) = group.last_applied_log {
+            self.applied.send_replace(last_applied.index);
+        }
         drop(group);
         if self.disk.is_some() && self.persistence == crate::config::StatePersistence::Checkpoint {
             let group = self.state.read().await;
@@ -770,6 +816,9 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
         }
         group.registry = registry;
         group.dedup = data.dedup;
+        if let Some(last_applied) = meta.last_log_id {
+            self.applied.send_replace(last_applied.index);
+        }
         drop(group);
 
         let mut current = self.current_snapshot.write().await;
