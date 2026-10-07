@@ -1,0 +1,13 @@
+# Build context for `.buildkite/Dockerfile` (see the `build-ci-image` step).
+#
+# The Dockerfile only copies mise.toml and mise.lock, but without this file the
+# daemon would still tar the whole working tree as the build context — which
+# includes a multi-gigabyte `target/` directory.
+.git/
+.idea/
+.pi/
+__pycache__/
+benchmark-results/
+lcov.info
+target/
+THIRDPARTY.yml

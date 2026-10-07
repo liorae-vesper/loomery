@@ -1,0 +1,143 @@
+# Loomery CI — Buildkite.
+#
+# Converted from .github/workflows/ci.yml with the `bk` CLI:
+#
+#   bk pipeline convert --file .github/workflows/ci.yml --vendor github
+#
+# and then finished by hand, because two things the converter cannot know:
+#
+#   1. Every job used to call `bash scripts/install-host-deps.sh` to apt-install
+#      protoc and libclang. Those, the pinned Rust toolchain and the cargo tools
+#      now come from .buildkite/Dockerfile, so each step runs in that image and
+#      no step installs anything.
+#   2. The `test services` job drives a compose stack through the host Docker
+#      daemon, so that one step needs the socket, host networking and the
+#      checkout mounted at its host path (see the step's comments).
+#   3. The converted output also carried `cache#v1.10.0`, the counterpart of the
+#      workflow's Swatinem/rust-cache. It is left out: every backend needs agent
+#      setup this repository cannot know about (`fs` writes under
+#      /var/cache/buildkite by default, s3/gcs/azure need credentials of their
+#      own), and a misconfigured backend fails the step. Once a backend exists,
+#      adding it back per step restores the old behaviour — the cache and docker
+#      plugins use disjoint hooks, so the order of the two does not matter:
+#
+#        plugins:
+#          - docker#v5.14.0:
+#              image: "${LOOMERY_CI_IMAGE}"
+#              chown: true
+#          - cache#v1.12.0:
+#              path: target
+#              manifest: Cargo.lock
+#              restore: pipeline
+#              save: pipeline
+#              soft-fail: true
+#
+# Configure in the Buildkite UI:
+#
+#   * Pipeline command: the default (`buildkite-agent pipeline upload`), which
+#     uploads this file.
+#   * GitHub integration: build pull requests, and pushes to `main` only
+#     (the old workflow's `branches: [main]`).
+#   * Builds → "Cancel Intermediate Builds": the old `cancel-in-progress`.
+#
+# Agents need a Docker daemon. Add an `agents:` block to the steps below
+# (`agents: { queue: docker }`, say) if your cluster routes on queues.
+#
+# Each step depends on the image built by `build-ci-image` in the same build,
+# which only holds if the steps land on an agent that shares that daemon. For
+# ephemeral or hosted agents, build and push the image once —
+#
+#   docker build --file .buildkite/Dockerfile --tag registry.example/loomery-ci:1.98.1 .
+#   docker push registry.example/loomery-ci:1.98.1
+#
+# — and point LOOMERY_CI_IMAGE at that reference instead.
+
+env:
+  # Tag of the image built from .buildkite/Dockerfile by `build-ci-image`.
+  # Interpolated once, when this pipeline is uploaded, so every step and plugin
+  # configuration below sees the resolved name.
+  LOOMERY_CI_IMAGE: "loomery-ci:${BUILDKITE_COMMIT}"
+
+steps:
+  - label: ":docker: Build CI image"
+    key: "build-ci-image"
+    command: 'docker build --file .buildkite/Dockerfile --tag "${LOOMERY_CI_IMAGE}" .'
+    plugins:
+      - docker#v5.14.0:
+          image: "docker:28-cli"
+          always-pull: true
+          # Build on the host daemon, so the image is there for the steps below.
+          volumes:
+            - "/var/run/docker.sock:/var/run/docker.sock"
+
+  - label: ":white_check_mark: Verify"
+    key: "verify"
+    depends_on: "build-ci-image"
+    command: "mise run verify"
+    plugins:
+      - docker#v5.14.0:
+          image: "${LOOMERY_CI_IMAGE}"
+          # The checkout is mounted into the container and root owns whatever
+          # cargo writes there; hand it back to the agent user afterwards so the
+          # agent can clean up.
+          chown: true
+
+  - label: ":test_tube: Test"
+    key: "test"
+    depends_on: "build-ci-image"
+    command: "mise run test"
+    plugins:
+      - docker#v5.14.0:
+          image: "${LOOMERY_CI_IMAGE}"
+          chown: true
+
+  - label: ":key: Test services (Keycloak + NATS)"
+    key: "test-services"
+    depends_on: "build-ci-image"
+    command: ".buildkite/scripts/test-services.sh"
+    # The stack publishes 4222/8222/8080 on the host, so only one of these runs
+    # at a time, in this build or any other.
+    concurrency: 1
+    concurrency_group: "loomery/test-services"
+    plugins:
+      - docker#v5.14.0:
+          image: "${LOOMERY_CI_IMAGE}"
+          # `docker compose` talks to the host daemon, which resolves the bind
+          # mount in compose.test.yaml (./scripts/test-services/keycloak) against
+          # the compose project directory. Running the command from the same
+          # absolute path as the host checkout keeps that path valid on the host.
+          workdir: "${BUILDKITE_BUILD_CHECKOUT_PATH}"
+          # Host networking puts the published service ports on 127.0.0.1 for
+          # the tests, exactly where scripts/test-services/wait-for-services.sh
+          # and the integration suite look for them.
+          network: "host"
+          chown: true
+          volumes:
+            - "/var/run/docker.sock:/var/run/docker.sock"
+
+  - label: ":scroll: Licenses"
+    key: "licenses"
+    depends_on: "build-ci-image"
+    command: "mise run licenses-check"
+    plugins:
+      - docker#v5.14.0:
+          image: "${LOOMERY_CI_IMAGE}"
+          chown: true
+
+  - label: ":bar_chart: Quality (coverage + CRAP)"
+    key: "quality"
+    depends_on: "build-ci-image"
+    command: "mise run crap"
+    plugins:
+      - docker#v5.14.0:
+          image: "${LOOMERY_CI_IMAGE}"
+          chown: true
+
+  - label: ":shield: Audit"
+    key: "audit"
+    depends_on: "build-ci-image"
+    command: "mise run audit"
+    plugins:
+      - docker#v5.14.0:
+          image: "${LOOMERY_CI_IMAGE}"
+          chown: true
