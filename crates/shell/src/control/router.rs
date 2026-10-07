@@ -125,6 +125,7 @@ mod tests {
         TenantState {
             group_id: Some(group_id.to_owned()),
             replicas: vec![replica(1)],
+            leader_user_id: None,
             status,
         }
     }
@@ -167,6 +168,7 @@ mod tests {
             &TenantState {
                 group_id: Some("tenant-1".to_owned()),
                 replicas: vec![replica(1)],
+                leader_user_id: None,
                 status: TenantStatus::Unregistered,
             },
         );
@@ -177,6 +179,7 @@ mod tests {
             &TenantState {
                 group_id: None,
                 replicas: Vec::new(),
+                leader_user_id: None,
                 status: TenantStatus::Registering,
             },
         );

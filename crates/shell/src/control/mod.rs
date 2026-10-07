@@ -11,6 +11,7 @@ mod router;
 #[cfg(test)]
 mod e2e_tests;
 
+pub use controller::bootstrap_for;
 pub use controller::incomplete;
 pub use controller::provision;
 pub use controller::resume;
@@ -67,7 +68,7 @@ mod tests {
         let path = root.path().to_path_buf();
         let register = command(
             tenant::REGISTER,
-            r#"{"group_id":"tenant-1","replicas":[{"node_id":1,"address":"http://127.0.0.1:7001"}]}"#,
+            r#"{"group_id":"tenant-1","replicas":[{"node_id":1,"address":"http://127.0.0.1:7001"}],"leader_user_id":"018f2c3d-4e5f-7071-8293-a4b5c6d7e8f0"}"#,
         );
 
         {

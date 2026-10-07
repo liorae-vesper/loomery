@@ -35,8 +35,13 @@ use crate::gateway::GroupRegistry;
 use crate::group::GroupOps;
 use crate::raft::RaftGroup;
 
-/// The namespace saga command and entity identities derive from (D12).
-const SAGA_NAMESPACE: Uuid = Uuid::from_u128(0x3b7e_1d92_4c05_4f68_a9b0_c1d2_e3f4_5061);
+/// The namespace saga causation keys derive from (D12).
+///
+/// The *entity* ids the saga writes to derive from the same namespace, but live
+/// in the core ([`membership::organization_assignment_id`] and
+/// [`membership::workspace_membership_id`]) because the state machine needs them
+/// too.
+const SAGA_NAMESPACE: Uuid = membership::NAMESPACE;
 
 /// A published event plus the routing metadata the bus carried.
 #[derive(Debug, Clone)]
@@ -227,23 +232,6 @@ impl SagaHandler for InvitationAcceptance {
     }
 }
 
-/// The assignment stream's derived id (D12): one per `(organization, user)`.
-fn assignment_id(organization_id: &Id, user_id: &Id) -> Id {
-    Id::from(Key::new(
-        &SAGA_NAMESPACE,
-        &format!("{organization_id}:{user_id}:org-assignment"),
-    ))
-}
-
-/// The membership stream's derived id (D12): one per `(organization, workspace,
-/// user)`, so a redelivered acceptance addresses the same membership.
-fn membership_id(organization_id: &Id, workspace_id: &Id, user_id: &Id) -> Id {
-    Id::from(Key::new(
-        &SAGA_NAMESPACE,
-        &format!("{organization_id}:{workspace_id}:{user_id}:membership"),
-    ))
-}
-
 /// Builds the organization-assignment command.
 fn assignment_command(organization_id: &Id, user_id: &Id) -> Result<Command, serde_json::Error> {
     let data = serde_json::to_string(&membership::AssignMember {
@@ -253,7 +241,7 @@ fn assignment_command(organization_id: &Id, user_id: &Id) -> Result<Command, ser
     Ok(command(
         organization_id,
         None,
-        assignment_id(organization_id, user_id),
+        membership::organization_assignment_id(organization_id, user_id),
         &format!("{organization_id}:{user_id}:assign-member"),
         membership::ASSIGN_MEMBER,
         data,
@@ -275,7 +263,7 @@ fn membership_command(
     Ok(command(
         organization_id,
         Some(workspace_id.clone()),
-        membership_id(organization_id, workspace_id, user_id),
+        membership::workspace_membership_id(organization_id, workspace_id, user_id),
         &format!("{organization_id}:{workspace_id}:{user_id}:add-member"),
         membership::ADD_MEMBER,
         data,

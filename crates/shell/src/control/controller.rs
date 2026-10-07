@@ -85,6 +85,7 @@ pub async fn provision<G: GroupOps>(
             serde_json::to_string(&tenant::Register {
                 group_id: group_id.to_owned(),
                 replicas: replicas.to_vec(),
+                leader_user_id: bootstrap.leader_user_id.clone(),
             })?,
         );
         control.propose(command).await?;
@@ -179,6 +180,29 @@ fn derived_key(organization_id: &Id, action: &str) -> Key {
 /// This is the startup reconciliation and retry sweep's work list: each entry
 /// names a group whose genesis must be resumed (or whose activation was never
 /// committed). An active or tombstoned tenant is not pending.
+/// The genesis bootstrap a tenant record remembers.
+///
+/// Registration records the leader user id ([`loomery_core::tenant::Register`]),
+/// so an interrupted provisioning can be resumed **from state**: the bootstrap is
+/// `(organization, leader user, time)`, and the time affects no derived identity
+/// (D12), which is why this is the original bootstrap in every way that matters.
+///
+/// `None` means the record predates the field (or the tenant has no record): its
+/// genesis can only be resumed with an operator-supplied
+/// [`Bootstrap`].
+#[must_use]
+pub fn bootstrap_for(organization_id: &Id, tenant: &TenantState) -> Option<Bootstrap> {
+    tenant
+        .leader_user_id
+        .as_ref()
+        .map(|leader_user_id| Bootstrap {
+            organization_id: organization_id.clone(),
+            leader_user_id: leader_user_id.clone(),
+            occurred_at: Timestamp::now(),
+        })
+}
+
+/// Tenants whose provisioning did not finish: registered, not yet active.
 pub async fn incomplete(control: &RaftGroup) -> Vec<(Id, TenantState)> {
     let mut pending: Vec<(Id, TenantState)> = control
         .state_machine()
@@ -345,6 +369,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_tenant_record_remembers_the_bootstrap_it_was_provisioned_with() {
+        let mut control = RaftGroup::boot_single_node(1).await.unwrap();
+        let mut tenant = RaftGroup::boot_single_node(1).await.unwrap();
+        let router = Router::new();
+        let bootstrap = bootstrap_value();
+
+        provision(
+            &mut control,
+            &mut tenant,
+            &router,
+            "tenant-1",
+            &replicas(),
+            &bootstrap,
+        )
+        .await
+        .unwrap();
+
+        let record = control
+            .state_machine()
+            .tenants()
+            .await
+            .into_iter()
+            .find(|(organization_id, _)| organization_id == &bootstrap.organization_id)
+            .map(|(_, record)| record)
+            .expect("a tenant record");
+        let rebuilt = bootstrap_for(&bootstrap.organization_id, &record).expect("a bootstrap");
+
+        assert_eq!(rebuilt.organization_id, bootstrap.organization_id);
+        assert_eq!(
+            rebuilt.leader_user_id, bootstrap.leader_user_id,
+            "genesis can be resumed without the original caller"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_record_without_a_leader_cannot_rebuild_a_bootstrap() {
+        let record = TenantState {
+            group_id: Some("tenant-1".to_owned()),
+            replicas: replicas(),
+            leader_user_id: None,
+            status: loomery_core::tenant::TenantStatus::Registering,
+        };
+        assert!(bootstrap_for(&Id::from("org-1"), &record).is_none());
+    }
+
+    #[tokio::test]
     async fn reconciliation_resumes_an_interrupted_tenant() {
         let mut control = RaftGroup::boot_single_node(1).await.unwrap();
         let mut tenant = RaftGroup::boot_single_node(1).await.unwrap();
@@ -360,6 +430,7 @@ mod tests {
                 serde_json::to_string(&tenant::Register {
                     group_id: "tenant-1".to_owned(),
                     replicas: replicas(),
+                    leader_user_id: bootstrap.leader_user_id.clone(),
                 })
                 .unwrap(),
             ))

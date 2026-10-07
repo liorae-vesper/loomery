@@ -23,10 +23,40 @@
 //!
 //! See `docs/domain-model.md` for the command/event table and transition matrix.
 
+use crate::Uuid;
 use crate::aggregate::{AggregatePlan, Execution, event_from_command};
 use crate::envelope::{Command, Event, Payload};
 use crate::error::DomainError;
 use crate::id::Id;
+use crate::key::Key;
+
+/// The namespace every membership identity derives from (D12).
+///
+/// It lives here rather than in the saga because **two callers need it**: the
+/// invitation saga derives the streams it writes to, and the state machine
+/// derives the same ids to answer "is this user in this organization?".
+pub const NAMESPACE: Uuid = Uuid::from_u128(0x3b7e_1d92_4c05_4f68_a9b0_c1d2_e3f4_5061);
+
+/// The [`OrganizationAssignment`] stream's derived id: one per
+/// `(organization, user)`.
+#[must_use]
+pub fn organization_assignment_id(organization_id: &Id, user_id: &Id) -> Id {
+    Id::from(Key::new(
+        &NAMESPACE,
+        &format!("{organization_id}:{user_id}:org-assignment"),
+    ))
+}
+
+/// The [`WorkspaceMembership`] stream's derived id: one per
+/// `(organization, workspace, user)`, so a redelivered acceptance addresses the
+/// same membership.
+#[must_use]
+pub fn workspace_membership_id(organization_id: &Id, workspace_id: &Id, user_id: &Id) -> Id {
+    Id::from(Key::new(
+        &NAMESPACE,
+        &format!("{organization_id}:{workspace_id}:{user_id}:membership"),
+    ))
+}
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 

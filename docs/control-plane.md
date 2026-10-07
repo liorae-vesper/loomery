@@ -22,13 +22,15 @@ control group.
 
 | command | event | meaning |
 |---|---|---|
-| `tenant.register` | `tenant.registered` | record the group id and intended replicas |
+| `tenant.register` | `tenant.registered` | record the group id, intended replicas and the genesis leader |
 | `tenant.activate` | `tenant.activated` | genesis committed; traffic allowed |
 | `tenant.tombstone` | `tenant.tombstoned` | retire the tenant (append-only) |
 
 `TenantStatus` is `Unregistered → Registering → Active`, with `Tombstoned` as a
 monotonic terminal state. The payload carries `Replica { node_id, address }`
-entries; placement validation rejects blank/oversized group ids and addresses,
+entries **and the genesis leader** (`leader_user_id`): recording the leader with
+the placement is what makes an interrupted provisioning resumable *from state*
+(see §4). Placement validation rejects blank/oversized group ids and addresses,
 empty or oversized replica sets, and duplicate node ids. `tenant.tombstone`
 works from `Registering` or `Active`; a retired tenant keeps its record so a
 delayed worker cannot resurrect it.
@@ -100,6 +102,12 @@ owns the rest, as [`implementation.md`](implementation.md) describes:
 A reconciliation loop is therefore: read `incomplete()`, have the host reopen
 each tenant's databases (same paths, recovered membership), call `resume()`,
 and let `provision`'s fence decide when the tenant is safe to route.
+
+[`bootstrap_for(organization_id, tenant)`](../crates/shell/src/control/controller.rs)
+rebuilds that loop's missing input — the `Bootstrap` — from the record, using
+`Timestamp::now()` because the time affects no derived identity (D12). The host
+runs the loop at boot and every 30 s (`shell::host::Host::reconcile`); a record
+that names no leader is reported, not guessed at.
 
 ## 5. Current limits
 

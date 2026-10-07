@@ -19,6 +19,7 @@
 use crate::aggregate::{AggregatePlan, Execution, event_from_command};
 use crate::envelope::{Command, Event, Payload};
 use crate::error::DomainError;
+use crate::id::Id;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -79,6 +80,13 @@ pub struct Register {
     pub group_id: String,
     /// The group's intended replicas.
     pub replicas: Vec<Replica>,
+    /// The user who owns this organization's genesis.
+    ///
+    /// Recorded with the placement so an interrupted provisioning can be
+    /// **resumed from state** rather than from the caller's memory: the genesis
+    /// bootstrap is `(organization, leader user, time)`, and the time does not
+    /// affect any derived identity (D12).
+    pub leader_user_id: Id,
 }
 
 /// The payload of `tenant.registered`.
@@ -88,6 +96,8 @@ pub struct Registered {
     pub group_id: String,
     /// The group's intended replicas.
     pub replicas: Vec<Replica>,
+    /// The user who owns this organization's genesis.
+    pub leader_user_id: Id,
 }
 
 /// The (empty) payload of `tenant.activate`.
@@ -116,6 +126,12 @@ pub struct TenantState {
     pub group_id: Option<String>,
     /// The group's intended replicas, once registered.
     pub replicas: Vec<Replica>,
+    /// The user who owns this organization's genesis, once registered.
+    ///
+    /// Optional because a record written before this field existed still
+    /// decodes; genesis can then only be resumed with an operator-supplied
+    /// bootstrap.
+    pub leader_user_id: Option<Id>,
     /// Where the tenant is in its lifecycle.
     pub status: TenantStatus,
 }
@@ -179,6 +195,7 @@ impl AggregatePlan<TenantState, TenantCode> for Tenant {
                 Ok(registered) => TenantState {
                     group_id: Some(registered.group_id),
                     replicas: registered.replicas,
+                    leader_user_id: Some(registered.leader_user_id),
                     status: TenantStatus::Registering,
                 },
                 Err(_) => state,
@@ -218,6 +235,7 @@ fn register(state: &TenantState, command: &Command) -> Result<Execution, DomainE
         &Registered {
             group_id: payload.group_id,
             replicas: payload.replicas,
+            leader_user_id: payload.leader_user_id,
         },
         REGISTERED,
     )?;
@@ -375,10 +393,15 @@ mod tests {
         }
     }
 
+    /// The user every test registration names as the organization's leader.
+    const LEADER: &str = "018f2c3d-4e5f-7071-8293-a4b5c6d7e8f0";
+
     fn register(group_id: &str, replicas: &str) -> Command {
         command(
             REGISTER,
-            &format!(r#"{{"group_id":"{group_id}","replicas":{replicas}}}"#),
+            &format!(
+                r#"{{"group_id":"{group_id}","replicas":{replicas},"leader_user_id":"{LEADER}"}}"#
+            ),
         )
     }
 
@@ -410,6 +433,7 @@ mod tests {
                 node_id: 1,
                 address: "http://127.0.0.1:7001".to_owned(),
             }],
+            leader_user_id: Some(Id::from(LEADER)),
             status: TenantStatus::Registering,
         }
     }
@@ -456,6 +480,11 @@ mod tests {
         let state = Tenant::apply(TenantState::default(), event.clone());
         assert_eq!(state.group_id.as_deref(), Some("tenant-1"));
         assert_eq!(state.replicas.len(), 1);
+        assert_eq!(
+            state.leader_user_id.as_ref().map(ToString::to_string),
+            Some(LEADER.to_owned()),
+            "the genesis leader is recorded so provisioning can be resumed"
+        );
         assert_eq!(state.status, TenantStatus::Registering);
     }
 
