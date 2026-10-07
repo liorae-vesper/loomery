@@ -102,7 +102,8 @@ cluster.
 |---|---|---|
 | `POST` | `/organizations` | `{ organization_id, leader_user_id, group_id? }`; **admin only** |
 | `POST` | `/organizations/{organization_id}/commands` | JSON command body; `Authorization: Bearer <token>` |
-| `GET` | `/organizations/{organization_id}/events` | bearer token + optional `X-Min-Index` |
+| `GET` | `/organizations/{organization_id}/workspaces/{workspace_id}/events` | bearer token + optional `X-Min-Index`; any role in that workspace |
+| `GET` | `/organizations/{organization_id}/events` | bearer token + optional `X-Min-Index`; organization ownership (or the admin claim) |
 
 **Authorization, not just authentication.** Three checks, in order:
 
@@ -126,6 +127,21 @@ cluster.
 `invitation.accept` is the single write exempt from all three: the invitee is a
 stranger until the acceptance (and the saga that follows) makes them a member.
 The admin claim bypasses every check.
+
+**Reads are scoped.** A workspace read (`…/workspaces/{id}/events`) answers the
+events of that workspace — its own (`workspace.created`/`renamed`/`archived`,
+which carry it as their aggregate) and the work inside it (tasks, memberships,
+which carry it as their `workspace_id`) — and nothing from another workspace. The
+organization-wide log is the **administrative** view and needs ownership.
+
+**Onboarding carries attribution, not input.** An acceptance is the one command a
+stranger submits, so the gateway overwrites its `user_id` (the authenticated
+caller) and `email` (the caller's *verified* address claim) before it reaches
+consensus; the plan then refuses an acceptance whose address differs from the one
+the invitation was issued to (`EmailMismatch`, a `409`). A provider that does not
+vouch for addresses — or a deployment that turns
+[`require_verified_email`](host.md) off — leaves the field empty, and the
+acceptance is refused rather than trusted.
 
 **Failures are classified.** `401` no or unknown token, `403` a failed check,
 `404` unknown organization, `409` the plan refused the command (its stable code

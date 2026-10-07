@@ -11,9 +11,10 @@
 //!   `kid` the token names, `exp`/`nbf` with a configured leeway, `iss`, and
 //!   `aud` when the provider sets one. No per-request round trip to the provider;
 //! * the **claim names are configuration**: [`OidcConfig::subject_claim`] names
-//!   the user id (`sub` by default), [`OidcConfig::groups_claim`] is a dot path
-//!   (`groups`, `realm_access.roles`, `https://example.com/roles`, …) and
-//!   [`OidcConfig::admin_group`] names the value that grants `is_admin`;
+//!   the user id (`sub` by default), [`OidcConfig::email_claim`] the address,
+//!   [`OidcConfig::groups_claim`] is a dot path (`groups`, `realm_access.roles`,
+//!   `https://example.com/roles`, …) and [`OidcConfig::admin_group`] names the
+//!   value that grants `is_admin`;
 //! * the **subject** becomes an [`Id`] either directly (a canonical UUID, which
 //!   Keycloak and most providers use) or through a configured namespace
 //!   (`UUIDv5`), so a provider with opaque subjects still yields a stable id (D12).
@@ -280,6 +281,7 @@ impl OidcAuthenticator {
         Ok(Identity {
             user_id: self.subject_id(subject)?,
             is_admin: self.is_admin(claims),
+            email: self.email(claims),
         })
     }
 
@@ -295,6 +297,28 @@ impl OidcAuthenticator {
         }
         let namespace = self.namespace.ok_or(AuthError::Unknown)?;
         Ok(Id::from(Key::new(&namespace, subject)))
+    }
+
+    /// The caller's email, when the provider marks it verified.
+    ///
+    /// `None` for a provider that does not issue one, and for an address the
+    /// provider itself says is unverified — unless the deployment has turned
+    /// [`OidcConfig::require_verified_email`] off, in which case the claim is
+    /// taken at face value.
+    fn email(&self, claims: &Value) -> Option<String> {
+        let email = claims
+            .get(&self.config.email_claim)
+            .and_then(Value::as_str)?
+            .trim();
+        if email.is_empty() {
+            return None;
+        }
+        if self.config.require_verified_email
+            && claims.get("email_verified").and_then(Value::as_bool) != Some(true)
+        {
+            return None;
+        }
+        Some(email.to_owned())
     }
 
     /// Whether [`OidcConfig::admin_group`] is present in the configured claim.

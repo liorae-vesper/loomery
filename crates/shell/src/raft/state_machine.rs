@@ -467,6 +467,27 @@ impl MemStateMachine {
             .collect()
     }
 
+    /// The events of one workspace, in log order.
+    ///
+    /// A workspace's own events (`workspace.created`, `renamed`, `archived`) carry
+    /// the workspace as their *aggregate*, while the work inside it (tasks,
+    /// memberships) carries it as their `workspace_id`; a read scoped to the
+    /// workspace sees both, and nothing from another workspace.
+    pub async fn workspace_events(&self, organization_id: &Id, workspace_id: &Id) -> Vec<Event> {
+        self.state
+            .read()
+            .await
+            .applied
+            .iter()
+            .filter(|applied| &applied.event.organization_id == organization_id)
+            .filter(|applied| {
+                applied.event.workspace_id.as_ref() == Some(workspace_id)
+                    || &applied.event.aggregate_id == workspace_id
+            })
+            .map(|applied| applied.event.clone())
+            .collect()
+    }
+
     /// Whether `user_id` belongs to `organization_id`.
     ///
     /// Membership has two sources: the organization assignment the invitation saga

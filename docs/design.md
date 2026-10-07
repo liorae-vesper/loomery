@@ -622,6 +622,13 @@ recorded in [`domain-model.md`](domain-model.md).
   - [x] Crash-resumable provisioning: the placement records the genesis leader, so
         the host reconciles an interrupted onboarding from state (at boot and
         every 30 s) instead of needing the original caller
+  - [x] Scoped reads: a workspace read answers that workspace (its own events and
+        the work inside it), and the organization-wide log needs ownership —
+        previously any member could read everything
+  - [x] Onboarding attribution: the gateway overwrites an invitation acceptance's
+        `user_id` and `email` from the authenticated caller (the *verified* email
+        claim), so an acceptance binds to the address the invitation was issued to
+        and a forged payload cannot accept on someone else's behalf
   - [x] Authorization: reads and writes require organization membership (or the
         admin claim), with `invitation.accept` as the single onboarding exemption;
         workspace-scoped commands are checked against the caller's **role** in the
@@ -654,5 +661,5 @@ integration layers:
 ---
 
 *Last updated: 2026-10-06 — runtime host and binary, provider-agnostic OIDC, NATS
-runtime adapters, provisioning and authorization at the gateway, service-backed
-stress profiles and a license bundle.*
+runtime adapters, provisioning, scoped reads and role-checked authorization at the
+gateway, service-backed stress profiles and a license bundle.*

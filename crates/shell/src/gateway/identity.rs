@@ -29,6 +29,13 @@ pub struct Identity {
     pub user_id: Id,
     /// Whether the caller carries the system-admin claim.
     pub is_admin: bool,
+    /// The caller's email address, when the provider marked it **verified**.
+    ///
+    /// This is attribution, not a credential: onboarding commands carry it into
+    /// consensus so an invitation binds to the address it was issued to. `None`
+    /// means the caller cannot prove an address, and an acceptance that needs one
+    /// is refused.
+    pub email: Option<String>,
 }
 
 /// Why authentication or authorization failed.
@@ -160,6 +167,7 @@ mod tests {
         Identity {
             user_id: Id::from("user-1"),
             is_admin: admin,
+            email: None,
         }
     }
 

@@ -116,6 +116,7 @@ fn authenticator() -> Arc<StaticAuthenticator> {
                 Identity {
                     user_id: Id::from(MEMBER),
                     is_admin: false,
+                    email: None,
                 },
             )
             .with_token(
@@ -123,6 +124,7 @@ fn authenticator() -> Arc<StaticAuthenticator> {
                 Identity {
                     user_id: Id::from(ADMIN),
                     is_admin: true,
+                    email: None,
                 },
             )
             .with_token(
@@ -130,6 +132,9 @@ fn authenticator() -> Arc<StaticAuthenticator> {
                 Identity {
                     user_id: Id::from(STRANGER),
                     is_admin: false,
+                    // The address the invitation is issued to: the acceptance
+                    // binds to the verified email, not to the request body.
+                    email: Some("stranger@example.com".to_owned()),
                 },
             ),
     )
@@ -229,6 +234,17 @@ async fn genesis_workspace(
         .find(|event| event.event_type == "workspace.created")
         .map(|event| event.aggregate_id.to_string())
         .expect("genesis creates the workspace")
+}
+
+/// A `GET /organizations/{id}/workspaces/{ws}/events` request.
+fn workspace_events_request(token: Option<&str>, workspace_id: &str) -> Request<Body> {
+    let mut builder = Request::builder().method("GET").uri(format!(
+        "/organizations/{ORGANIZATION}/workspaces/{workspace_id}/events"
+    ));
+    if let Some(token) = token {
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    builder.body(Body::empty()).unwrap()
 }
 
 /// A `GET /organizations/{id}/events` request.
@@ -778,15 +794,25 @@ async fn workspace_roles_decide_what_a_member_may_do() {
         "an Owner may add a Viewer"
     );
 
-    // A Viewer reads, but does not write...
+    // A Viewer reads their workspace...
+    assert_eq!(
+        host.router()
+            .oneshot(workspace_events_request(Some("stranger"), &workspace))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    // ...but not the organization's whole log, which is the owner's view...
     assert_eq!(
         host.router()
             .oneshot(events_request(Some("stranger")))
             .await
             .unwrap()
             .status(),
-        StatusCode::OK
+        StatusCode::FORBIDDEN
     );
+    // ...and does not write.
     assert_eq!(
         host.router()
             .oneshot(submit(

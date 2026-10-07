@@ -187,6 +187,11 @@ impl CommandPlane {
 
         let mut payload = request.payload;
         precompute::hash_password(&mut payload)?;
+        // An invitation acceptance is the one command a stranger submits: its
+        // attribution comes from the authenticated caller, never from the body.
+        if request.command_type == loomery_core::invitation::ACCEPT {
+            precompute::attribute_acceptance(&mut payload, &identity);
+        }
 
         let actor = Actor::User {
             id: identity.user_id.clone(),
@@ -409,6 +414,7 @@ mod tests {
                 Identity {
                     user_id: Id::from("user-1"),
                     is_admin: false,
+                    email: None,
                 },
             )
             .with_token(
@@ -416,6 +422,7 @@ mod tests {
                 Identity {
                     user_id: Id::from("user-0"),
                     is_admin: true,
+                    email: None,
                 },
             );
         CommandPlane::new(
@@ -505,6 +512,68 @@ mod tests {
             plane.build_command(request).await,
             Err(CommandError::InvalidKey)
         ));
+    }
+
+    #[tokio::test]
+    async fn an_acceptance_carries_the_callers_attribution_not_the_bodys() {
+        let authenticator = StaticAuthenticator::new().with_token(
+            "invitee",
+            Identity {
+                user_id: Id::from("user-1"),
+                is_admin: false,
+                email: Some("invited@example.com".to_owned()),
+            },
+        );
+        let plane = CommandPlane::new(
+            Arc::new(Router::new()),
+            Arc::new(NoGroups),
+            Arc::new(authenticator),
+            Duration::from_millis(50),
+        );
+
+        let mut request = command_request("invitation.accept", "invitee");
+        // A body that tries to accept on someone else's behalf, from another
+        // address.
+        request.payload = json!({
+            "user_id": "018f2c3d-4e5f-7071-8293-a4b5c6d7e8ff",
+            "email": "victim@example.com",
+        });
+
+        let command = plane.build_command(request).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&command.payload.data).unwrap();
+
+        assert_eq!(
+            payload.get("user_id").and_then(serde_json::Value::as_str),
+            Some("user-1"),
+            "the acceptance names the authenticated caller"
+        );
+        assert_eq!(
+            payload.get("email").and_then(serde_json::Value::as_str),
+            Some("invited@example.com"),
+            "the acceptance carries the caller's verified address"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_acceptance_without_a_verified_address_is_left_unattributed() {
+        let plane = command_plane(Arc::new(Router::new()), Arc::new(NoGroups));
+
+        let mut request = command_request("invitation.accept", "member");
+        request.payload = json!({ "user_id": "someone-else", "email": "forged@example.com" });
+
+        let command = plane.build_command(request).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&command.payload.data).unwrap();
+
+        assert_eq!(
+            payload.get("user_id").and_then(serde_json::Value::as_str),
+            Some("user-1"),
+            "the caller is still named"
+        );
+        assert_eq!(
+            payload.get("email"),
+            None,
+            "no verified address means no address: the plan then refuses the acceptance"
+        );
     }
 
     #[tokio::test]

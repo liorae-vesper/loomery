@@ -386,6 +386,14 @@ pub struct OidcConfig {
     /// subject there (some issue it only in the id token, some use a custom
     /// claim).
     pub subject_claim: String,
+    /// The claim carrying the caller's email address.
+    pub email_claim: String,
+    /// Whether an email must be *verified* before it is trusted.
+    ///
+    /// `true` (the default) requires the provider's `email_verified` claim to be
+    /// true; a provider that omits it must set this to `false`, which means any
+    /// address the provider issues is taken at face value.
+    pub require_verified_email: bool,
     /// The claim carrying group/role membership; dot paths address nested claims.
     pub groups_claim: String,
     /// The value in that claim that grants the system-admin claim.
@@ -407,6 +415,8 @@ impl Default for OidcConfig {
             jwks_uri: None,
             audience: None,
             subject_claim: "sub".to_owned(),
+            email_claim: "email".to_owned(),
+            require_verified_email: true,
             groups_claim: "groups".to_owned(),
             admin_group: "admins".to_owned(),
             subject_namespace: None,
@@ -435,6 +445,10 @@ impl OidcConfig {
         anyhow::ensure!(
             !self.subject_claim.trim().is_empty(),
             "oidc.subject_claim must not be empty"
+        );
+        anyhow::ensure!(
+            !self.email_claim.trim().is_empty(),
+            "oidc.email_claim must not be empty"
         );
         anyhow::ensure!(
             !self.groups_claim.trim().is_empty(),

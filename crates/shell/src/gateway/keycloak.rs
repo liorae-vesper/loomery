@@ -117,6 +117,10 @@ struct UserInfo {
     sub: String,
     #[serde(default)]
     groups: Vec<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    email_verified: bool,
 }
 
 impl Authenticator for KeycloakAuthenticator {
@@ -132,7 +136,18 @@ impl Authenticator for KeycloakAuthenticator {
                 .iter()
                 .any(|group| group == &self.admin_group);
 
-            Ok(Identity { user_id, is_admin })
+            // The address is attribution only when the provider vouches for it.
+            let email = userinfo
+                .email
+                .filter(|_| userinfo.email_verified)
+                .map(|email| email.trim().to_owned())
+                .filter(|email| !email.is_empty());
+
+            Ok(Identity {
+                user_id,
+                is_admin,
+                email,
+            })
         })
     }
 }

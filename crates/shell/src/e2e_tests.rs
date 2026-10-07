@@ -174,6 +174,7 @@ async fn an_invited_user_is_provisioned_and_can_work_on_the_board() {
                 Identity {
                     user_id: Id::from("018f2c3d-4e5f-7071-8293-a4b5c6d7e8f0"),
                     is_admin: true,
+                    email: None,
                 },
             )
             .with_token(
@@ -181,6 +182,9 @@ async fn an_invited_user_is_provisioned_and_can_work_on_the_board() {
                 Identity {
                     user_id: invitee.clone(),
                     is_admin: false,
+                    // The address the invitation was issued to: an acceptance
+                    // binds to it (the gateway carries it into the payload).
+                    email: Some("new@example.com".to_owned()),
                 },
             ),
     );
@@ -323,6 +327,7 @@ async fn a_reused_causation_key_is_a_conflict_and_reads_are_your_writes() {
         Identity {
             user_id: Id::from("018f2c3d-4e5f-7071-8293-a4b5c6d7e8f0"),
             is_admin: false,
+            email: None,
         },
     ));
     let plane = CommandPlane::new(

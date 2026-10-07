@@ -523,7 +523,7 @@ mod tests {
             command_type: invitation::ACCEPT.to_owned(),
             payload: Payload {
                 version: 1,
-                data: r#"{"user_id":"user-1"}"#.to_owned(),
+                data: r#"{"user_id":"user-1","email":"ada@example.com"}"#.to_owned(),
             },
         };
 

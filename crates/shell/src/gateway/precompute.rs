@@ -22,6 +22,8 @@ use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
 use serde_json::Value;
 
+use super::identity::Identity;
+
 /// The request field carrying a plaintext password.
 pub const PASSWORD_FIELD: &str = "password";
 
@@ -37,6 +39,37 @@ pub enum PreComputeError {
     /// The stored hash is malformed.
     #[error("the stored password hash is malformed")]
     MalformedHash,
+}
+
+/// Rewrites an invitation acceptance so it carries **attribution**, not client
+/// input.
+///
+/// An acceptance is submitted by a stranger — that is the point of onboarding —
+/// so the command cannot be trusted to name the right user or the right address.
+/// The gateway overwrites both from the authenticated identity (the verified
+/// email claim is what an invitation binds to), and the plan then checks the
+/// address against the one the invitation was issued to. A caller with no
+/// verifiable address has the field removed, which the plan refuses.
+///
+/// A payload that is not a JSON object is left untouched: the plan validates the
+/// shape and answers `InvalidPayload`.
+pub fn attribute_acceptance(payload: &mut Value, identity: &Identity) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+
+    object.insert(
+        "user_id".to_owned(),
+        Value::String(identity.user_id.to_string()),
+    );
+    match &identity.email {
+        Some(email) => {
+            object.insert("email".to_owned(), Value::String(email.clone()));
+        }
+        None => {
+            object.remove("email");
+        }
+    }
 }
 
 /// Hashes a payload's `password` field into `password_hash` in place.

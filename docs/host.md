@@ -108,6 +108,8 @@ self-hosted provider all work through the same adapter.
 | `jwks_uri` | discovered | set it directly for a provider without discovery |
 | `audience` | unset | the `aud` a token must carry; unset skips the check |
 | `subject_claim` | `sub` | the claim carrying the user id |
+| `email_claim` | `email` | the claim carrying the caller's address |
+| `require_verified_email` | `true` | trust an address only when the provider marks it verified |
 | `groups_claim` | `groups` | dot path to group/role membership (`realm_access.roles`, …) |
 | `admin_group` | `admins` | the value in that claim that grants `is_admin` |
 | `subject_namespace` | unset | derive a `UUIDv5` id from a non-UUID subject |
@@ -167,13 +169,13 @@ in hand.
 
 ## Access control
 
-| Which caller | Reads | Workspace commands | Membership/archive | Invite | Provision |
-|---|---|---|---|---|---|
-| Anyone with a valid token | ❌ unless a member | ❌ | ❌ | ❌ | ❌ |
-| `Viewer` in the workspace | ✅ | ❌ | ❌ | ❌ | ❌ |
-| `Member` in the workspace | ✅ | ✅ | ❌ | ❌ | ❌ |
-| `Owner` of any workspace of the organization | ✅ | ✅ | ✅ | ✅ | ❌ |
-| A system administrator (`is_admin`) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Which caller | Workspace read | Organization log | Workspace commands | Membership/archive | Invite | Provision |
+|---|---|---|---|---|---|---|---|
+| Anyone with a valid token | ❌ unless a role | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `Viewer` in the workspace | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `Member` in the workspace | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| `Owner` of any workspace of the organization | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| A system administrator (`is_admin`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 `invitation.accept` is the single write open to non-members: the invitee is a
 stranger until the acceptance (and the saga that follows) makes them a member.
@@ -190,16 +192,10 @@ Stated rather than hidden, each with the work that closes it:
   means driving `RaftGroup::raft` membership and a shared placement, which is
   the deployment runbook's job (Phase 7). `HostConfig::node_address` is already
   the address a placement records.
-- **Reads are organization-wide.** Writes are checked against the role in the
-  workspace they name, but a *read* only needs organization membership, so a
-  `Viewer` of one workspace can read the organization's whole event log. Scoping
-  reads to workspaces belongs to the read models, which is also where a query API
-  can ask for a role.
-- **The invitation trusts its payload.** `invitation.accept` accepts the
-  `user_id` it is given, so it cannot check that the accepting caller *is* the
-  invited person; binding an email or the authenticated actor to the invitation
-  is the invitation work. This is why the membership exemption is exactly one
-  command wide.
+- **A read model is still the plan.** Reads are scoped (a workspace read answers
+  one workspace, the organization log needs ownership), but they are answered by
+  filtering the applied log — `O(history)` per read, and a workspace's own events
+  are matched by aggregate. Projections replace both.
 - **No observability stack.** Worker reports, reconciliation and startup go to
   stderr; tracing and OpenTelemetry are Phase 7.
 - **Snapshot-backed recovery is still experimental** (`group.storage.state_persistence`):

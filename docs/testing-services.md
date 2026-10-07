@@ -100,7 +100,8 @@ skipping quietly, so a green run always means the services actually answered.
   provisions a tenant, takes a write over the gateway, and the outbox worker
   publishes it to `JetStream` with a persisted cursor.
 
-> The realm declares the `sub` protocol mapper explicitly. A Keycloak realm
+> The realm declares the `sub`, `email` and `email_verified` protocol mappers
+> explicitly (and marks its users' addresses verified). A Keycloak realm
 > imported without it issues access tokens with **no subject claim**, which no
 > resource server can authenticate; the fixture mirrors the built-in `basic`
 > scope for that reason.

@@ -81,7 +81,9 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
   require organization membership (or the admin claim); workspace-scoped
   commands are checked against the caller's role there (`Viewer` reads, `Member`
   works, `Owner` manages), and `invitation.accept` is the single onboarding
-  exemption.
+  exemption. Reads are scoped: a workspace read answers one workspace, the
+  organization log needs ownership. An invitation acceptance carries the caller's
+  *verified* email into consensus, so only the invited address can accept it.
 - The runtime lives behind `nats`/`oidc` features (`test-services` enables both),
   so the default suite stays self-contained; the adapters are covered offline
   (a throwaway provider and fakes) and live (`mise run test-services`).
@@ -109,9 +111,8 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
    assignment + membership replay-safely. The NATS JetStream binding is
    deployment wiring behind `LOOMERY_NATS_URL`.
 0. Runtime follow-ups: multi-node control groups and placements (the runbook
-   work), scoping *reads* to workspaces (a `Viewer` currently reads the whole
-   organization), and binding an invitation to the accepting caller (today
-   `invitation.accept` trusts its payload's `user_id`).
+   work), and a read model behind the (now scoped) reads — today they filter the
+   applied log, which is `O(history)` per read.
 5. Extend persistence validation to large histories, interrupted snapshot
    creation/installation/purge and storage failures before changing the default.
    **Partly done:** a 300-command history survives restart in both modes, and a

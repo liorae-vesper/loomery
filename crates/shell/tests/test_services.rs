@@ -679,6 +679,11 @@ async fn a_real_keycloak_token_validates_through_the_oidc_adapter() {
         .await
         .expect("a locally validated token");
     assert!(!ada.is_admin);
+    assert_eq!(
+        ada.email.as_deref(),
+        Some("ada@example.com"),
+        "the verified email claim is what an invitation binds to"
+    );
     assert_ne!(
         admin.user_id, ada.user_id,
         "distinct subjects, distinct ids"
@@ -779,6 +784,7 @@ async fn a_host_publishes_committed_events_to_the_real_broker() {
         Identity {
             user_id: member_id.clone(),
             is_admin: false,
+            email: None,
         },
     ));
     let host = Arc::new(

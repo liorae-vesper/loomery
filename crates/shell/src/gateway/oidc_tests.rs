@@ -271,6 +271,7 @@ async fn a_valid_token_authenticates_through_discovery_and_jwks() {
         Identity {
             user_id: loomery_core::id::Id::parse(SUBJECT).unwrap(),
             is_admin: true,
+            email: None,
         }
     );
     assert!(
@@ -482,6 +483,78 @@ async fn the_subject_claim_is_configurable() {
         identity.user_id,
         loomery_core::id::Id::parse(SUBJECT).unwrap()
     );
+}
+
+#[tokio::test]
+async fn a_verified_email_is_carried_and_an_unverified_one_is_not() {
+    let provider = provider().await;
+    let strict = authenticator(|_| {}).await;
+
+    let mut verified = claims(SUBJECT, &json!(["admins"]));
+    verified["iss"] = json!(provider.issuer);
+    verified["email"] = json!("ada@example.com");
+    verified["email_verified"] = json!(true);
+    let identity = strict
+        .authenticate(Some(&provider.token(&verified)))
+        .await
+        .expect("a valid token");
+    assert_eq!(identity.email.as_deref(), Some("ada@example.com"));
+
+    let mut unverified = claims(SUBJECT, &json!(["admins"]));
+    unverified["iss"] = json!(provider.issuer);
+    unverified["email"] = json!("ada@example.com");
+    unverified["email_verified"] = json!(false);
+    let identity = strict
+        .authenticate(Some(&provider.token(&unverified)))
+        .await
+        .expect("a valid token");
+    assert_eq!(
+        identity.email, None,
+        "an address the provider does not vouch for is not attribution"
+    );
+
+    let mut absent = claims(SUBJECT, &json!(["admins"]));
+    absent["iss"] = json!(provider.issuer);
+    absent["email"] = json!("ada@example.com");
+    let identity = strict
+        .authenticate(Some(&provider.token(&absent)))
+        .await
+        .expect("a valid token");
+    assert_eq!(
+        identity.email, None,
+        "a missing claim is not a verified one"
+    );
+
+    // A deployment may accept an unverified address explicitly.
+    let lenient = authenticator(|config| {
+        config.require_verified_email = false;
+    })
+    .await;
+    let identity = lenient
+        .authenticate(Some(&provider.token(&unverified)))
+        .await
+        .expect("a valid token");
+    assert_eq!(identity.email.as_deref(), Some("ada@example.com"));
+}
+
+#[tokio::test]
+async fn the_email_claim_is_configurable() {
+    let provider = provider().await;
+    let authenticator = authenticator(|config| {
+        config.email_claim = "preferred_username".to_owned();
+    })
+    .await;
+
+    let mut claims = claims(SUBJECT, &json!(["admins"]));
+    claims["iss"] = json!(provider.issuer);
+    claims["preferred_username"] = json!("ada@example.com");
+    claims["email_verified"] = json!(true);
+
+    let identity = authenticator
+        .authenticate(Some(&provider.token(&claims)))
+        .await
+        .expect("a valid token");
+    assert_eq!(identity.email.as_deref(), Some("ada@example.com"));
 }
 
 #[tokio::test]

@@ -2,11 +2,14 @@
 
 //! The axum adapter: HTTP in, gRPC/Raft out.
 //!
-//! Three routes:
+//! Four routes:
 //!
 //! * `POST /organizations/{organization_id}/commands` — submit a command;
-//! * `GET  /organizations/{organization_id}/events` — read applied events,
-//!   gated by `X-Min-Index` (read-your-writes);
+//! * `GET  /organizations/{organization_id}/workspaces/{workspace_id}/events` —
+//!   read one workspace's events (any role there), gated by `X-Min-Index`;
+//! * `GET  /organizations/{organization_id}/events` — read the whole applied log,
+//!   which is an administrative view: organization ownership (or the admin
+//!   claim);
 //! * `POST /organizations` — provision a tenant (admin only).
 //!
 //! Every inbound id is **parsed**, never adopted: `Id::parse` rejects anything
@@ -68,6 +71,10 @@ pub fn router_with_provisioner(
         .route("/organizations", post(provision_tenant))
         .route("/organizations/{organization_id}/commands", post(submit))
         .route("/organizations/{organization_id}/events", get(events))
+        .route(
+            "/organizations/{organization_id}/workspaces/{workspace_id}/events",
+            get(workspace_events),
+        )
         .with_state(GatewayState { plane, provisioner })
 }
 
@@ -189,6 +196,17 @@ async fn events(
         .plane
         .authorize(&organization_id, &identity, &group)
         .await?;
+    // The whole log is an administrative view: owning a workspace of the
+    // organization (or the admin claim) is what it takes. A member reads their
+    // workspace through the workspace route.
+    if !identity.is_admin
+        && !group
+            .state_machine()
+            .is_organization_owner(&organization_id, &identity.user_id)
+            .await
+    {
+        return Err(CommandError::Auth(AuthError::Forbidden).into());
+    }
 
     if let Some(min_index) = min_index(&headers)? {
         match ensure_min_index(&group, min_index, state.plane.ryw_hold()).await {
@@ -206,6 +224,55 @@ async fn events(
         .map_err(HttpError::Read)?;
 
     Ok(Json(json!({ "events": events })))
+}
+
+/// `GET /organizations/{organization_id}/workspaces/{workspace_id}/events`,
+/// authenticated, authorized by a role in that workspace, and gated by
+/// `X-Min-Index`.
+async fn workspace_events(
+    State(state): State<GatewayState>,
+    Path((organization_id, workspace_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, HttpError> {
+    let organization_id = parse_id(&organization_id)?;
+    let workspace_id = parse_id(&workspace_id)?;
+
+    let identity = state
+        .plane
+        .authenticate(bearer(&headers).as_deref())
+        .await?;
+    let group = state.plane.group_for(&organization_id)?;
+
+    // Any role in the workspace may read it — that is what a Viewer is for.
+    let permitted = identity.is_admin
+        || group
+            .state_machine()
+            .workspace_role(&organization_id, &workspace_id, &identity.user_id)
+            .await
+            .is_some();
+    if !permitted {
+        return Err(CommandError::Auth(AuthError::Forbidden).into());
+    }
+
+    if let Some(min_index) = min_index(&headers)? {
+        match ensure_min_index(&group, min_index, state.plane.ryw_hold()).await {
+            RywOutcome::Recent => {}
+            RywOutcome::ForwardToLeader { leader } => {
+                return Err(HttpError::ForwardToLeader(leader));
+            }
+            RywOutcome::Unavailable => return Err(HttpError::Unavailable),
+        }
+    }
+
+    let events = group
+        .state_machine()
+        .workspace_events(&organization_id, &workspace_id)
+        .await;
+
+    Ok(Json(json!({
+        "workspace_id": workspace_id.to_string(),
+        "events": events,
+    })))
 }
 
 /// Parses a canonical id from untrusted input.
@@ -396,6 +463,7 @@ mod tests {
                 Identity {
                     user_id: Id::from("user-1"),
                     is_admin: false,
+                    email: None,
                 },
             )
             .with_token(
@@ -403,6 +471,7 @@ mod tests {
                 Identity {
                     user_id: Id::from("user-0"),
                     is_admin: true,
+                    email: None,
                 },
             );
 
@@ -414,6 +483,28 @@ mod tests {
         );
 
         router(Arc::new(plane))
+    }
+
+    /// A read of the whole organization log.
+    fn read_log(token: &str) -> Request<Body> {
+        Request::builder()
+            .method("GET")
+            .uri(format!("/organizations/{ORG}/events"))
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    /// A read scoped to one workspace.
+    fn read_workspace(token: &str, workspace_id: &str) -> Request<Body> {
+        Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/organizations/{ORG}/workspaces/{workspace_id}/events"
+            ))
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap()
     }
 
     fn post_command(token: &str, command_type: &str) -> Request<Body> {
@@ -444,17 +535,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri(format!("/organizations/{ORG}/events"))
-                    .header("authorization", "Bearer member")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = app.oneshot(read_workspace("member", WS)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -522,6 +603,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reads_are_scoped_to_a_workspace_and_the_log_needs_ownership() {
+        let app = app().await;
+
+        // A Member of `WS` reads it...
+        assert_eq!(
+            app.clone()
+                .oneshot(read_workspace("member", WS))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+
+        // ...but neither another workspace...
+        assert_eq!(
+            app.clone()
+                .oneshot(read_workspace(
+                    "member",
+                    "018f2c3d-4e5f-7071-8293-a4b5c6d7e8f9",
+                ))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN,
+            "a role in one workspace does not read another"
+        );
+
+        // ...nor the whole organization log: that is the owner's view (the
+        // admin claim reads it too).
+        assert_eq!(
+            app.clone()
+                .oneshot(read_log("member"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            app.clone()
+                .oneshot(read_log("admin"))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+
+        // A read of a workspace the caller belongs to carries only its events.
+        let body = axum::body::to_bytes(
+            app.oneshot(read_workspace("member", WS))
+                .await
+                .unwrap()
+                .into_body(),
+            usize::MAX,
+        )
+        .await
+        .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains(WS), "the answer names the workspace: {body}");
+    }
+
+    #[tokio::test]
     async fn unauthenticated_reads_are_rejected() {
         let app = app().await;
         let request = Request::builder()
@@ -572,19 +714,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_read_ahead_of_the_applied_index_is_not_served_stale() {
-        let response = app()
-            .await
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri(format!("/organizations/{ORG}/events"))
-                    .header("authorization", "Bearer member")
-                    .header("x-min-index", "100000")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let mut request = read_workspace("member", WS);
+        request
+            .headers_mut()
+            .insert("x-min-index", "100000".parse().unwrap());
+        let response = app().await.oneshot(request).await.unwrap();
 
         // A single-node leader cannot forward away, so it refuses rather than
         // answering with an older state.
