@@ -41,3 +41,44 @@ string_slice = "deny"            # Blocks str[start..end] panics
 [workspace.lints.rust]
 unconditional_panic = "deny"
 missing_docs = "warn"
+
+# ---------------------------------------------------------------------------
+# Build profiles
+#
+# Full DWARF (`debug = 2`) is the dominant term in artifact size and the main
+# reason `target/` reaches tens of gigabytes: every `.rlib`, test binary and
+# example carries its own copy, and each profile (`dev`, `test`, coverage)
+# keeps a separate one. Measured on this workspace:
+#
+#   libloomery_core-*.rlib    9.5 MB ->  5.8 MB  (-39%)
+#   loomery_core unit test   42.1 MB -> 20.7 MB  (-51%)
+#
+# Line tables are all `cargo llvm-cov` needs to map counters onto source lines,
+# so the 80% coverage floor and the CRAP scores are unaffected. What is lost is
+# local-variable inspection in a debugger; line-level stepping, `file:line`
+# panic frames and backtraces keep working.
+#
+# Incremental compilation is left at Cargo's default (enabled for `dev` and
+# `test`). It trades disk for time: Cargo keeps one session directory per
+# configuration ever built and never reclaims them, so `target/debug/incremental`
+# grows unbounded. mbx prunes its own learned incremental state on a budget;
+# runs that bypass mbx (such as the CI image) do not get that protection.
+# ---------------------------------------------------------------------------
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
+# Benchmarks run under `perf`, which needs symbols and line tables, not locals.
+[profile.release]
+debug = "line-tables-only"
+
+# Dependencies are never single-stepped by hand, so they carry no debuginfo at
+# all. This is the single largest saving: `deps/` was 19 GB of dependency
+# `.rlib` files, almost all of it DWARF.
+[profile.dev.package."*"]
+debug = false
+
+[profile.test.package."*"]
+debug = false
