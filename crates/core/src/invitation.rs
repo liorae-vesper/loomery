@@ -15,6 +15,7 @@
 //!
 //! See `docs/domain-model.md` for the command/event table and transition matrix.
 
+use crate::actor::Actor;
 use crate::aggregate::{AggregatePlan, Execution, event_from_command};
 use crate::envelope::{Command, Event, Payload};
 use crate::error::DomainError;
@@ -77,10 +78,18 @@ pub struct Created {
 }
 
 /// The payload of `invitation.accept`.
+///
+/// Both fields are **attribution**, not client input: the gateway overwrites
+/// them from the authenticated caller (the identity's user id and its verified
+/// email claim) before the command reaches consensus. `email` is what binds the
+/// acceptance to the invitation — an invitation is issued to an address, and only
+/// the holder of that address may accept it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Accept {
     /// The user who accepted the invitation.
     pub user_id: Id,
+    /// The email the caller proved control of.
+    pub email: String,
 }
 
 /// The payload of `invitation.accepted` — everything the acceptance saga needs.
@@ -147,6 +156,10 @@ pub enum InvitationCode {
     Expired,
     /// The invited email is empty or out of bounds.
     InvalidEmail,
+    /// The caller's email does not match the invited address.
+    EmailMismatch,
+    /// The caller is not the user the acceptance names.
+    NotTheInvitee,
 }
 
 /// The invitation aggregate's plan — a zero-sized marker; the type is the plan.
@@ -229,6 +242,15 @@ fn create(
 }
 
 /// Accept an invitation.
+/// Whether two addresses are the same one, ignoring case and surrounding space.
+///
+/// Email is not case-sensitive in practice, and a provider may pad a claim.
+#[must_use]
+fn emails_match(invited: &str, claimed: &str) -> bool {
+    let normalize = |address: &str| address.trim().to_lowercase();
+    !normalize(invited).is_empty() && normalize(invited) == normalize(claimed)
+}
+
 fn accept(
     state: &InvitationState,
     command: &Command,
@@ -256,13 +278,35 @@ fn accept(
     }
 
     let payload: Accept = decode_command(command)?;
-    let email = state.email.clone().unwrap_or_default();
+
+    // The caller must be the invitee. The gateway derives both from the
+    // authenticated identity, and this refuses a forged payload even if some
+    // other path submits it.
+    if let Actor::User { id } = &command.actor
+        && id != &payload.user_id
+    {
+        return Err(reject(
+            InvitationCode::NotTheInvitee,
+            "the acceptance names a user other than the caller",
+        ));
+    }
+
+    // ...and must prove the address the invitation was issued to.
+    let invited = state.email.clone().unwrap_or_default();
+    if !emails_match(&invited, &payload.email) {
+        return Err(reject(
+            InvitationCode::EmailMismatch,
+            "the acceptance comes from a different email than the invitation was issued to",
+        ));
+    }
+
     let role = state.role.unwrap_or(Role::Member);
 
     let data = encode(
         &Accepted {
             user_id: payload.user_id,
-            email,
+            // The invitation's address is authoritative, not the payload's.
+            email: invited,
             role,
         },
         ACCEPTED,
@@ -403,8 +447,30 @@ mod tests {
         command(CREATE, &format!(r#"{{"email":"{email}","role":"{role}"}}"#))
     }
 
+    /// The invited address the tests issue invitations to.
+    const INVITED: &str = "ada@example.com";
+
     fn accept_invite(user: &str) -> Command {
-        command(ACCEPT, &format!(r#"{{"user_id":"{user}"}}"#))
+        command(
+            ACCEPT,
+            &format!(r#"{{"user_id":"{user}","email":"{INVITED}"}}"#),
+        )
+    }
+
+    /// An acceptance whose payload claims a different address.
+    fn accept_invite_from(email: &str, user: &str) -> Command {
+        command(
+            ACCEPT,
+            &format!(r#"{{"user_id":"{user}","email":"{email}"}}"#),
+        )
+    }
+
+    /// An acceptance submitted by `actor`.
+    fn accept_invite_as(actor: Actor, user: &str) -> Command {
+        Command {
+            actor,
+            ..accept_invite(user)
+        }
     }
 
     fn expire_invite() -> Command {
@@ -525,6 +591,54 @@ mod tests {
         assert_eq!(
             code_of(Invitation::prepare(expired(), accept_invite("user-1"))),
             Some(InvitationCode::Expired)
+        );
+    }
+
+    #[test]
+    fn an_acceptance_from_another_address_is_refused() {
+        assert_eq!(
+            code_of(Invitation::prepare(
+                pending(),
+                accept_invite_from("mallory@example.com", "user-1"),
+            )),
+            Some(InvitationCode::EmailMismatch),
+            "the invitation belongs to the address it was issued to"
+        );
+    }
+
+    #[test]
+    fn the_invited_address_is_matched_case_insensitively() {
+        let state = advance(
+            pending(),
+            accept_invite_from("  ADA@Example.COM ", "user-1"),
+        );
+        assert!(matches!(state.status, InvitationStatus::Accepted));
+    }
+
+    #[test]
+    fn an_acceptance_naming_another_user_is_refused() {
+        assert_eq!(
+            code_of(Invitation::prepare(
+                pending(),
+                accept_invite_as(
+                    Actor::User {
+                        id: Id::from("user-2")
+                    },
+                    "user-1"
+                ),
+            )),
+            Some(InvitationCode::NotTheInvitee),
+            "the caller must be the user the acceptance names"
+        );
+    }
+
+    #[test]
+    fn a_system_actor_may_accept_on_behalf_of_the_invitee() {
+        // The saga and the tests use a system actor; only a *user* actor is
+        // checked against the payload, and the email still has to match.
+        assert!(
+            Invitation::prepare(pending(), accept_invite("user-1")).is_ok(),
+            "a system actor is not the invitee and is not checked as one"
         );
     }
 
