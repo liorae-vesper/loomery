@@ -67,14 +67,13 @@
 
 env:
   # Tag of the image built from .buildkite/Dockerfile by `build-ci-image`.
-  # Interpolated once, when this pipeline is uploaded, so every step and plugin
-  # configuration below sees the resolved name.
-  LOOMERY_CI_IMAGE: "loomery-ci:${BUILDKITE_COMMIT}"
+  # Versioned with latest so we cache them. If the layer changes, buildkite builds a new one.
+  LOOMERY_CI_IMAGE: "loomery-ci:latest"
 
 steps:
   - label: ":docker: Build CI image"
     key: "build-ci-image"
-    command: 'docker build --file .buildkite/Dockerfile --tag "${LOOMERY_CI_IMAGE}" .'
+    command: 'docker buildx build --file .buildkite/Dockerfile --tag "${LOOMERY_CI_IMAGE}" .'
     plugins:
       - docker#v5.14.0:
           image: "docker:28-cli"
