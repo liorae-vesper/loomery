@@ -689,6 +689,11 @@ where
         }
         for group_id in self.groups.ids() {
             if let Some(group) = self.groups.group(&group_id) {
+                // What the batching actually did, not what it was configured to do.
+                // A batch limit above the offered concurrency never binds, and the
+                // only place that shows is in these counters — so they get a line
+                // rather than living in an accessor nobody reads.
+                eprintln!("[batching] {group_id}: {}", group.writer().batch_stats());
                 group.shutdown().await?;
             }
         }

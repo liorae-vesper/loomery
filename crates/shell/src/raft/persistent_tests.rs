@@ -240,9 +240,15 @@ fn configuration_defaults_and_validation() {
         .unwrap()
         .validate()
         .unwrap();
-    let mut invalid = config;
+    let mut invalid = config.clone();
     invalid.transport.max_message_bytes = 0;
     assert!(invalid.validate().is_err());
+    // The two batch limits against each other: a byte budget below the count limit
+    // makes the count unreachable, which is decidable before anything runs.
+    let mut contradictory = config;
+    contradictory.proposals.max_batch_commands = 256;
+    contradictory.proposals.max_batch_bytes = 128;
+    assert!(contradictory.validate().is_err());
     assert!(serde_json::from_str::<GroupConfig>(r#"{"storage":{"unknown":1}}"#).is_err());
 }
 

@@ -203,6 +203,18 @@ impl ProposalConfig {
             self.max_batch_commands > 0 && self.max_batch_bytes > 0 && self.queue_capacity > 0,
             "proposal batch count, bytes and queue capacity must be positive"
         );
+        // The two batch limits, checked against each other for the part that is
+        // decidable here. A command is at least one byte, so a byte budget below the
+        // count limit makes the count limit unreachable however many writers there
+        // are: the byte budget binds first, every time. The practical version of the
+        // comparison needs a frame size, which only exists once commands are seen —
+        // `ProposalWriter::batch_stats()` publishes the largest command and how many
+        // of them the budget holds, and whether the count limit has ever bound.
+        anyhow::ensure!(
+            self.max_batch_commands == 1 || self.max_batch_bytes >= self.max_batch_commands,
+            "a byte budget below the batch count cannot reach that count: every command \
+             is at least one byte, so the budget binds first"
+        );
         Ok(())
     }
 }

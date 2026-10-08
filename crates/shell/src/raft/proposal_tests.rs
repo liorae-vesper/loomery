@@ -310,3 +310,157 @@ async fn a_rejected_batch_preserves_consensus_error_classification_for_each_call
     writer.stop().await;
     raft.shutdown().await.unwrap();
 }
+
+/// The published numbers, without a group: the derivations and the line an
+/// operator reads.
+#[test]
+fn batch_stats_derives_the_effective_batch_and_names_the_limit() {
+    use super::proposal::BatchStats;
+
+    let disabled = BatchStats {
+        enabled: false,
+        configured_commands: 1,
+        configured_bytes: 262_144,
+        ..BatchStats::default()
+    };
+    assert_eq!(disabled.mean_depth(), None);
+    assert!(disabled.to_string().contains("batching disabled"));
+
+    let supplied = BatchStats {
+        enabled: true,
+        configured_commands: 256,
+        configured_bytes: 262_144,
+        batches: 1_537,
+        commands: 12_296,
+        largest: 8,
+        largest_frame_bytes: 741,
+        count_bound: 0,
+        bytes_bound: 0,
+        supply_bound: 1_537,
+    };
+    assert_eq!(supplied.mean_depth(), Some(8));
+    assert_eq!(supplied.byte_capacity(), Some(353));
+    let line = supplied.to_string();
+    assert!(line.contains("mean 8"), "{line}");
+    assert!(line.contains("count 0"), "{line}");
+    // The number that says the configured 256 is dead configuration.
+    assert!(line.contains("largest 8"), "{line}");
+
+    let byte_bound = BatchStats {
+        largest_frame_bytes: 741,
+        configured_bytes: 65_536,
+        ..supplied
+    };
+    assert_eq!(byte_bound.byte_capacity(), Some(88));
+    assert!(
+        byte_bound.to_string().contains("holds 88"),
+        "{}",
+        byte_bound
+    );
+}
+
+/// A batch limit above what the callers can supply is dead configuration, and the
+/// counters are what say so: this is the case that was misread as a byte cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn batching_reports_supply_when_the_count_limit_is_out_of_reach() {
+    let directory = tempfile::tempdir().unwrap();
+    let group = boot(directory.path(), config(StatePersistence::Checkpoint)).await;
+    let mut batch = crate::config::ProposalConfig {
+        max_batch_commands: 8,
+        max_delay_ms: 20,
+        ..crate::config::ProposalConfig::default()
+    };
+    batch.max_batch_bytes = 1 << 20;
+    let writer = ProposalWriter::new(group.raft(), batch);
+
+    // One at a time: at most one command is ever in flight, so a limit of 8 can
+    // never be reached however long the writer waits.
+    for command in commands() {
+        writer.propose(command).await.unwrap();
+    }
+
+    let stats = writer.batch_stats();
+    assert!(stats.enabled);
+    assert_eq!(stats.batches, 3, "each command is its own entry: {stats}");
+    assert_eq!(stats.largest, 1, "{stats}");
+    assert_eq!(stats.mean_depth(), Some(1));
+    assert_eq!(stats.count_bound, 0, "the count limit never bound: {stats}");
+    assert_eq!(stats.supply_bound, 3, "{stats}");
+    writer.stop().await;
+}
+
+/// The limit that actually bound is published, whether it was the count or the
+/// byte budget, and a disabled writer says so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn batching_reports_which_limit_bound() {
+    let directory = tempfile::tempdir().unwrap();
+    let group = boot(directory.path(), config(StatePersistence::Checkpoint)).await;
+    let [first, second, third] = commands();
+
+    // Count: three in flight, a limit of three.
+    let counted = ProposalWriter::new(
+        group.raft(),
+        crate::config::ProposalConfig {
+            max_batch_commands: 3,
+            max_batch_bytes: 1 << 20,
+            max_delay_ms: 20,
+            ..crate::config::ProposalConfig::default()
+        },
+    );
+    let (a, b, c) = tokio::join!(
+        counted.propose(first.clone()),
+        counted.propose(second.clone()),
+        counted.propose(third.clone())
+    );
+    a.unwrap();
+    b.unwrap();
+    c.unwrap();
+    let stats = counted.batch_stats();
+    assert_eq!(stats.batches, 1, "one shared entry: {stats}");
+    assert_eq!(stats.largest, 3, "{stats}");
+    assert_eq!(stats.count_bound, 1, "{stats}");
+    assert_eq!(stats.bytes_bound, 0, "{stats}");
+    assert_eq!(
+        stats.count_bound + stats.bytes_bound + stats.supply_bound,
+        stats.batches
+    );
+    counted.stop().await;
+
+    // Bytes: a budget of two frames and a bit, with the count limit far above.
+    let frame = serde_json::to_vec(&first).unwrap().len();
+    let bytes = ProposalWriter::new(
+        group.raft(),
+        crate::config::ProposalConfig {
+            max_batch_commands: 256,
+            max_batch_bytes: frame * 2 + frame / 2,
+            max_delay_ms: 20,
+            ..crate::config::ProposalConfig::default()
+        },
+    );
+    let (a, b, c) = tokio::join!(
+        bytes.propose(first.clone()),
+        bytes.propose(second.clone()),
+        bytes.propose(third.clone())
+    );
+    a.unwrap();
+    b.unwrap();
+    c.unwrap();
+    let stats = bytes.batch_stats();
+    assert_eq!(stats.largest, 2, "two frames fit, three do not: {stats}");
+    assert_eq!(stats.byte_capacity(), Some(2), "{stats}");
+    assert_eq!(stats.bytes_bound, 1, "{stats}");
+    assert_eq!(
+        stats.count_bound, 0,
+        "the count limit is out of reach: {stats}"
+    );
+    bytes.stop().await;
+
+    // Disabled: one command per entry, and the writer says so rather than
+    // reporting a meaningless mean.
+    let off = ProposalWriter::new(group.raft(), crate::config::ProposalConfig::default());
+    let stats = off.batch_stats();
+    assert!(!stats.enabled, "{stats}");
+    assert_eq!(stats.mean_depth(), None);
+    assert!(stats.to_string().contains("disabled"), "{stats}");
+    off.stop().await;
+}
