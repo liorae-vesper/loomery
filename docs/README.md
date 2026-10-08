@@ -65,6 +65,7 @@ configuration reference describe what was selected and implemented.
 | [Read-model store options](research/read-model-store-options.md) | The D9 candidates for durable projections, with sources |
 | [Indexed segment format](research/indexed-segment-file-format.md) | Alternative log format; not the implemented RocksDB backend |
 | [OpenRaft storage](research/openraft-storage.md) | Storage contracts and version-specific integration notes |
+| [OpenRaft 0.10 migration](research/openraft-010-migration.md) | The 0.9.25 → 0.10.0-alpha.36 migration: measured error counts, surface inventory and behaviour changes |
 | [Consensus storage performance](research/consensus-storage-performance.md) | Serialized syncs, batching, blocking-pool timing and database closure investigation |
 | [Checkpoint policy](research/checkpoint-policy.md) | Scheduling versus durability and the two recovery modes |
 

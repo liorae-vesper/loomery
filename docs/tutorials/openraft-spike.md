@@ -4,6 +4,11 @@ This walkthrough builds the original in-memory baseline. Persistent networking,
 TLS and both recovery modes are now implemented; see the
 [current shell reference](../shell.md) and [configuration guide](../raft-configuration.md).
 
+> **The code has since moved to OpenRaft 0.10.0-alpha.36.** The API tables and
+excerpts below describe the crate as it was read during the walkthrough (0.9.25);
+they are kept as the record of how the spike was built. What changed, and what it
+cost, is in [openraft-010-migration.md](../research/openraft-010-migration.md).
+
 
 Design §5, Phase 1, item 1: keep the consensus machinery behind
 [`GroupOps`](shell-group.md) and get a group that can commit a command and hand

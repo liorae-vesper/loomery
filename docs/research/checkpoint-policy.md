@@ -1,6 +1,10 @@
 # Checkpoint scheduling and durability
 
-Reviewed against OpenRaft 0.9.25 and RocksDB on 2026-09-30.
+Reviewed against OpenRaft 0.9.25 and RocksDB on 2026-09-30. The workspace has since
+migrated to 0.10.0-alpha.36 ([openraft-010-migration.md](openraft-010-migration.md)):
+the contracts below still hold, but the storage trait methods now return
+`io::Error` and the state machine applies a stream of per-entry responders rather
+than returning a response vector.
 
 Two independent choices are often called “sync versus async”: whether command
 application waits for a checkpoint, and whether a completed storage write has

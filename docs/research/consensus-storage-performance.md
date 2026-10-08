@@ -1,9 +1,15 @@
 # Consensus storage performance investigation
 
-Investigated on 2026-10-01 against the workspace's OpenRaft 0.9.25 and
-rust-rocksdb 0.24.0. This note explains the earlier single-group benchmark
+Investigated on 2026-10-01 against the workspace's then-pinned OpenRaft 0.9.25
+and rust-rocksdb 0.24.0. This note explains the earlier single-group benchmark
 results of approximately 170 checkpoint-mode and 550 snapshot-mode writes/s.
 It does not change the production durability or recovery policy.
+
+> **Since migrated to OpenRaft 0.10.0-alpha.36**
+> ([openraft-010-migration.md](openraft-010-migration.md)). One finding below no
+> longer holds: 0.10 does *not* wait for the first append's flush callback before
+> issuing the next append — it tracks IO completion with a watermark and lets
+> appends overlap. That is the pipelining lever this note says is missing.
 
 ## Findings from the pinned code
 
@@ -96,7 +102,10 @@ and [WAL performance guidance](https://github.com/facebook/rocksdb/wiki/WAL-Perf
 
 The missing ingredient for **this single-group implementation** is multiple
 outstanding appends to the same WAL. OpenRaft 0.9.25 waits for the first callback
-before providing the next append. A periodic worker would usually have one
+before providing the next append. (0.10 removed that wait: the core now permits
+overlapping appends and tracks their completion with an IO watermark, so this
+particular obstacle is gone — see
+[openraft-010-migration.md](openraft-010-migration.md).) A periodic worker would usually have one
 leader append to sync per interval, adding delay rather than grouping writes.
 Each tenant currently opens a separate database/WAL, so different tenant
 callbacks cannot share one database's WAL sync either. Useful grouping requires
@@ -202,7 +211,9 @@ reproduced in this investigation.
    change, or spike a verified OpenRaft version with truly pipelined I/O. An
    ordered writer must preserve vote/log/truncation ordering, read visibility
    when append returns, callback durability and error propagation. A dedicated
-   writer thread alone will not bypass 0.9.25's callback wait.
+   writer thread alone would not have bypassed 0.9.25's callback wait; 0.10
+   removes that wait, so this is now a question of what the extra concurrency
+   buys rather than whether it is possible.
 2. Instrument append/commit/apply batch sizes, queue/service times, serialized
    bytes and RPC latency in a repeatable harness. Compare concurrency 1/8/32
    and one versus three voters on the same persistent filesystem.

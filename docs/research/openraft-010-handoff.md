@@ -3,6 +3,15 @@
 This is a self-contained work packet. Everything needed to continue is here or in the two
 files it names; the previous session's context is not required.
 
+**Leg 1 (the bump) and leg 2 (the migration) are complete.** `crates/shell` is on
+openraft **0.10.0-alpha.36** with `cargo check -p loomery-shell --all-features` clean and
+`mise run test` / `mise run verify` green on branch `feature/openraft-pipelined-append`.
+`main` is untouched. The migration commit is the first commit that may merge; it is followed
+by leg 5 (the bidirectional `StreamAppend` RPC) and leg 6 (the benchmark), neither started.
+Read `docs/research/openraft-010-migration.md` for the surface inventory, the measured error
+counts per step, and **the three 0.10 behaviour changes the migration had to accept** — that
+last section is the one to read before the benchmark.
+
 ## The job
 
 Migrate `crates/shell` from openraft **0.9.25** to **0.10.0-alpha.36**, then implement
@@ -10,66 +19,63 @@ Migrate `crates/shell` from openraft **0.9.25** to **0.10.0-alpha.36**, then imp
 was worth it.
 
 Work happens on branch **`feature/openraft-pipelined-append`** in
-`/home/john/Workspace/Liorae/loomery`. It is currently at a deliberately **non-compiling**
-commit; `main` is untouched and must stay that way until the branch is green.
+`/home/john/Workspace/Liorae/loomery`. `main` is untouched and must stay that way until the
+branch is green.
 
-Read first: `docs/research/openraft-010-migration.md` (plan, surface inventory, feature list)
-and `docs/benchmarks/deployment-scale.md` (what the numbers currently are).
+Read first: `docs/research/openraft-010-migration.md` (plan, surface inventory, measured
+counts, behaviour changes) and `docs/benchmarks/deployment-scale.md` (what the numbers
+currently are).
 
-## What is already done (leg 1, complete)
+## What is already done
 
-* Bump applied and verified in both files:
-  `openraft = { version = "0.10.0-alpha.36", features = ["serde", "single-threaded", "compat"] }`
-  in `crates/shell/Cargo.toml`, and `cargo update -p openraft --precise 0.10.0-alpha.36`.
-* `cargo check -p loomery-shell --all-features` → **511 errors**, inventoried in the migration
-  doc as a root-cause map. The count is a cascade; there are about ten real causes:
+**Leg 1 — the bump (complete).** `openraft = { version = "0.10.0-alpha.36", features =
+["serde", "compat"] }` in `crates/shell/Cargo.toml`, verified in `Cargo.lock`. The
+`single-threaded` feature was in the bump as first applied and is deliberately gone: it sets
+`OptionalSend = ()`, which conflicts with our multi-threaded Tokio runtime and tonic
+transport, and dropping it is net −20 errors (it un-masks `RaftStateMachine` errors that were
+hiding behind the `Send` failures).
 
-  | Count | Cause | Kind |
-  |---|---|---|
-  | 174 | `u64: RaftTypeConfig is not satisfied` — `StorageError<u64>`, and 0.10 made `StorageError` a struct | mechanical |
-  | 71 | `BasicNode: std::error::Error is not satisfied` — error types still taking a type parameter | mechanical |
-  | ~60 | `cannot be sent between threads safely` — likely the `single-threaded` feature | feature trial |
-  | 65 | `(): RaftStateMachine<TypeConfig>` — the trait split | real work |
-  | 26 | `u64: RaftLeaderId` — the `LeaderId` associated type | real work |
-  | 27 | E0107 — generic arity changed | mechanical |
-  | 11 | E0407 — `vote` off `RaftNetwork`; `truncate`/`read_vote` off `RaftLogStorage` | real work |
-  | 17 | `BasicNode: Hash/Ord/NodeId`; `AppData` needs `Display` | small |
+**Leg 2 — the migration (complete, one commit).** Measured error counts, step by step:
+514 (bumped) → 334 (error types re-parameterised) → 314 (features) → 313 (`TypeConfig`) →
+214 (storage traits, `Raft<C, SM>`) → 0 (`RaftNetworkV2` + fragmenting `full_snapshot`).
+What landed:
 
-  Errors cluster in `state_machine.rs` (187), `transport.rs` (186), `mod.rs` (182),
-  `port.rs` (112), `host.rs` (77), `rocks_log_store.rs` (57), `network.rs` (44),
-  `log_store.rs` (42), `group.rs` (40).
+* **Error types:** `StorageError<TypeConfig>` (still generic in 0.10 — it takes the *type
+  config*), `RPCError<TypeConfig, E>` (the node type is gone), `RaftError<TypeConfig>`,
+  `ClientWriteError<TypeConfig>`. `Unreachable<TypeConfig>` is built from an error.
+* **`TypeConfig`:** `declare_raft_types!` with `D`/`R`/`NodeId`/`Node`/`AsyncRuntime` only;
+  `Entry`, `LeaderId`, `Vote`, `Payload`, `Responder` and `Batch` come from the macro defaults,
+  and `SnapshotData` left the type config entirely. `Display for AppData` names the command
+  types and never the payload. `raft::alias` binds the openraft aliases to our config, and
+  `raft::RaftHandle` = `Raft<TypeConfig, Arc<MemStateMachine>>`.
+* **Storage:** the reader/writer split (`read_vote` on `RaftLogReader`), `truncate` →
+  `truncate_after(Option<LogIdOf<C>>)` (keep-inclusive), `io::Error` return types, `IOFlushed`
+  instead of the deprecated `LogFlushed`, and `RaftStateMachine::apply` consuming a stream of
+  `EntryResponder`s. The existing batching/dedup/persistence logic is unchanged and lives in
+  `state_machine::apply_batch`, which the tests drive directly.
+* **Network:** `NoopNetwork` and `TonicNetwork` implement `RaftNetworkV2` (the `Net*`
+  sub-traits come from openraft's blanket impls), so `stream_append` uses the default
+  sequential implementation. `full_snapshot` fragments the snapshot itself over the existing
+  `InstallSnapshot` RPC and `TonicTransport` reassembles it.
+* **Tests:** the whole suite is green, including `openraft::testing::log::Suite` (note the new
+  path), the hardening and interruption suites. Two tests changed for 0.10 semantics rather
+  than because of a bug; both are documented in the migration doc: the append-serialization
+  hardening test, and the interruption test that asserted on the retired `snapshot_id`.
 
 ## Next actions, in order
 
-1. **Mechanical first, because it should halve the count.** Delete the type parameters from
-   error types: `StorageError<u64>` → `StorageError`, and the same for the error types behind
-   the 71 `BasicNode: std::error::Error` errors. Then re-run the check and **record the new
-   count** — that number decides whether this is a short migration or a long one.
-2. **Test the feature set.** `single-threaded` sets `OptionalSend = ()`, making boxed futures
-   and streams non-`Send`; we run a multi-threaded tokio runtime with a tonic transport.
-   Try `features = ["serde", "compat"]` (no `single-threaded`) and compare the error count
-   before doing any work on the ~60 `Send` errors.
-3. **`TypeConfig`.** Add the `LeaderId` associated type; give `AppData` a `Display` impl.
-   Note that removing `SnapshotData` from `declare_raft_types!` changed nothing on its own
-   (511 → 510) — `SnapshotData` moved to `RaftNetworkV2`, so it belongs in the network impl.
-4. **Storage traits.** `log_store.rs`, `rocks_log_store.rs`, `state_machine.rs`: the reader /
-   writer split, `read_vote`/`truncate` relocation, `SnapshotMeta` losing `snapshot_id`.
-   Behaviour must not change: batching, dedup and the `events` family writes all stay as they
-   are. Use `crates/shell/src/raft/suite.rs` plus the hardening and interruption tests as the
-   correctness oracle.
-5. **Network.** `network.rs` and `transport.rs` to `RaftNetworkV2` + the granular `Net*`
-   sub-traits, using the **default sequential `stream_append`** — no protocol change yet.
-6. **Get it green and commit.** `mise run test` (including the raft hardening and interruption
-   tests) and `mise run verify`. This commit is the milestone: a working 0.10 with no
-   behaviour change. **This is the first commit that may merge.**
-7. **Then, and only then, real pipelining.** A bidirectional `StreamAppend` RPC in
+1. **The bidirectional `StreamAppend` RPC — leg 5.** A bidirectional streaming RPC in
    `crates/shell/proto/raft.proto`, the receiving side calling `Raft::stream_append`, responses
    yielded in input order (one ordered HTTP/2 stream per follower avoids needing sequence
-   numbers), honouring `option.soft_ttl()` for idle policy rather than `hard_ttl`. Test
-   ordering and TTL.
-8. **Measure.** `mise run bench-deployment-scale` on the unbatched *and* batched paths, one
-   node and three, against the recorded 0.9 numbers in
-   `docs/benchmarks/results/deployment-path.json`. This decides whether step 7 was worth it.
+   numbers), honouring `option.soft_ttl()` for idle policy rather than `hard_ttl`. Override
+   `RaftNetworkV2::stream_append` on `TonicNetwork` for it. Test ordering and TTL. This is also
+   the moment to consider a streaming snapshot transfer, which would replace the JSON-fragment
+   reassembly leg 2 built.
+2. **Measure — leg 6.** `mise run bench-deployment-scale` on the unbatched *and* batched paths,
+   one node and three, against the recorded 0.9 numbers in
+   `docs/benchmarks/results/deployment-path.json`. This decides whether leg 5 was worth it.
+
+Both are for the next session; nothing in leg 2 depends on them.
 
 ## Constraints that are not negotiable
 
@@ -109,6 +115,36 @@ and `docs/benchmarks/deployment-scale.md` (what the numbers currently are).
   256 KB default stops at ~127 commands); `--snapshot-points ""` disables snapshot points; the
   harness rejects a `name_bytes` above `MAX_NAME_BYTES` (200).
 * **`act -j` accepts exactly one job id** — repeating it runs only the last one.
+
+## Traps leg 2 found (0.10 API details that cost time)
+
+* **`StorageError` is generic.** `StorageError<C>` takes the type config, so the fix is
+  `StorageError<TypeConfig>`. `RPCError` lost the node type: `RPCError<C, E>`. The same
+  re-parameterisation applies to `RaftError`, `ClientWriteError`, `RemoteError` and `Timeout`.
+* **`Raft<C, SM>` is generic over the state machine.** Every handle needs
+  `Raft<TypeConfig, Arc<MemStateMachine>>`; `raft::RaftHandle` names it once.
+* **The RPC types lost their `NodeId` parameter:** `AppendEntriesResponse<C>`, `VoteRequest<C>`,
+  `VoteResponse<C>` — not `<u64>`.
+* **`apply` takes a stream of `EntryResponder`s and sends responses per entry.** Keep the batch
+  logic in a separate function so it stays testable without an `OpenRaft` responder, and send
+  each response only after the durable write — otherwise a failed write tells a writer it
+  committed.
+* **`futures_util` is not a direct dependency.** `tokio_stream::{Stream, StreamExt}` is, and
+  `tokio_stream::Stream` *is* `futures_core::Stream`, so the trait bounds line up.
+* **`RPCOption::snapshot_chunk_size` is `pub(crate)`**, so a test cannot force a multi-fragment
+  transfer through `full_snapshot`. Test the fragmenter and the reassembler as units, and use a
+  real (single-fragment) transfer over tonic for the end-to-end path.
+* **`openraft::testing::{StoreBuilder, Suite}` moved** to `openraft::testing::log`, and
+  `Suite::test_all` is now `async`.
+* **Metrics moved to the runtime-agnostic watch channel:** `metrics().borrow_watched()` (bring
+  `openraft::type_config::async_runtime::WatchReceiver` into scope), not tokio's `borrow()`.
+* **An explicit `Entry = openraft::Entry<TypeConfig>` line must go:** in 0.10 `Entry` is
+  `Entry<CLID, Payload>`, and the macro's default links it to the configured `Payload`.
+* **`RaftNetwork` in 0.10 is an empty deprecated stub** (the v1 trait moved to the separate
+  `openraft-legacy` crate), so `impl RaftNetwork<C> for X { fn vote … }` produces E0407. Only
+  implement the `Net*` traits or `RaftNetworkV2`.
+* **A remote `RaftError` cannot be carried by `RPCError<C>`** (its error parameter is
+  `Infallible`). Report it as `Unreachable`, which is what openraft's own example network does.
 
 ## What this is expected to buy, honestly
 

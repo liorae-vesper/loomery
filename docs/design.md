@@ -194,7 +194,7 @@ The built shell (port, genesis worker, networked persistent Raft groups) is docu
 | Runtime | **Tokio** (multi-threaded, `flavor = "multi_thread"`); one task per Raft group |
 | Consensus (one group per org + control group) | **OpenRaft** — async-native Raft in Rust; `Raft<TypeConfig>` per group, each with its own `RaftLogStorage`/`RaftStateMachine`. See [D1](#d1--consensus) |
 | Storage (log / state / snapshots) | `RaftLogStorage` + `RaftStateMachine` over RocksDB; awaited state checkpoints and scheduled Raft snapshots (see [D2](#d2--storage-engine)) |
-| Transport for Raft RPCs | `RaftNetwork` over **tonic** gRPC — `append_entries`, `vote`, chunked `install_snapshot`; opt-in TLS/mTLS |
+| Transport for Raft RPCs | `RaftNetworkV2` over **tonic** gRPC — `append_entries`, `vote`, transport-fragmented `full_snapshot`; opt-in TLS/mTLS |
 | WAL-tailing outbox → NATS JetStream | A Tokio task streaming committed entries, publishing via **async-nats**; dedup by `(group_id, log_index)` ([D8](#d8--sagas-bus), [D11](#d11--outbox-subjects-stream-naming-and-dedup-identity)) |
 | Router (`organization_id` → group) | `DashMap` read model projected by the control group's state machine |
 | Read models / projections | `DashMap`/`Arc<RwLock<HashMap>>` tables fed by projections applied inside the state machine |
@@ -327,10 +327,13 @@ others. An opinionated application server (APIs -> `Raft::client_write` ->
 log replication -> `StateMachine::apply`) maps 1:1 onto our command flow
 (see the `raft-kv-memstore` example). Hand-rolling Raft in Rust duplicates
 battle-tested machinery for no benefit at our cluster size (3–5 nodes).
-**Status: DECIDED and implemented.** OpenRaft 0.9.x uses `RaftNetwork` over
-**tonic gRPC** for `append_entries`, `vote` and chunked `install_snapshot`.
-This is the 0.9 `RaftNetwork` interface, not `RaftNetworkV2`/`full_snapshot`;
-Migration to V2 is future work.
+**Status: DECIDED and implemented (migrated to OpenRaft 0.10).** OpenRaft
+`RaftNetworkV2` over **tonic gRPC** for `append_entries`, `vote` and
+`full_snapshot`, with the transport owning snapshot fragmentation and
+reassembly. `stream_append` currently uses openraft's default sequential
+implementation; a bidirectional `StreamAppend` RPC is the next step. See
+[openraft-010-migration.md](research/openraft-010-migration.md) for what the
+migration changed.
 A versioned protobuf envelope routes each request by group id and carries the
 pinned OpenRaft JSON request/Result types. One listener serves many groups.
 
@@ -351,7 +354,9 @@ same writer. Several commands can share one Raft entry and index, with ordered
 application and individual dedup/rejection responses after quorum and apply.
 Successful siblings are not rolled back when another command is rejected.
 This preserves synchronized log writes and the configured apply durability;
-it does not change OpenRaft 0.9.25's serialized append/callback scheduling.
+it does not change how appends are scheduled or flushed: each append is still one
+synchronized WAL batch, and since the 0.10 migration several appends may be in
+flight at once.
 Batching defaults to disabled. Upgrade every replica before enabling the new
 batch entry format; old-binary downgrade after batched logs is unsupported.
 Snapshot/retention settings count entries, so their command coverage increases
@@ -359,9 +364,10 @@ with batching. See [configuration](raft-configuration.md#opt-in-command-batching
 and [paired measurements](benchmarks/batching.md).
 
 Findings:
-- OpenRaft 0.9 splits storage into **`RaftLogStorage`** (log) +
-  **`RaftStateMachine`** (apply/snapshot) with an `Adapter` bridging the old
-  combined `RaftStorage`; log and state-machine operations run in parallel.
+- OpenRaft splits storage into **`RaftLogStorage`** (log) +
+  **`RaftStateMachine`** (apply/snapshot); log and state-machine operations run in
+  parallel. 0.10 moved the log's vote read to `RaftLogReader` and the state
+  machine's `apply` onto a stream of per-entry responders.
 - Async traits use OpenRaft's `#[openraft-macros::add_async_trait]`; network
   methods take an `RPCOption` (hard/soft TTL) — see
   `docs/research/openraft-storage.md` and the upgrade guides in the crate.
@@ -705,12 +711,12 @@ recorded in [`domain-model.md`](domain-model.md).
 ### Shell (Phases 1–7)
 - [x] Phase 1 control plane *(orchestration, router, RYW, gateway, outbox and sagas landed; OIDC and NATS have runtime adapters, and `loomery-server` wires them)*
   - [x] Control group on OpenRaft (`RaftLogStorage`/`RaftStateMachine` +
-        `RaftNetwork` over tonic): `shell::control`
+        `RaftNetworkV2` over tonic): `shell::control`
     - [x] levels 1–2 of the spike: in-memory `RaftLogStorage` +
           `RaftStateMachine` (`crates/shell/src/raft`) and the `RaftGroup`
           `GroupOps` adapter; passes OpenRaft's `testing::Suite` and drives
           genesis end-to-end in process
-    - [x] tonic `RaftNetwork` + multi-node membership through `RaftGroup::raft`,
+    - [x] tonic `RaftNetworkV2` + multi-node membership through `RaftGroup::raft`,
           RocksDB durability and configurable transport/storage/consensus tuning
     - [x] tenant placement: `loomery_core::tenant` records dispatched by the
           group state machine; `RaftGroup::boot_persistent` boots the control
@@ -804,7 +810,8 @@ integration layers:
 | `storage-engine-alternatives.md` | sled/redb/RocksDB/SQLite vs hand-rolled segment files; vector store constraint; backup anchored to event index |
 | `indexed-segment-file-format.md` | An embedded-index segment-file format adapted from the log-storage research |
 | `checkpoint-policy.md` | Checkpoint scheduling versus durability, current recovery contract and future optimization criteria |
-| `openraft-storage.md` | OpenRaft 0.9 storage interfaces — `RaftLogStorage`/`RaftStateMachine` split, snapshot builder, gotchas |
+| `openraft-storage.md` | OpenRaft storage interfaces — `RaftLogStorage`/`RaftStateMachine` split, snapshot builder, gotchas |
+| `openraft-010-migration.md` | The 0.9.25 → 0.10.0-alpha.36 migration: measured error counts, surface inventory, and the three behaviour changes it forced |
 
 ---
 

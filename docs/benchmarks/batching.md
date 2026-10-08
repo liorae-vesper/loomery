@@ -1,6 +1,12 @@
 # Command batching on OpenRaft 0.9.25
 
-Measured on 2026-10-01 with the production shared proposal writer. Batching
+Measured on 2026-10-01 with the production shared proposal writer.
+
+> The crate has since been migrated to 0.10.0-alpha.36
+> ([openraft-010-migration.md](../research/openraft-010-migration.md)). The
+> batching above the Raft entry path is unchanged, but 0.10 no longer serializes
+> local appends behind the previous flush, so the append-side numbers here are a
+> 0.9 baseline rather than current behaviour. Batching
 eight commands per Raft entry improved median checkpoint throughput by 2.50×
 and snapshot-backed throughput by 3.31× compared with new unbatched runs on
 the same host. Raft log WAL synchronization, quorum and after-apply responses

@@ -329,7 +329,7 @@ to an empty voter set.
    bounds the RPC await.
 4. The remote tonic service looks up the registered group, deserializes the RPC
    and invokes that group's `raft.append_entries`, `raft.vote` or
-   `raft.install_snapshot`. Unknown groups return gRPC `NotFound`.
+   `raft.install_full_snapshot`. Unknown groups return gRPC `NotFound`.
 5. The server serializes OpenRaft's `Result` into the reply. The client decodes
    either the response or a remote Raft error; connection/timeout/decode failures
    map into OpenRaft RPC errors.
@@ -351,10 +351,13 @@ sequenceDiagram
     N-->>R: decoded response or RPC error
 ```
 
-This is OpenRaft 0.9 `RaftNetwork`, with chunked `install_snapshot`, rather than
-`RaftNetworkV2`/`full_snapshot`. The protobuf package is versioned, but its JSON
-payload still couples peers to the pinned OpenRaft types. Wire upgrades need
-compatibility review.
+This is OpenRaft 0.10 `RaftNetworkV2`. `full_snapshot` fragments the snapshot
+itself: each fragment is a `SnapshotChunk` JSON body on the existing
+`InstallSnapshot` RPC, and the server reassembles it per `(group, leader)` before
+calling `install_full_snapshot`. 0.9 fragmented in the core instead, so the
+protobuf file is unchanged but the snapshot JSON payload is not. The protobuf
+package is versioned, but its JSON payload still couples peers to the pinned
+OpenRaft types. Wire upgrades need compatibility review.
 
 With TLS, use HTTPS membership URIs and configured peer CA/name verification.
 Server TLS is loaded when `serve` starts; outbound material is checked at boot
@@ -455,8 +458,9 @@ tradeoffs. Full-state checkpoint cost grows with history; snapshot-mode recovery
 may replay a longer suffix. Mode protection is per database and is always on.
 
 The [storage performance investigation](research/consensus-storage-performance.md)
-traces OpenRaft 0.9.25's append callback wait, synchronized committed-pointer
-writes and actual leader/follower batch sizes. It also tests why stopping Raft
+traces OpenRaft 0.9.25's append callback wait (which the 0.10 migration removed —
+see the note there), synchronized committed-pointer writes and actual
+leader/follower batch sizes. It also tests why stopping Raft
 does not close RocksDB while state-machine handles remain alive.
 
 ## 9. Where to inspect and verify this flow

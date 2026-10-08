@@ -204,7 +204,7 @@ where the pure core runs, and everything a read needs is applied state.
 ```mermaid
 graph TD
     subgraph raft_group["RaftGroup (one per tenant, one for control)"]
-        raft["OpenRaft 0.9<br/>leader election, replication, snapshots"]
+        raft["OpenRaft 0.10<br/>leader election, replication, snapshots"]
         transport["tonic transport<br/>optional TLS/mTLS"]
         log_store["RocksLogStore<br/>replicated log + vote, persistent"]
         sm["MemStateMachine<br/>apply"]

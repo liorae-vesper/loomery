@@ -100,10 +100,13 @@ deliberately: the curve is about *scale*, and batching has its own
 
 ### On the transport: `RaftNetworkV2`, pipelining, awaiting
 
-- **`RaftNetworkV2` is not available to us.** openraft **0.9.25** — the version this
-  workspace pins — has no such trait (verified: the symbol does not exist in the
-  crate; it arrives in 0.10). Our `TonicNetwork` implements the legacy
-  `RaftNetwork` over tonic, one unary RPC per call.
+- **`RaftNetworkV2` is available to us now, and its default `stream_append` is
+  sequential.** The migration to openraft **0.10.0-alpha.36** is done
+  ([openraft-010-migration.md](../research/openraft-010-migration.md)), so our
+  `TonicNetwork` implements `RaftNetworkV2` over tonic. Until the bidirectional
+  `StreamAppend` RPC lands, `stream_append` sends one unary RPC and waits for its
+  response, which is what the 0.9 numbers below were measured against — so the
+  recorded curve is still the right before-picture.
 - **We do await each write.** `Raft::client_write` is awaited per command, and the
   apply awaits its durable write (D2's contract). What keeps the path busy is the
   harness's in-flight window, which is exactly what the concurrency probe moves.
