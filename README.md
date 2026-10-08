@@ -74,7 +74,8 @@ loomery/
 │   ├── genesis/       # loomery-genesis — the deterministic bootstrap script
 │   ├── server/        # loomery-server — the runtime entry point (config + wiring)
 │   └── shell/         # loomery-shell — Raft, tonic, RocksDB, gateway and workers
-├── docs/              # design docs, research notes, and guardrails
+├── docs/              # published documentation (index: docs/README.md)
+├── workpad/           # working notes: handoffs and in-progress designs, not published
 ├── THIRDPARTY.yml     # bundled third-party license texts (docs/third-party-licenses.md)
 ├── deny.toml          # cargo-deny policy (licenses, advisories, bans)
 ├── hk.pkl             # pre-commit hooks (commit message lint + quality gates)

@@ -16,7 +16,7 @@ at concurrency 8 (where a per-entry round trip is genuinely on the critical path
 ~8% ahead at concurrency 128 — against ±10% between repeats of the same arm. The migration is
 what pays: 2.3–2.7× at the default deployment config, 11.9–15.7× unbatched at concurrency 128,
 and 0.9's single-node anomaly gone. The numbers, the attribution arms and the latency A/B/A/B
-are in [deployment-scale.md](../benchmarks/deployment-scale.md#after-openraft-010).
+are in [deployment-scale.md](../docs/benchmarks/deployment-scale.md#after-openraft-010).
 
 Read `docs/research/openraft-010-migration.md` for the surface inventory, the measured error
 counts per step, what the `StreamAppend` RPC was before it was removed, and **the behaviour

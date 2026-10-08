@@ -61,12 +61,12 @@ cargo crap --workspace --lcov lcov.info --fail-above --exclude '**/*_tests.rs' -
 """
 
 [tasks.docs-mermaid]
-description = "Parses every Mermaid diagram in the docs (a broken diagram fails)"
-run = "sh tools/mermaid-check/check.sh docs README.md"
+description = "Parses every Mermaid diagram in the docs and workpad (a broken diagram fails)"
+run = "sh tools/mermaid-check/check.sh docs README.md workpad"
 
 [tasks.docs-links]
-description = "Checks the docs' internal links, anchors and index reachability"
-run = "python3 tools/docs-links/check.py docs README.md"
+description = "Checks links, anchors, citations and index reachability across docs/ and workpad/"
+run = "python3 tools/docs-links/check.py docs README.md workpad"
 
 [tasks.docs-mermaid-render]
 description = "Renders the docs' Mermaid diagrams to tools/mermaid-check/out for review"

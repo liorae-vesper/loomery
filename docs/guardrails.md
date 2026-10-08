@@ -15,8 +15,9 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 | Commit message lint | `cog verify` (conventional commits, cocogitto) |
 | Combined dev gate | `mise run verify` (see `mise.toml`) |
 | Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap; skips `**/*_tests.rs`, `loomery-server`'s `main.rs` (the binary is a single file) and the `JetStream` adapter) |
-| Diagram syntax | `mise run docs-mermaid` (`tools/mermaid-check/`: every ```` ```mermaid ```` block in `docs/` and `README.md` must parse) |
-| Documentation links | `mise run docs-links` (`tools/docs-links/`: relative links resolve, `#anchors` match a heading in the target, every document is reachable from `docs/README.md`, and a benchmark run named in the prose exists in the committed results) |
+| Diagram syntax | `mise run docs-mermaid` (`tools/mermaid-check/`: every ```` ```mermaid ```` block in `docs/`, `README.md` and `workpad/` must parse) |
+| Lint policy | `[workspace.lints]` in `Cargo.toml`: deny `unwrap_used`, `expect_used`, `indexing_slicing`, `string_slice`, `arithmetic_side_effects`, `unchecked_time_subtraction`, `todo`, `unimplemented`, `panic`, `unconditional_panic`; warn on `missing_docs`. Enforced by `cargo clippy --workspace --all-targets -- -D warnings` |
+| Documentation links | `mise run docs-links` (`tools/docs-links/`: relative links resolve, `#anchors` match a heading in the target, every published document is reachable from `docs/README.md`, a benchmark run named in the prose exists in the committed results, and no published page links into `workpad/`) |
 
 ## The `cargo deny` policy (`deny.toml`)
 
@@ -73,6 +74,28 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
    and the host network (see
    [`.buildkite/scripts/test-services.sh`](../.buildkite/scripts/test-services.sh)),
    so `mise run svc-up` must be running for it to pass when run by hand.
+
+## Working agreements
+
+Not enforced by a hook, so they are stated once, here rather than in a note:
+
+- **One branch per part of the work; linear history; fast-forward only into `main`.**
+  No merge commits, and a branch merges only once the CI-equivalent gate passes:
+  `mise run verify`, `mise run test`, `mise run licenses-check`,
+  `mise run docs-mermaid`, `mise run docs-links`, `mise run crap`, `mise run audit`.
+- **Never commit a tree that does not compile**, on `main` or on a branch. The
+  `wip` marker exists to bypass the gates while a commit is genuinely in progress,
+  not to land one.
+- **The default test suite stays self-contained**: fakes and in-process services.
+  Real NATS, OIDC and JetStream stay behind the `nats`, `oidc` and `test-services`
+  features ([testing-services.md](testing-services.md)).
+- **Probes and soaks run `--release`.** A debug build measures the compiler.
+- **Documentation is part of done.** A change to behaviour, configuration or a
+  measurement updates the document that describes it, and working notes are
+  promoted into `docs/` rather than left in `workpad/` — which is staging, not an
+  archive, and whose rules are in that directory's own README.
+- **Raise it, don't guess**: if a design decision is unspecified, a new dependency
+  is needed, or a gate fails for environmental reasons, say so before implementing.
 
 ## Coverage data flow
 

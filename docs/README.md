@@ -70,7 +70,6 @@ configuration reference describe what was selected and implemented.
 | [Indexed segment format](research/indexed-segment-file-format.md) | Alternative log format; not the implemented RocksDB backend |
 | [OpenRaft storage](research/openraft-storage.md) | Storage contracts and version-specific integration notes |
 | [OpenRaft 0.10 migration](research/openraft-010-migration.md) | The 0.9.25 → 0.10.0-alpha.36 migration: measured error counts, surface inventory and behaviour changes |
-| [OpenRaft 0.10 handoff](research/openraft-010-handoff.md) | The same migration as a pickup point: what landed and what was reverted, the repo constraints, and the traps it left behind |
 | [Consensus storage performance](research/consensus-storage-performance.md) | Serialized syncs, batching, blocking-pool timing and database closure investigation |
 | [Checkpoint policy](research/checkpoint-policy.md) | Scheduling versus durability and the two recovery modes |
 
@@ -78,3 +77,10 @@ Keep current behavior in reference docs, implementation walkthroughs in
 `tutorials/`, measurements in `benchmarks/`, and decision research in
 `research/`. Link to detailed sources instead of appending duplicate session
 summaries. Keep runtime scripts outside this directory.
+
+Working notes are not documentation and do not belong here: handoffs, unsettled
+investigations and scratch reasoning are staged in `workpad/` at the repository root
+until they are refined enough to publish, and are deleted from there once moved in.
+Its rules are in that directory's README. A page in this index must not link into
+`workpad/` — those files are expected to disappear — so the directory is named here
+rather than linked.

@@ -1,8 +1,5 @@
 # Migrating to openraft 0.10
 
-Picking this up rather than reading it through? The
-[handoff note](openraft-010-handoff.md) is the same work condensed to what you need to continue.
-
 Status: **all six legs done — migrated, measured, and the one thing that did not pay was
 removed.** Branch `feat/openraft-010-migration` (renamed from
 `feature/openraft-pipelined-append` once the pipelining was gone).
