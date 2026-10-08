@@ -161,7 +161,7 @@ async fn three_replicas_commit_and_recover_genesis() {
         group
             .raft()
             .wait(Some(Duration::from_secs(5)))
-            .applied_index(Some(last), "replicated")
+            .applied_index_at_least(Some(last), "replicated")
             .await
             .unwrap();
         // What matters is the *state*, and a replica's applied-index metric can be
@@ -407,7 +407,11 @@ async fn snapshot_mode_recovers_log_only_and_snapshot_with_purged_prefix() {
         restored
             .raft()
             .wait(Some(Duration::from_secs(5)))
-            .applied_index(Some(index), "replay")
+            // "At least": a restored node re-elects itself and appends the
+            // election's blank entry, which can push the applied index past the
+            // one this test recorded. What it is waiting for is that the log has
+            // been replayed, and the state assertion below is what proves it.
+            .applied_index_at_least(Some(index), "replay")
             .await
             .unwrap();
         assert_eq!(
