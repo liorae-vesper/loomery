@@ -41,8 +41,15 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
      only** (rebase workflow).
    - While a crate has no `Cargo.toml` yet, the cargo gates skip gracefully.
 2. **`mise run verify`** is the one-command local gate (also runs in the
-   `hk check` hook): `cargo check`, clippy with `-D warnings`, fmt check,
-   `cargo deny check`.
+   `hk check` hook): `cargo check`, `cargo check -p loomery-shell`, clippy with
+   `-D warnings`, fmt check, `cargo deny check`. The second command is not
+   redundant with the first: in a workspace build the server's
+   `features = ["nats", "oidc"]` unify features into the shell, so the shell is
+   never compiled in its own default configuration, and a feature it needs —
+   `rand_core/getrandom`, which `gateway::precompute` needs for `OsRng` — was absent
+   for as long as nothing built the crate alone. A per-package check is the only build
+   that sees that; `--workspace --no-default-features` does not, because the masking
+   feature is requested explicitly rather than inherited from a default.
 3. **`hk fix`** runs `cargo fmt` to auto-format.
 4. **CI** — [`.buildkite/pipeline.yml`](../.buildkite/pipeline.yml) runs verify,
    tests, licenses, docs, quality (`mise run crap`), audit and the service

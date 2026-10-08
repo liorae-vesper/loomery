@@ -17,10 +17,17 @@ node = "24.19.0"
 rust = "1.98.1"
 
 
+# `cargo check` builds the workspace, and in a workspace the server's
+# `features = ["nats", "oidc"]` unify features into the shell, so the shell is never
+# compiled in its own default configuration. That is how `gateway::precompute`'s
+# missing entropy feature stayed invisible while `cargo check -p loomery-shell`
+# failed; the per-package check below is the one that sees it. `--no-default-features`
+# does not help, because the masking feature is requested explicitly, not by default.
 [tasks.verify]
 description = "Verifies integrity of the repository and its dependencies"
 run = """
 cargo check
+cargo check -p loomery-shell
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 cargo deny check
