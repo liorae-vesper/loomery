@@ -239,6 +239,10 @@ dependencies, completion); CompletionSaga + TaskCompletedDerivation +
 BlockedStatusProjector; replay-equivalence test (same log → identical state on
 N replicas).
 
+The read-model half is shaped by [storage-layout.md](storage-layout.md) (the
+`projections` family) and [search.md](search.md) (the index beside it), both
+rebuilt from the append-only record.
+
 ### Phase 3 — Notifications & delivery
 Notification + NotificationPreference aggregates; fan-out sagas; InApp
 (WebSocket), Email, Slack gateways; scheduler (digests, invitation expiry);
@@ -248,6 +252,11 @@ retention caps + replay.
 Documentation aggregate; document processing pipeline; **tantivy** FTS engine
 ([D6](#d6--fts-engine)); embedding sidecar (checkpointed, never re-call the LLM);
 tenant-scale brute-force KNN (or `pgvector`, [D7](#d7--vector-store-phase-4)).
+
+The FTS engine is no longer a Phase-4 question: [D6](#d6--fts-engine) is decided
+(tantivy, one index per tenant) and its design is [search.md](search.md), because
+"find anything" is [principle 11](#1-what-loomery-is) rather than a knowledge-base
+feature.
 
 ### Phase 5 — Automation & integrations
 WorkflowRule aggregate + rule engine (500 ms budget, fail-open) +
@@ -479,10 +488,11 @@ no stemming, no facets or aggregations.
 The comparison, including how each option scopes results to the caller's
 permissions, is in
 [read-model-store-options.md](research/read-model-store-options.md#search-is-the-cornerstone).
-The decided design — what is findable, the schema sketch, where the scope filter
-sits, how the index is built and rebuilt, and what stays out of scope — is
-[search.md](search.md).
-**Status: OPEN (the engine choice is settled: tantivy)**
+The decided design — what is findable (entities, not history), the schema sketch,
+where the scope filter sits, the outbox-driven update with `as_of` disclosed, how
+the index is rebuilt, and what stays out of scope — is [search.md](search.md).
+**Status: DECIDED — tantivy, one index per tenant beside the database, indexed
+from the outbox asynchronously**
 
 ### D7 — Vector store (Phase 4)
 **Options:** tenant-scale brute force with `ndarray`/`half` (simple, no deps)
@@ -513,7 +523,8 @@ reads, tantivy beside the database for search** — both per group, both rebuilt
 from the append-only record. That supersedes the note's earlier `redb`
 recommendation, which predates the column-family layout and would add a second
 engine where the first one now suffices.
-**Status: OPEN (Phase 3)**
+**Status: DECIDED — durable projections live in the per-group `projections` column
+family; search lives in a tantivy directory beside the database**
 
 ### D10 — Data-shape validation
 **Recommendation: serde derive + [`validator`](https://crates.io/crates/validator)

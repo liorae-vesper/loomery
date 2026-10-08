@@ -1,8 +1,10 @@
 # Search — "find anything" within a tenant
 
-**Status: shape decided ([D6](design.md#d6--fts-engine), [D9](design.md#d9--storage-of-cold-read-model-state)),
+**Status: decided ([D6](design.md#d6--fts-engine), [D9](design.md#d9--storage-of-cold-read-model-state)),
 not implemented.** Search is [principle 11](design.md#1-what-loomery-is) of the
-design: a first-class read path, not a report.
+design: a first-class read path, not a report. The decisions on this page: tantivy,
+one index per tenant; entities only (no history); updated from the outbox with
+`as_of` disclosed.
 
 ## The shape
 
@@ -30,14 +32,17 @@ flowchart LR
 | | v1 | Later |
 |---|---|---|
 | Entities: tasks, projects, comments, workspaces, documents | ✅ indexed as documents | — |
-| The history that produced them | ❌ not indexed (reads answer it from `events`) | an event index is cheap to add, because the record is complete and ordered |
+| The history that produced them | **not indexed — decided**; "what happened" is answered by scanning `events` | an event index is cheap to add later, because the record is complete and ordered |
 | Free text | ✅ title/summary/body fields, BM25-ranked | — |
 | Fields | ✅ workspace, project, status, assignee, labels, dates | — |
 | Vectors (semantic search) | ❌ ([D7](design.md#d7--vector-store-phase-4), Phase 4) | `sqlite-vec`, `hnswlib-rs` or PG — unchanged by this decision |
 
-Whether "find anything" is meant to include history is **open**; the recommendation
-is entities first, because the UI's questions ("what is there", "what do I owe") are
-entity-shaped, and the record already answers "what happened" by scanning it.
+"Find anything" is about the tenant's *current* content: the entities a caller may
+read. History is not indexed. That keeps the index a projection of current state —
+one document per entity, updated in place — rather than a growing log, and it is
+what makes an index rebuild cheap. Adding history later is additive: the record is
+already complete and ordered, so an event index would be built beside this one, not
+instead of it.
 
 ## Schema (sketch)
 
@@ -59,24 +64,30 @@ combined with the text query, so counts, facets and pagination are all computed
 
 ## When the index is updated
 
-Three options, and this is the one open decision in this document:
+**Decided: the index is updated from the outbox, asynchronously.** The indexer is a
+second local consumer of the group's applied events — the same feed the outbox
+worker reads, woken by the same applied-index watch — and it records the applied
+index it has indexed (`as_of`) in the index directory. Consequences:
 
-1. **In the apply path**, in the same batch as the state and events. Consistent
-   with the record — a search never misses an event the caller can already read —
-   but it puts the index on the durability path: an index write failure would have
-   to fail the apply, which is a large cost for derived data.
-2. **From the outbox**, asynchronously (the pattern the saga runner already uses).
-   Cheap, keeps the apply path O(batch), and a failure is a retry rather than a
-   failed write. Search then lags the record by a bounded interval, and the response
-   must say so.
-3. **Hybrid**: index from the outbox, and have the UI merge "recently changed"
-   items from the record so a just-written task is never invisible.
+- The apply path stays O(batch) and never touches derived data: an index write
+  failure is a retry, not a failed write.
+- Search lags the record by one indexing step. **Every search response carries
+  `as_of`**, so a client can tell staleness from silence, and a UI can merge
+  "recently changed" items from `events` if it wants a just-written task to appear.
+- Read-your-writes stays where it is honest: on `events` reads, which the
+  `X-Min-Index` gate already covers. Search makes no consistency promise beyond
+  `as_of`.
 
-**Recommendation: 2, with 3's disclosure.** Search responses carry the applied index
-they were built from (`as_of`), so a client can tell staleness from silence, and the
-read-your-writes guarantee stays where it is honest — on `events` reads, which the
-`X-Min-Index` gate already covers. Option 1 is available later for entities that
-must be searchable the instant they are written.
+Because the indexer reads the applied feed **in process**, search needs no broker:
+`events` is already durable, and the JSON published to NATS is for consumers
+outside the group. A deployment that would rather drive indexing off the published
+stream can do that later, with the same cursor and `as_of` rules.
+
+The option not taken: indexing **in the apply path**, in the same batch as state and
+events. It would make search exactly as fresh as the record, at the price of
+putting a derived index on the durability path — an index write failure would fail
+the apply. It stays available for entities that must be searchable the instant they
+are written.
 
 ## Rebuild
 
@@ -101,8 +112,10 @@ after a schema change, a corruption, or a bug — and it is never a data-loss ev
   and the index's `as_of` equals the record's applied index when it is caught up.
 - **Staleness bound**: after a write, the index reaches that write within the
   documented interval (measured, not asserted loosely).
-- **Failure**: an index write failure does not fail an apply (option 2), and a
-  failed rebuild leaves the previous index serving.
+- **Failure**: an index write failure does not fail an apply, and a failed rebuild
+  leaves the previous index serving.
+- **No broker needed**: the index still updates with NATS down — the indexing path
+  is in-process, and only the published stream is for outside consumers.
 
 ## Out of scope for v1
 
