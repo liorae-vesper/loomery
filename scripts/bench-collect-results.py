@@ -38,13 +38,13 @@ def summarize(directory):
     summary = json.loads((directory / "summary.json").read_text())
     points = []
     for point in summary["points"]:
-        good = [row for row in point["trials"] if not row["failed"]]
+        good = [row for row in point.get("trials", []) if not row.get("failed")]
         entry = {
             "mode": point["mode"],
             "operations": point["operations"],
             "harness_ok": point["harness_ok"],
             "failed_trials": point.get("failed_trials"),
-            "trials": len(point["trials"]),
+            "trials": len(point.get("trials", [])),
             "bytes_on_disk": point.get("bytes_on_disk"),
             "seconds": point.get("seconds"),
         }
@@ -59,7 +59,7 @@ def summarize(directory):
         "overrides": summary.get("overrides", {}),
         "phase_timeout_ms": summary.get("phase_timeout_ms"),
         "git_commit": environment.get("git_commit"),
-        "cpu": environment.get("cpu", "").strip().splitlines()[-1].strip(),
+        "cpu": (environment.get("cpu", "").strip().splitlines() or [""])[-1].strip(),
         "memory_kb": environment.get("memory", ""),
         "build_profile": environment.get("build_profile"),
         "points": points,

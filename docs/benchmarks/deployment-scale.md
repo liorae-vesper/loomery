@@ -224,6 +224,50 @@ writer awaiting one batch before collecting the next is **not established** — 
 split is what decides whether pipelined replication would help, or whether letting the
 writer keep more than one batch in flight would help more.
 
+## Where the per-entry cost actually is
+
+The matrix raised a question it could not answer: the batched path's entry rate looked
+flat at ~130/s, which would mean a fixed cost per entry. Feeding the medians through a
+per-command view says something else — and two of my own readings turned out wrong:
+
+| Config (20,000 events) | Observed batch | Commands/s | Entries/s | ms per command |
+|---|---|---|---|---|
+| unbatched, concurrency 128 | 1.0 | 777 | **777** | 1.29 |
+| batch 8 | 8.0 | 1,067 | 133 | 0.94 |
+| batch 32 | 32.0 | 4,262 | 133 | 0.23 |
+| batch 128 | 127.4 | 13,781 | 108 | **0.073** |
+| batch 256, byte cap lifted | 253.2 | **20,870** | 82 | **0.048** |
+
+- **The entry rate does not stay flat — it falls** (777 → 133 → 133 → 108 → 82/s) while
+  commands per second rises 27-fold. The per-entry cost is linear in the commands an
+  entry carries, so the unbatched path is paying a fixed round trip per *command*
+  (1.29 ms), and batching amortizes it away. At the top of the ladder the path spends
+  its time on per-command work — about 0.048 ms per command — not on round trips.
+- **Correction: the batch-size matrix was capped by bytes, not by a ceiling.** Every
+  row used `max_batch_bytes: 262144`, which at ~2 KB per command stops a batch at
+  ~127 commands — so "batch 256" and "batch 512" silently measured batch 128, and the
+  apparent plateau at ~13,000 was that cap. With the cap lifted to 8 MB, a batch of
+  256 reaches **20,870 writes/s**. An earlier reading of mine ("the apply ceiling is
+  ~13,000/s") was wrong for the same reason.
+- **Correction: the small-batch penalty is batches not filling.** At batch 8 with
+  concurrency 8: `max_delay_ms: 0` → observed batch 4.0 → 537 writes/s; 1 ms → batch
+  8.0 → 1,067; 5 ms → batch 8.0 → 1,076. The collection delay is what lets a batch
+  form; there is no hidden per-batch overhead beyond that.
+- **A batch of 1,024 timed out** (recorded as a failure, three trials, not retried
+  into looking better), so the ladder measured here ends at 256.
+- **One thing this did not explain: a single node is *slower*.** With `nodes: 1` and
+  concurrency 128, the unbatched path managed 295 writes/s at a p50 of 420 ms against
+  777 writes/s on three nodes — and lowering `heartbeat_interval` from 100 ms to 10 ms
+  did not move it (301 writes/s, p50 418 ms), so it is not heartbeat-paced commits.
+  That is unexplained and flagged rather than filed under "expected".
+
+**What it means for a consensus upgrade.** The lever a newer Raft API offers is
+pipelined replication, which attacks the *per-entry round trip* — and that is exactly
+the cost batching has already amortized: at 256 commands per entry the path is
+spending ~0.048 ms per command on work, not waiting on replication. So pipelining has
+little left to win here, and the next lever is the per-command work itself (apply and
+the durable write), not the network.
+
 ## A finding: the harness could not run at all
 
 The first attempt failed with **100 % rejected commands**:

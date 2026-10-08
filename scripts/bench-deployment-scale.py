@@ -231,7 +231,8 @@ def main():
         print(f"\n== {name} ==")
         ok, seconds = run_point(binary, config_path, output, args.dry_run)
         point = {"mode": mode, "operations": size, "config": str(config_path.relative_to(REPO)),
-                 "harness_ok": ok, "seconds": round(seconds, 1)}
+                 "harness_ok": ok, "seconds": round(seconds, 1), "trials": [],
+                 "failed_trials": 0}
         if ok and not args.dry_run:
             point.update(summarize_point(output, args.trials))
             medians = point["medians"]
