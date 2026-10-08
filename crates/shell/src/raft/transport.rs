@@ -325,8 +325,17 @@ async fn decode_append_requests(
         };
         match serde_json::from_slice::<AppendEntriesRequest<TypeConfig>>(&envelope.json) {
             Ok(rpc) => {
-                if requests.send(rpc).await.is_err() {
-                    return;
+                // Stop the moment the caller is gone. A request handed to the core
+                // after the leader has abandoned this stream can only be applied
+                // behind the leader's back, and re-ordered against the stream it
+                // restarts with.
+                tokio::select! {
+                    sent = requests.send(rpc) => {
+                        if sent.is_err() {
+                            return;
+                        }
+                    }
+                    () = results.closed() => return,
                 }
             }
             Err(e) => {
@@ -630,16 +639,23 @@ impl RaftNetworkV2<TypeConfig> for TonicNetwork {
     /// each direction ordered, so the trait's in-order contract needs no sequence
     /// numbers: whatever the follower answers arrives in request order.
     ///
-    /// Two deliberate bounds. Opening the stream carries the same timeout as a
-    /// unary RPC, so a peer that never sends response headers cannot hang
-    /// replication. Each awaited result then carries `soft_ttl`: on the
-    /// replication path `hard_ttl` is the heartbeat interval (50 ms by default)
-    /// and is explicitly *not* a limit on a stream's life, while a stream that has
-    /// produced nothing for `soft_ttl` has stopped making progress.
+    /// Neither bound comes from openraft's stream TTL, deliberately. Opening the
+    /// stream carries the configured RPC deadline, so a peer that never sends
+    /// response headers cannot hang replication; `hard_ttl` is explicitly not a
+    /// stream deadline and on this path it is only the heartbeat interval.
+    /// Each awaited result then carries
+    /// [`stream_stall_timeout_ms`](crate::config::TransportConfig::stream_stall_timeout_ms):
+    /// a *stall* detector, not a latency budget. An earlier version used
+    /// `soft_ttl` (three quarters of the heartbeat interval, so 75 ms in a real
+    /// deployment) as a per-result bound, and that wedged replication under load:
+    /// tearing a stream down mid-burst leaves the leader's progress ahead of the
+    /// follower, and openraft discards the conflict that would repair it (see
+    /// `progress::entry::update::Updater::update_conflicting`), so replication
+    /// never resumes. A stall bound is long enough that a slow fsync is not one.
     fn stream_append<'s, S>(
         &'s mut self,
         input: S,
-        option: RPCOption,
+        _option: RPCOption,
     ) -> BoxFuture<
         's,
         Result<
@@ -661,9 +677,10 @@ impl RaftNetworkV2<TypeConfig> for TonicNetwork {
                 requests_tx,
             ));
 
-            let open_timeout = option.hard_ttl().min(Duration::from_millis(
-                self.factory.config.request_timeout_ms,
-            ));
+            // Setup only: `hard_ttl` is explicitly not a stream deadline (on the
+            // replication path it is the heartbeat interval), so opening the stream
+            // is bounded by the configured RPC deadline instead.
+            let open_timeout = Duration::from_millis(self.factory.config.request_timeout_ms);
             let response = tokio::time::timeout(
                 open_timeout,
                 client.stream_append(ReceiverStream::new(requests_rx)),
@@ -675,7 +692,7 @@ impl RaftNetworkV2<TypeConfig> for TonicNetwork {
             let (results_tx, results_rx) = mpsc::channel(STREAM_BUFFER);
             tokio::spawn(pump_append_results(
                 response.into_inner(),
-                option.soft_ttl(),
+                Duration::from_millis(self.factory.config.stream_stall_timeout_ms),
                 results_tx,
             ));
             let stream: BoxStream<'s, _> = Box::pin(ReceiverStream::new(results_rx));

@@ -18,6 +18,7 @@ shell settings fail validation. JSON example:
     "request_timeout_ms": 5000,
     "max_message_bytes": 16777216,
     "tcp_keepalive_ms": 30000,
+    "stream_stall_timeout_ms": 10000,
     "stream_window_bytes": 1048576,
     "connection_window_bytes": 4194304
   },
@@ -141,10 +142,22 @@ for a controlled comparison.
 
 Transport requests have the lesser of OpenRaft's RPC TTL and
 `request_timeout_ms`; channels reconnect automatically. Message limits apply
-to both clients and servers. Snapshot chunks use JSON byte arrays, so leave
-room for encoding overhead when selecting the consensus chunk size and the
-gRPC message limit. Plaintext HTTP/2 is the default; TLS and mutual TLS are
-available through the opt-in settings below. Its versioned protobuf envelope carries the pinned
+to both clients and servers. Plaintext HTTP/2 is the default; TLS and mutual
+TLS are available through the opt-in settings below.
+
+Two RPCs are streams, and they are bounded differently on purpose.
+`InstallSnapshot` is a client stream of raw-byte fragments sized by
+`raft.snapshot_max_chunk_size`, so `GroupConfig::validate` requires that size to
+be at most half of `max_message_bytes`. `StreamAppend` is bidirectional and each
+direction is ordered by the HTTP/2 stream, so responses need no sequence numbers.
+Its bound is `stream_stall_timeout_ms` — how long the stream may produce nothing
+before it is treated as stalled — rather than OpenRaft's `hard_ttl`/`soft_ttl`.
+That is deliberate: on the replication path those TTLs are derived from
+`raft.heartbeat_interval`, and using them to abort a per-response read tears the
+stream down mid-burst under load, which leaves the leader believing a follower
+has entries it never received and stops replication for good. Raise this if
+snapshots or a slow follower legitimately go quiet for longer; the cost is a
+longer wait before an unresponsive peer is reported. Its versioned protobuf envelope carries the pinned
 OpenRaft JSON request/Result types; rolling wire upgrades need compatibility
 review.
 

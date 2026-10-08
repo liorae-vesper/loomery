@@ -15,6 +15,12 @@ pub struct TransportConfig {
     pub max_message_bytes: usize,
     /// TCP keepalive interval.
     pub tcp_keepalive_ms: u64,
+    /// How long a streaming RPC may produce nothing before it is treated as
+    /// stalled. Deliberately its own knob: the RPC timeouts below and openraft's
+    /// `hard_ttl`/`soft_ttl` are per-request budgets (on the replication path
+    /// `hard_ttl` is the heartbeat interval), and aborting a replication stream
+    /// on a per-response deadline tears it down mid-burst under ordinary load.
+    pub stream_stall_timeout_ms: u64,
     /// HTTP/2 initial stream window in bytes.
     pub stream_window_bytes: u32,
     /// HTTP/2 initial connection window in bytes.
@@ -29,6 +35,7 @@ impl Default for TransportConfig {
         Self {
             connect_timeout_ms: 1000,
             request_timeout_ms: 5000,
+            stream_stall_timeout_ms: 10_000,
             max_message_bytes: 16 * 1024 * 1024,
             tcp_keepalive_ms: 30000,
             stream_window_bytes: 1024 * 1024,
@@ -87,6 +94,7 @@ impl TransportConfig {
         anyhow::ensure!(
             self.connect_timeout_ms > 0
                 && self.request_timeout_ms > 0
+                && self.stream_stall_timeout_ms > 0
                 && self.max_message_bytes > 0
                 && self.tcp_keepalive_ms > 0
                 && self.stream_window_bytes > 0

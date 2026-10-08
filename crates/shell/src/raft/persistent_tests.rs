@@ -507,15 +507,18 @@ impl transport::wire::transport_server::Transport for SilentTransport {
     }
 }
 
-/// An append stream that stops making progress is closed on `soft_ttl`, and the
-/// caller is told rather than left waiting.
+/// An append stream that stops making progress is closed and reported, rather
+/// than waited on forever.
 ///
-/// The distinction matters: `hard_ttl` on the replication path is the heartbeat
-/// interval (50 ms by default) and is explicitly not a lifetime limit for a
-/// stream, so the idle bound must be the smaller `soft_ttl` and the stream must
-/// fail before the hard ceiling.
+/// The bound is `TransportConfig::stream_stall_timeout_ms`, not openraft's
+/// `soft_ttl`: a per-response TTL derived from the heartbeat interval tears the
+/// stream down mid-burst under load, and openraft cannot repair the progress that
+/// leaves behind. This test pins the property that *is* wanted with the bound set
+/// small enough to assert on; the TTL passed below is minutes long, so only the
+/// stall path can have closed it — the error message names it, so no wall clock
+/// is needed to attribute it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_stalled_append_stream_is_closed_on_soft_ttl() {
+async fn a_stalled_append_stream_is_closed() {
     use openraft::network::RPCOption;
     use openraft::network::RaftNetworkFactory;
     use openraft::network::v2::RaftNetworkV2;
@@ -540,12 +543,16 @@ async fn a_stalled_append_stream_is_closed_on_soft_ttl() {
             .unwrap();
     });
 
-    // `soft_ttl` is 3/4 of this, so the gap between the two is the assertion's
-    // margin: an error at ~3s passes, one at the 4s ceiling does not.
-    let hard = Duration::from_secs(4);
+    // The stall bound is the knob that decides this; the TTL handed to
+    // `stream_append` below is minutes long on purpose, so nothing else can have
+    // closed the stream.
+    let stall = Duration::from_millis(300);
     let mut factory = transport::TonicNetworkFactory {
         group_id: "silent".into(),
-        config: crate::config::TransportConfig::default(),
+        config: crate::config::TransportConfig {
+            stream_stall_timeout_ms: u64::try_from(stall.as_millis()).unwrap(),
+            ..crate::config::TransportConfig::default()
+        },
     };
     let mut client = factory.new_client(1, &BasicNode::new(&address)).await;
     let request = AppendEntriesRequest::<TypeConfig> {
@@ -557,7 +564,11 @@ async fn a_stalled_append_stream_is_closed_on_soft_ttl() {
 
     let started = std::time::Instant::now();
     let mut results = client
-        .stream_append(tokio_stream::iter(vec![request]), RPCOption::new(hard))
+        .stream_append(
+            tokio_stream::iter(vec![request]),
+            // A huge TTL, to show it is not what closes the stream.
+            RPCOption::new(Duration::from_secs(600)),
+        )
         .await
         .expect("the stream opens; it is the answers that never come");
     let first = results
@@ -569,15 +580,15 @@ async fn a_stalled_append_stream_is_closed_on_soft_ttl() {
     let error = first.unwrap_err();
     assert!(
         error.to_string().contains("made no progress"),
-        "the idle bound, not some other failure: {error}"
+        "the stall bound, not some other failure: {error}"
     );
     assert!(
         results.next().await.is_none(),
         "the stream ends after the error"
     );
     assert!(
-        elapsed < hard,
-        "soft_ttl is the idle bound, hard_ttl the ceiling; {elapsed:?} elapsed"
+        elapsed >= stall,
+        "and not before the bound elapsed; {elapsed:?} against {stall:?}"
     );
 
     stop.send(()).unwrap();
