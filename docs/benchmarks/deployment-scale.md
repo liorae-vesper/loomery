@@ -136,7 +136,8 @@ deliberately: the curve is about *scale*, and batching has its own
 
 Everything above was measured on **0.9.25**, before the migration. This section is the
 same harness, same machine, same configs, re-run on **0.10.0-alpha.36** — branch
-`feature/openraft-pipelined-append`. The pipelined arm was measured at `ee0bb08`; the shipped
+`feat/openraft-010-migration` (named `feature/openraft-pipelined-append` when the pipelined arm
+was measured). The pipelined arm was measured at `ee0bb08`; the shipped
 arm at `f1c0b60` with the removal still in the working tree, which those runs'
 `environment.json` record as a dirty tree, and which `b82a2b1` then committed.
 

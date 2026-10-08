@@ -1,7 +1,8 @@
-# Migrating to openraft 0.10 for pipelined append
+# Migrating to openraft 0.10
 
 Status: **all six legs done — migrated, measured, and the one thing that did not pay was
-removed.** Branch `feature/openraft-pipelined-append`.
+removed.** Branch `feat/openraft-010-migration` (renamed from
+`feature/openraft-pipelined-append` once the pipelining was gone).
 
 `cargo check -p loomery-shell --all-features` is clean, `mise run test` (177 shell lib tests,
 including `testing::log::Suite`, the hardening and interruption suites) and `mise run verify`
@@ -328,7 +329,10 @@ benchmark doc).
 
 ## Risks
 
-* **Alpha dependency.** Pinning an alpha for a performance feature is a real cost to weigh.
+* **Alpha dependency.** The pin was taken for a performance feature that did not pay, so it is
+  worth saying why it is still the right call: the *migration* to that alpha is worth 2.3–31.8×
+  over 0.9 on its own (0.10 stopped serializing local appends behind the previous flush). The
+  cost is the alpha's churn, not the missing pipelining benefit — and an alpha is churn.
 * `single-term-leader` and `loosen-follower-log-revert` are gone; if we relied on either, the
   behaviour changes rather than failing at compile time — worth checking before leg 2.
 * Persisted formats: `SnapshotMeta` losing `snapshot_id` and `StorageError` becoming a struct

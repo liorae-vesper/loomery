@@ -1,11 +1,11 @@
-# Handoff: openraft 0.10 migration for pipelined append
+# Handoff: the openraft 0.10 migration
 
 This is a self-contained work packet. Everything needed to continue is here or in the two
 files it names; the previous session's context is not required.
 
 **All six legs are complete, and the pipelining leg was reverted.** `crates/shell` is on
 openraft **0.10.0-alpha.36** with `cargo check -p loomery-shell --all-features` clean and
-`mise run test` / `mise run verify` green on branch `feature/openraft-pipelined-append`. `main`
+`mise run test` / `mise run verify` green on branch `feat/openraft-010-migration`. `main`
 is untouched. The migration, the streamed snapshot transport, the batching observability and
 the benchmark stay; the bidirectional `StreamAppend` RPC and its `stream_stall_timeout_ms` knob
 were removed, because they measured level-to-few-percent and carried a wedge. The migration is
@@ -27,9 +27,11 @@ why the benchmark needed the sequential-arm runs to say anything.
 
 Migrate `crates/shell` from openraft **0.9.25** to **0.10.0-alpha.36**, then implement
 **pipelined append** so a leader does not wait for a per-entry response, and measure whether it
-was worth it.
+was worth it. It was not — the RPC was removed, see the status above — and the migration alone
+was worth 2.3–31.8×.
 
-Work happens on branch **`feature/openraft-pipelined-append`** in
+Work happens on branch **`feat/openraft-010-migration`** (the original brief below named it
+`feature/openraft-pipelined-append`; it was renamed when the pipelining was removed) in
 `/home/john/Workspace/Liorae/loomery`. `main` is untouched and must stay that way until the
 branch is green.
 
