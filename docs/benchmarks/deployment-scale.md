@@ -268,6 +268,31 @@ spending ~0.048 ms per command on work, not waiting on replication. So pipelinin
 little left to win here, and the next lever is the per-command work itself (apply and
 the durable write), not the network.
 
+## The single node that was slower than three
+
+The matrix left an oddity: a single node at concurrency 128 unbatched managed 295
+writes/s at a p50 of 420 ms, against 777 writes/s and 157 ms on three nodes. Two
+hypotheses died on the evidence: the leader never left **term 1** in any of those runs
+(so it was not re-electing), and lowering `heartbeat_interval` from 100 ms to 10 ms
+changed nothing (301 writes/s, p50 418 ms).
+
+Batching settles it — the stall is per *entry*, not per command:
+
+| Config (20,000 events, single node) | Writes/s | p50 | Observed batch |
+|---|---|---|---|
+| unbatched, concurrency 128 | 295 | 420.1 ms | 1.0 |
+| batching 128, concurrency 128 | **23,450** | **5.2 ms** | 127.4 |
+
+With batching, one node is not merely as fast as three — it is *faster* (23,450 against
+20,870 at batch 256 and 13,781 at batch 128), and its p50 is the best measured anywhere
+(5.2 ms against 9.2 ms on three nodes), which is what having no replicas to wait for
+should look like.
+
+So the single-voter penalty lives in the *unbatched* entry path: roughly 3.4 ms per
+entry against 1.29 ms with two followers, which is backwards and stays unexplained —
+it is not elections, not heartbeats, and it disappears once commands share an entry.
+What it changes is the practical advice: **on a single node, leave batching on.**
+
 ## A finding: the harness could not run at all
 
 The first attempt failed with **100 % rejected commands**:
