@@ -42,6 +42,7 @@ networked deployment.
 - [Batch-size matrix](benchmarks/batch-matrix.md) — configurable count/concurrency sweeps, randomized repeats and observed batch distributions.
 - [Failure injection](benchmarks/failure-injection.md) — crashes during writes, quorum loss, lost replies and flush-callback failures.
 - [Persistence hardening](benchmarks/persistence-hardening.md) — long-history restart validation in both modes, and the gaps left open.
+- [Deployment path at scale](benchmarks/deployment-scale.md) — three nodes at 2k → 20k events: the flat curve, what limits it, and the caveats.
 - [Multi-group probe](benchmarks/multigroup.md) — co-resident group read/write capacity, methodology and limits.
 - [Services stress profiles](benchmarks/services-stress.md) — the Keycloak and NATS adapters under load, the invariants asserted and the measured results.
 - [Example workload](benchmarks/consensus.json) — configuration for the release harness.

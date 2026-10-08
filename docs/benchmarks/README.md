@@ -167,6 +167,20 @@ For a configurable sweep of 8/16/32/64/128-command limits, use
 The [matrix guide](batch-matrix.md) explains fixed-concurrency controls,
 randomized repeat order, CSV/JSON tables and observed batch-size distributions.
 
+## The deployment path at growing sizes
+
+Use `mise run bench-deployment-scale` to drive this harness at 2,000 / 5,000 /
+10,000 / 20,000 events on three nodes (checkpoint mode, plus snapshot mode at the
+largest size), with batching and failover off so the curve is about scale. The
+[scale note](deployment-scale.md) records the results, the probes that move
+concurrency and batching, and what the numbers do and do not say.
+
+> **Payload note:** `name_bytes` is bounded by the domain —
+> `workspace::MAX_NAME_BYTES`, 200 bytes — and the harness now refuses a config
+> that asks for a longer name instead of producing a run in which every command is
+> rejected. Recorded runs from before this change used 256-byte names and are not
+> payload-comparable with anything measured after it.
+
 ## Failure injection during writes
 
 Use `mise run test-consensus-failures` to inject leader/follower crashes, quorum
