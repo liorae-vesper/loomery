@@ -184,6 +184,9 @@ How wide is "noise"? The same config was re-run as a check: batch 1 c=128 20k ga
 9,689. Three-node comparisons are tight (~3%); the single-node, high-concurrency points spread
 ~15%, which is wider than the pipelined-versus-sequential gap in either direction.
 
+That covers throughput *and* latency — see [Latency](#latency) below, where the same A/B/A/B
+comparison is made on p50/p99 and finds a possible few-percent p50 cost rather than a win.
+
 Two caveats on that conclusion. It is **loopback**: pipelining's theoretical advantage is
 removing a round trip per exchange, and here every round trip is microseconds, while openraft's
 `LogsSince` payload accumulation already packs many entries into each unary request. On a link
@@ -191,6 +194,46 @@ where RTT dominates, the sequential arm would pay that RTT per request and the p
 would not — this benchmark cannot show that, and does not. And the batched rows are unmoved
 from 0.9 in both arms, which is consistent with everything above: once batching amortizes the
 exchange, neither the flush-wait nor the round trip is what limits the path.
+
+### Latency
+
+The harness records p50/p95/p99 per point; the tables above carry p50, and the raw
+percentiles are in the collected runs. Read as latency, the same story holds — the gains are
+the migration's:
+
+| Config, 20k | | p50 | p95 | p99 |
+|---|---|---|---|---|
+| 3 nodes, c=8, batch 1 | 0.9.25 | 19.6 ms | 25.4 ms | 59.2 ms |
+| | 0.10 + pipelining | **8.1 ms** | **9.4 ms** | **12.1 ms** |
+| 3 nodes, c=128, batch 1 | 0.9.25 | 156.7 ms | 178.5 ms | 355.6 ms |
+| | 0.10 + pipelining | **11.2 ms** | **20.9 ms** | **110.4 ms** |
+| 3 nodes, c=128, batch 128 | 0.9.25 | 9.2 ms | 10.7 ms | 11.0 ms |
+| | 0.10 + pipelining | 9.3 ms | 10.8 ms | 11.2 ms |
+| 1 node, c=128, batch 1 | 0.9.25 | 420.1 ms | 499.2 ms | 855.6 ms |
+| | 0.10 + pipelining | **11.7 ms** | **21.3 ms** | **110.1 ms** |
+
+Two things fall out that are not visible in throughput alone.
+
+**Pipelining does not improve latency either.** An A/B/A/B of the two arms at 3 nodes,
+c=128, batch 1, five trials each (`20261008163210-lat-a-batch1-pipelined` and its
+sequential, pipelined-r2 and sequential-r2 siblings) gives p50 medians 10.94, 9.96,
+10.98, 10.74 ms — sequential ahead in both rounds, by 9% and 2%. That is *weak*
+evidence of a small real cost rather than a win: the sequential arm's own two rounds
+differ by 7.8%, which is the same size as the effect, so treat "pipelining is a few
+percent worse on p50 and more stable" as a hypothesis for a longer run, not a finding.
+No difference is resolvable at batch 128 (p50 9,232 vs 9,322 µs, p99 11,190 vs 11,226 µs,
+five trials each). Why pipelining would cost anything is not established; it is not a
+mechanism this benchmark identifies.
+
+**A p99 from three trials was not a stable statistic, and one earlier reading of it was
+wrong.** The batch-128 arm initially showed p99 27.6 and 30.9 ms in two of its three
+trials against 0.9's 11.0-14.4 ms, which reads as a 2.5× tail regression. Re-run with five
+trials per arm, both arms sit at p99 ~11.2 ms, and the outliers are gone. So the
+3-trial tables in this document are safe for p50 and should not be used for tail claims.
+
+The unbatched path at concurrency 128 keeps a heavy tail — p99 ≈ 100 ms against p50 ≈ 11 ms
+— in **both** 0.10 arms, which is queueing at 128 writes in flight rather than anything the
+transport does. The low-latency configuration remains the default (c=8): p50 8 ms, p99 12 ms.
 
 ### The sweep that wedged, and why
 

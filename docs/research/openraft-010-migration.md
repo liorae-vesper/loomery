@@ -302,13 +302,15 @@ by the error message rather than a wall clock, because timing assertions here ar
 a fully parallel suite. The three-replica tonic test now replicates over this path, and
 heartbeats do too.
 
-**What it bought: nothing measurable.** See
-[the measurement](../benchmarks/deployment-scale.md#after-openraft-010-and-pipelined-append).
-Pipelining is within run-to-run noise in every configuration measured, and the large wins over
-0.9 come from the migration itself: openraft 0.10 no longer serializes local appends behind the
-previous flush. The same 0.10 build with `stream_append` reverted to openraft's sequential
-default matches the pipelined one, so the append half of leg 5 is a candidate for reverting
-without losing the numbers.
+**What it bought: nothing measurable on throughput, and no latency benefit.** See
+[the measurement](../benchmarks/deployment-scale.md#after-openraft-010-and-pipelined-append)
+and its [latency comparison](../benchmarks/deployment-scale.md#latency). Pipelining is within
+run-to-run noise in every configuration measured, and the large wins over 0.9 come from the
+migration itself: openraft 0.10 no longer serializes local appends behind the previous flush.
+The same 0.10 build with `stream_append` reverted to openraft's sequential default matches the
+pipelined one, and on p50 it is weakly *ahead* (a few percent, in both rounds of an A/B/A/B).
+So the append half of leg 5 is a candidate for reverting without losing anything except the
+groundwork for a deployment where round-trip time dominates.
 
 ## Risks
 

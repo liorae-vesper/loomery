@@ -11,7 +11,8 @@ that may merge is the migration one.
 **The measured verdict: the migration paid, the pipelining did not show up.** 2.4–2.7× at the
 default deployment config, 11.8–15.5× unbatched at concurrency 128, and 0.9's single-node
 anomaly gone — but a build with `stream_append` reverted to openraft's sequential default
-matches the pipelined one within noise, so the win is 0.10's core, not the bidirectional RPC.
+matches the pipelined one on throughput and is weakly ahead on p50, so the win is 0.10's core,
+not the bidirectional RPC.
 The numbers and the attribution arms are in
 [deployment-scale.md](../benchmarks/deployment-scale.md#after-openraft-010-and-pipelined-append).
 
