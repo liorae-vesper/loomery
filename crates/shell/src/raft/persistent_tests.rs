@@ -56,24 +56,24 @@ fn config() -> GroupConfig {
 }
 /// Reopens a persistent group, waiting out the release of the previous handle.
 ///
-/// The store is released when the last handle to it goes away — the state machine
-/// owns one, and `Raft::shutdown` only *aborts* the tasks holding others, which
-/// takes effect when each task is next polled. A reopen can therefore race that
-/// release (this flaked in CI, not locally), so the wait is explicit and bounded:
-/// a store still locked after the deadline is a real leak, and its error surfaces.
+/// The rule and the deadline are in [`super::test_disk`]: a store is released when
+/// the last handle to it goes away, and `Raft::shutdown` only *aborts* the tasks
+/// holding others, so a reopen can race that release (this flaked in CI, not
+/// locally). A store still locked after the deadline is a real leak, and its error
+/// surfaces.
 async fn reopen(
     node_id: u64,
     directory: &std::path::Path,
     config: GroupConfig,
 ) -> anyhow::Result<RaftGroup> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + test_disk::RELEASE_TIMEOUT;
     loop {
         match RaftGroup::boot_persistent(node_id, "tenant".into(), directory, config.clone()).await
         {
             Ok(group) => return Ok(group),
             Err(error) if tokio::time::Instant::now() < deadline => {
                 eprintln!("reopen attempt failed, retrying: {error}");
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tokio::time::sleep(test_disk::RELEASE_POLL).await;
             }
             Err(error) => return Err(error),
         }
