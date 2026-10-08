@@ -43,6 +43,7 @@ use crate::group::GroupOps;
 
 use super::RaftGroup;
 use super::RocksLogStore;
+use super::disk::Family;
 use super::state_machine::MemStateMachine;
 use super::test_disk;
 
@@ -131,7 +132,7 @@ async fn boot_apply_and_snapshot(
         .await
         .unwrap();
     let bytes = disk
-        .get(b"snapshot")
+        .get(Family::State, b"snapshot")
         .await
         .unwrap()
         .expect("a completed build persists a snapshot");
@@ -162,7 +163,7 @@ async fn stored_snapshot(path: &std::path::Path) -> Option<Vec<u8>> {
     test_disk::open(path, &StorageConfig::default())
         .await
         .unwrap()
-        .get(b"snapshot")
+        .get(Family::State, b"snapshot")
         .await
         .unwrap()
 }

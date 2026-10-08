@@ -769,10 +769,12 @@ recorded in [`domain-model.md`](domain-model.md).
         `invitation.create` requires owning a workspace of the organization. The
         membership index those checks read is derived from the applied events, so
         they are map lookups rather than scans
-- [ ] Column families and the `events` family (D2 amendment, D13 step 1): split
+- [x] Column families and the `events` family (D2 amendment, D13 step 1): split
       the database into `default`/`raft_log`/`state`/`events`/`projections`, append
       each apply's events to `events`, fail closed on an unknown format marker —
-      additive, so the checkpoint keeps carrying what it does today
+      additive, so the checkpoint keeps carrying what it does today (`Disk` opens
+      the layout, the record is written in the same batch as the checkpoint, and
+      the layout marker refuses anything else)
 - [ ] Deltas and state-only recovery (D13 step 2): `state` keyed per aggregate so an
       apply writes only what it changed, the checkpoint drops the event list, and
       nothing keeps a second copy of the record in RAM — this changes the D2

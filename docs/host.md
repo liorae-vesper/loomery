@@ -141,11 +141,12 @@ group lives beside it. Within that database every kind of data currently shares 
 key space: Raft entries, the aggregate state, and — inside the state record — every
 applied event and the dedup window.
 
-That layout is being replaced by
-[column families](storage-layout.md) (with the append-only `events` family, deltas
-instead of whole-state writes, and the search index in a sibling `index/`
-directory). The document below describes the running code; where the two differ,
-[storage-layout.md](storage-layout.md) is the decided target.
+That layout has been replaced by [column families](storage-layout.md): `default`
+(markers), `raft_log`, `state`, `events` and `projections`, with the append-only
+`events` family holding every applied event from the moment it is folded. Two parts
+of the target are still open — writing state as deltas, and the search index in a
+sibling `index/` directory — and [storage-layout.md](storage-layout.md) is where the
+difference is tracked.
 
 ## What it does at boot
 

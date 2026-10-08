@@ -31,6 +31,8 @@ use crate::config::StatePersistence;
 use crate::group::GroupOps;
 use crate::group::ProposeOutcome;
 use crate::raft::RaftGroup;
+use crate::raft::RocksLogStore;
+use openraft::storage::RaftLogStorage;
 
 const ORGANIZATION: &str = "018f2c3d-4e5f-7071-8293-a4b5c6d7e8f9";
 const NS: Uuid = Uuid::from_u128(0x018f_2c3d_4e5f_6071_8293_a4b5_c6d7_e8f9);
@@ -311,6 +313,122 @@ async fn soak(mode: StatePersistence, commands: u64) {
     println!(
         "soak {mode:?}: {commands} commands | apply {applied:?} (~{per_second}/s) |          snapshot {snapshot:?} | restart {restart:?} | {size} bytes on disk"
     );
+}
+
+/// The record is written per apply and read back in log order, once per event.
+///
+/// Run in snapshot mode deliberately: checkpoint mode also carries the events
+/// inside its state record, so only snapshot mode shows that they are durable on
+/// their own account.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_record_holds_every_event_once_and_in_log_order() {
+    let root = tempfile::tempdir().unwrap();
+    let mut group = boot(root.path(), StatePersistence::Snapshot).await;
+    for index in 0..5 {
+        group.propose(task_command(index)).await.unwrap();
+    }
+
+    let recorded = group.state_machine().event_record().await.unwrap();
+    let folded = group
+        .committed_events(&Id::from(ORGANIZATION))
+        .await
+        .unwrap();
+    assert_eq!(recorded.len(), 5, "one event per command, and no more");
+    assert_eq!(
+        recorded, folded,
+        "the record and the fold agree, in log order"
+    );
+
+    // A replay is not a second event: the record is a record of what happened.
+    let outcome = group.propose(task_command(4)).await.unwrap();
+    assert!(matches!(outcome, ProposeOutcome::Replayed { .. }));
+    assert_eq!(
+        group.state_machine().event_record().await.unwrap().len(),
+        5,
+        "a replayed command adds nothing to the record"
+    );
+    group.shutdown().await.unwrap();
+}
+
+/// Purging the Raft log does not touch the record.
+///
+/// The Raft log is bookkeeping — `OpenRaft` purges what a snapshot covers — while
+/// the record is history. This purges the whole log away and finds the events
+/// still there, which is the guarantee that lets purging be safe.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_purge_leaves_the_record_untouched() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().to_path_buf();
+    let commands = 5;
+    let mut group = boot(&path, StatePersistence::Snapshot).await;
+    for index in 0..commands {
+        group.propose(task_command(index)).await.unwrap();
+    }
+    let recorded = group.state_machine().event_record().await.unwrap();
+    assert_eq!(recorded.len(), usize::try_from(commands).unwrap());
+    group.shutdown().await.unwrap();
+    drop(group);
+
+    // Purge the log away, then look at the record through a fresh handle.
+    let mut log = RocksLogStore::open(
+        super::test_disk::open(&path, &crate::config::StorageConfig::default())
+            .await
+            .unwrap(),
+    );
+    let last = log
+        .get_log_state()
+        .await
+        .unwrap()
+        .last_log_id
+        .expect("the log has entries");
+    log.purge(last).await.unwrap();
+    drop(log);
+    assert!(
+        log_entries(&path).await.is_empty(),
+        "the purge emptied the Raft log"
+    );
+
+    let disk = super::test_disk::open(&path, &crate::config::StorageConfig::default())
+        .await
+        .unwrap();
+    let stored = read_record(&disk).await;
+    assert_eq!(
+        stored, recorded,
+        "the record survived a purge of the log that carried it"
+    );
+}
+
+/// Every log entry in a database, read through a fresh handle.
+async fn log_entries(path: &std::path::Path) -> Vec<u64> {
+    let mut log = RocksLogStore::open(
+        super::test_disk::open(path, &crate::config::StorageConfig::default())
+            .await
+            .unwrap(),
+    );
+    openraft::storage::RaftLogReader::try_get_log_entries(&mut log, ..)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.log_id.index)
+        .collect()
+}
+
+/// The append-only record in a database, read through a fresh handle.
+async fn read_record(disk: &super::disk::Disk) -> Vec<loomery_core::envelope::Event> {
+    disk.run(|db| {
+        let family = super::disk::Family::Events.handle(db)?;
+        let mut events = Vec::new();
+        for item in db.iterator_cf(family, rocksdb::IteratorMode::Start) {
+            let (key, value) = item?;
+            if !key.starts_with(b"e") {
+                break;
+            }
+            events.push(serde_json::from_slice(&value)?);
+        }
+        Ok(events)
+    })
+    .await
+    .unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

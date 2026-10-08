@@ -164,10 +164,22 @@ async fn three_replicas_commit_and_recover_genesis() {
             .applied_index(Some(last), "replicated")
             .await
             .unwrap();
-        assert_eq!(
-            group.committed_events(&organization()).await.unwrap().len(),
-            3
-        );
+        // What matters is the *state*, and a replica's applied-index metric can be
+        // observed ahead of the fold it reports. Wait for the state itself, bounded,
+        // and dump what arrived if it never does — a wait that can only fail loudly,
+        // never pass quietly.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let events = group.committed_events(&organization()).await.unwrap();
+            if events.len() == 3 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "a replica never folded all three genesis events: {events:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
     // Force snapshot persistence before reopening a real database handle.
     groups[0].raft().trigger().snapshot().await.unwrap();
@@ -426,7 +438,12 @@ async fn snapshot_mode_recovers_log_only_and_snapshot_with_purged_prefix() {
         let disk = super::disk::Disk::open(root.path(), &settings.storage)
             .await
             .unwrap();
-        assert!(disk.get(b"state").await.unwrap().is_none());
+        assert!(
+            disk.get(super::disk::Family::State, b"state")
+                .await
+                .unwrap()
+                .is_none()
+        );
         let mut log = RocksLogStore::open(disk.clone());
         assert!(log.read_committed().await.unwrap().is_some());
         assert!(
@@ -450,7 +467,11 @@ async fn persistence_mode_is_fixed_across_restarts_in_both_directions() {
             .await
             .unwrap();
         let machine = MemStateMachine::open(disk.clone(), selected).await.unwrap();
-        let marker = disk.get(b"state_persistence").await.unwrap().unwrap();
+        let marker = disk
+            .get(super::disk::Family::Default, b"state_persistence")
+            .await
+            .unwrap()
+            .unwrap();
         drop(machine);
         drop(disk);
         let disk = super::disk::Disk::open(root.path(), &settings)
@@ -460,37 +481,76 @@ async fn persistence_mode_is_fixed_across_restarts_in_both_directions() {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("mode cannot change"));
-        assert_eq!(disk.get(b"state_persistence").await.unwrap(), Some(marker));
+        assert_eq!(
+            disk.get(super::disk::Family::Default, b"state_persistence")
+                .await
+                .unwrap(),
+            Some(marker)
+        );
         MemStateMachine::open(disk, selected).await.unwrap();
     }
 }
 
 #[tokio::test]
-async fn unmarked_nonempty_database_is_pinned_to_legacy_checkpoint_mode() {
-    use crate::config::{StatePersistence, StorageConfig};
-    let root = tempfile::tempdir().unwrap();
-    let disk = super::disk::Disk::open(root.path(), &StorageConfig::default())
+async fn another_layout_or_a_missing_marker_is_refused() {
+    use crate::config::StorageConfig;
+    let settings = StorageConfig::default();
+
+    // A database written before column families existed: one family, no layout of
+    // ours. Refused, rather than read as if it were this layout.
+    let legacy = tempfile::tempdir().unwrap();
+    {
+        let mut options = rocksdb::Options::default();
+        options.create_if_missing(true);
+        let database = rocksdb::DB::open(&options, legacy.path()).unwrap();
+        database.put(b"vote", b"legacy vote").unwrap();
+    }
+    assert!(
+        super::disk::Disk::open(legacy.path(), &settings)
+            .await
+            .is_err(),
+        "a database from another layout is refused"
+    );
+
+    // Our families, but no layout marker: refused too, so a hand-made or
+    // half-written directory cannot pass for one this build wrote.
+    let unmarked = tempfile::tempdir().unwrap();
+    let disk = super::disk::Disk::open(unmarked.path(), &settings)
         .await
         .unwrap();
-    // A legacy node may have persisted a vote before its first state checkpoint.
-    disk.put(b"vote", b"legacy vote".to_vec()).await.unwrap();
+    disk.run(|db| {
+        db.delete_cf(super::disk::Family::Default.handle(db)?, b"format")?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    drop(disk);
     assert!(
-        MemStateMachine::open(disk.clone(), StatePersistence::Snapshot)
+        super::disk::Disk::open(unmarked.path(), &settings)
             .await
-            .is_err()
+            .is_err(),
+        "a database without a layout marker is refused"
     );
-    assert!(disk.get(b"state_persistence").await.unwrap().is_none());
-    assert_eq!(
-        disk.get(b"vote").await.unwrap(),
-        Some(b"legacy vote".to_vec())
-    );
-    MemStateMachine::open(disk.clone(), StatePersistence::Checkpoint)
+
+    // And a database carrying another layout version: the marker is what makes a
+    // future format change fail closed instead of being misread.
+    let future = tempfile::tempdir().unwrap();
+    let disk = super::disk::Disk::open(future.path(), &settings)
         .await
         .unwrap();
+    disk.put(
+        super::disk::Family::Default,
+        b"format".to_vec(),
+        serde_json::to_vec(&super::disk::FORMAT.saturating_add(1)).unwrap(),
+    )
+    .await
+    .unwrap();
+    drop(disk);
     assert!(
-        MemStateMachine::open(disk, StatePersistence::Snapshot)
+        super::disk::Disk::open(future.path(), &settings)
             .await
-            .is_err()
+            .is_err(),
+        "another layout version is refused"
     );
 }
 
@@ -502,13 +562,19 @@ async fn invalid_persistence_marker_fails_closed() {
         .await
         .unwrap();
     let invalid = b"\"unknown_mode\"".to_vec();
-    disk.put(b"state_persistence", invalid.clone())
-        .await
-        .unwrap();
+    disk.put(
+        super::disk::Family::Default,
+        b"state_persistence".to_vec(),
+        invalid.clone(),
+    )
+    .await
+    .unwrap();
     for mode in [StatePersistence::Checkpoint, StatePersistence::Snapshot] {
         assert!(MemStateMachine::open(disk.clone(), mode).await.is_err());
         assert_eq!(
-            disk.get(b"state_persistence").await.unwrap(),
+            disk.get(super::disk::Family::Default, b"state_persistence")
+                .await
+                .unwrap(),
             Some(invalid.clone())
         );
     }

@@ -71,6 +71,34 @@ snapshot being present, and its cost is acceptable at the history sizes the syst
 serves today. Choosing snapshot mode by default needs a decision and a benchmark of
 its own.
 
+## After step 1: the families
+
+Splitting the database into column families and appending every apply's events to
+an `events` family ([storage-layout.md](../storage-layout.md)) is deliberately
+additive: it makes the record durable on its own account — so purging the Raft log
+can no longer lose history — without changing how state is written. The same soak,
+1,000 commands on one machine, before and after:
+
+| Mode | Apply, before | Apply, after | Restart, before | Restart, after | On disk, before | On disk, after |
+|---|---|---|---|---|---|---|
+| checkpoint | 28.9 s (~34/s) | 29.5 s (~33/s) | 230 ms | 2.50 s | 38.0 MB | 981 MB |
+| snapshot | 468 ms (~2,134/s) | 590 ms (~1,694/s) | 256 ms | 287 ms | 1.63 MB | 2.15 MB |
+
+What this says:
+
+- **The apply rate is unchanged, as designed.** The record is written alongside the
+  checkpoint, and the checkpoint is what dominates — step 1 was not expected to fix
+  the quadratic cost, and did not. Snapshot mode, which writes no state per apply,
+  stays fast.
+- **Checkpoint mode's on-disk size and restart time are *not* explained by this
+  step.** They are file sizes and WAL replay, not live data, and they moved far more
+  than the events added: the readings were taken on a loaded machine right after a
+  full suite with the database still un-compacted. They are recorded here rather
+  than smoothed over, and step 2's benchmarks (the ones
+  [D2](../design.md#d2--storage-engine) requires before a contract change) have to
+  account for them: an unexplained 25× in file size is exactly the kind of thing
+  that should not be inherited by the next step.
+
 ## What is *not* verified
 
 - **A crash inside the purge batch.** OpenRaft drives `purge`, and the store

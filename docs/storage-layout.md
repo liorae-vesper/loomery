@@ -1,11 +1,21 @@
 # Storage layout
 
-**Status: decided, not yet implemented.** This is the layout
+**Status: step 1 implemented, step 2 not.** This is the layout
 [D2](design.md#d2--storage-engine)'s amendment and
-[D13](design.md#d13--history-is-append-only-checkpoints-carry-state) describe. Where
-the code differs today, the difference is marked **today** — the current
-implementation keeps every kind of data in one key space per group, and rewrites
-the whole state (including the event list) on every apply.
+[D13](design.md#d13--history-is-append-only-checkpoints-carry-state) describe.
+
+**Step 1** — the families and the append-only `events` family — is in the code:
+every database is opened as `default`/`raft_log`/`state`/`events`/`projections`,
+the layout marker is written and checked, the Raft log lives in its own family, and
+every apply appends its events to `events` in the same synchronous batch as the
+checkpoint. The record is now durable on its own account, which is what makes
+purging the Raft log safe.
+
+**Step 2** — state deltas and state-only recovery — is not, so the paragraphs
+below still describe the cost honestly: an apply in checkpoint mode still rewrites
+the whole state, and the apply rate still halves as the history doubles
+([measured](benchmarks/persistence-hardening.md#after-step-1-the-families)). Where
+the code still differs from the target, the difference is marked **today**.
 
 The two steps that build this are in
 [D13's order of work](design.md#d13--history-is-append-only-checkpoints-carry-state):

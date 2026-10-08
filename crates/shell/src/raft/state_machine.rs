@@ -86,6 +86,7 @@ use openraft::StorageIOError;
 use openraft::StoredMembership;
 use openraft::storage::RaftStateMachine;
 use openraft::storage::Snapshot;
+use rocksdb::{WriteBatch, WriteOptions};
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -93,6 +94,7 @@ use tokio::sync::RwLock;
 use super::AppData;
 use super::Applied;
 use super::TypeConfig;
+use super::disk::Family;
 
 /// How many processed causation keys the dedup window keeps.
 ///
@@ -373,7 +375,7 @@ impl MemStateMachine {
         disk: super::disk::Disk,
         persistence: crate::config::StatePersistence,
     ) -> anyhow::Result<Arc<Self>> {
-        let saved = disk.get(b"state_persistence").await?;
+        let saved = disk.get(Family::Default, b"state_persistence").await?;
         if let Some(bytes) = saved {
             let previous: crate::config::StatePersistence = serde_json::from_slice(&bytes)?;
             anyhow::ensure!(
@@ -381,29 +383,22 @@ impl MemStateMachine {
                 "state persistence mode cannot change on an existing database: stored {previous:?}, requested {persistence:?}"
             );
         } else {
-            // Databases predating this marker used checkpoint recovery.
-            anyhow::ensure!(
-                persistence == crate::config::StatePersistence::Checkpoint
-                    || disk
-                        .run(|db| {
-                            Ok(db
-                                .iterator(rocksdb::IteratorMode::Start)
-                                .next()
-                                .transpose()?
-                                .is_none())
-                        })
-                        .await?,
-                "existing unmarked database requires checkpoint mode"
-            );
-            disk.put(b"state_persistence", serde_json::to_vec(&persistence)?)
-                .await?;
+            // No mode marker: a database this build just created, since `Disk::open`
+            // refuses an existing database that carries no layout marker. Pin the
+            // mode now — a database's mode is fixed for its lifetime.
+            disk.put(
+                Family::Default,
+                b"state_persistence".to_vec(),
+                serde_json::to_vec(&persistence)?,
+            )
+            .await?;
         }
         let mut machine = Arc::new(Self::default());
         let recovery_key: &'static [u8] = match persistence {
             crate::config::StatePersistence::Checkpoint => b"state",
             crate::config::StatePersistence::Snapshot => b"snapshot",
         };
-        if let Some(bytes) = disk.get(recovery_key).await? {
+        if let Some(bytes) = disk.get(Family::State, recovery_key).await? {
             let stored: StoredSnapshot = serde_json::from_slice(&bytes)?;
             machine
                 .clone()
@@ -411,7 +406,7 @@ impl MemStateMachine {
                 .await?;
         }
         *machine.current_snapshot.write().await = disk
-            .get(b"snapshot")
+            .get(Family::State, b"snapshot")
             .await?
             .map(|bytes| serde_json::from_slice(&bytes))
             .transpose()?;
@@ -421,6 +416,87 @@ impl MemStateMachine {
         recovered.persistence = persistence;
         Ok(machine)
     }
+    /// Writes what this apply must make durable, as one synchronous batch.
+    ///
+    /// The record is written in *both* persistence modes: it is the history, not
+    /// the state, and `OpenRaft` may purge the entries that carried these events as
+    /// soon as a snapshot covers them. In checkpoint mode the same batch also
+    /// carries the fold, so a crash cannot separate the state from the events that
+    /// produced it (D2). `recorded_from` is where this batch's events start in the
+    /// in-memory history.
+    #[allow(clippy::result_large_err)] // OpenRaft fixes the storage error type.
+    async fn write_applied(&self, recorded_from: usize) -> Result<(), StorageError<u64>> {
+        let Some(disk) = &self.disk else {
+            return Ok(());
+        };
+        let events = {
+            let group = self.state.read().await;
+            let mut events = Vec::new();
+            let mut last_index = None;
+            let mut position = 0u32;
+            for applied in group.applied.get(recorded_from..).unwrap_or_default() {
+                // `pos` is the event's ordinal within its log entry, which is what
+                // distinguishes the several events of one batched entry.
+                position = if last_index == Some(applied.log_index) {
+                    position.saturating_add(1)
+                } else {
+                    0
+                };
+                last_index = Some(applied.log_index);
+                events.push((
+                    event_key(applied.log_index, position),
+                    serde_json::to_vec(&applied.event)
+                        .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                ));
+            }
+            events
+        };
+        let checkpoint = if self.persistence == crate::config::StatePersistence::Checkpoint {
+            let group = self.state.read().await;
+            let data = SnapshotData {
+                version: snapshot_version(),
+                last_applied_log: group.last_applied_log,
+                last_membership: group.last_membership.clone(),
+                streams: group.streams.clone(),
+                applied: group.applied.clone(),
+                dedup: group.dedup.clone(),
+            };
+            let stored = StoredSnapshot {
+                meta: SnapshotMeta {
+                    last_log_id: data.last_applied_log,
+                    last_membership: data.last_membership.clone(),
+                    snapshot_id: "checkpoint".into(),
+                },
+                data: serde_json::to_vec(&data)
+                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+            };
+            Some(serde_json::to_vec(&stored).map_err(|e| StorageIOError::write_state_machine(&e))?)
+        } else {
+            None
+        };
+        disk.run(move |db| {
+            let mut batch = WriteBatch::default();
+            if let Some(bytes) = checkpoint {
+                batch.put_cf(Family::State.handle(db)?, b"state", bytes);
+            }
+            if !events.is_empty() {
+                let family = Family::Events.handle(db)?;
+                for (key, value) in events {
+                    batch.put_cf(family, key, value);
+                }
+            }
+            let mut options = WriteOptions::default();
+            options.set_sync(true);
+            db.write_opt(batch, &options)?;
+            Ok(())
+        })
+        .await
+        .map_err(|error| {
+            StorageIOError::write_state_machine(&std::io::Error::other(error.to_string()))
+        })?;
+        Ok(())
+    }
+
     #[allow(clippy::result_large_err)] // OpenRaft fixes the storage error type.
     async fn persist(
         &self,
@@ -430,9 +506,11 @@ impl MemStateMachine {
         if let Some(disk) = &self.disk {
             let bytes =
                 serde_json::to_vec(stored).map_err(|e| StorageIOError::write_state_machine(&e))?;
-            disk.put(key, bytes).await.map_err(|e| {
-                StorageIOError::write_state_machine(&std::io::Error::other(e.to_string()))
-            })?;
+            disk.put(Family::State, key.to_vec(), bytes)
+                .await
+                .map_err(|e| {
+                    StorageIOError::write_state_machine(&std::io::Error::other(e.to_string()))
+                })?;
         }
         Ok(())
     }
@@ -465,6 +543,38 @@ impl MemStateMachine {
             .filter(|applied| &applied.event.organization_id == organization_id)
             .cloned()
             .collect()
+    }
+
+    /// Every event in the append-only record, in log order.
+    ///
+    /// The record is what happened, written before any snapshot covered the Raft
+    /// entries that carried it, so it outlives the log. Reads still answer from the
+    /// folded state — history reads move here in step 3 of
+    /// `docs/storage-layout.md` — and this is what lets the layout be tested at
+    /// all: the record stands on its own, without the fold and without the log.
+    ///
+    /// A group with no database has no record, and answers with nothing.
+    ///
+    /// # Errors
+    ///
+    /// The record cannot be read.
+    pub async fn event_record(&self) -> anyhow::Result<Vec<Event>> {
+        let Some(disk) = &self.disk else {
+            return Ok(Vec::new());
+        };
+        disk.run(|db| {
+            let family = Family::Events.handle(db)?;
+            let mut events = Vec::new();
+            for item in db.iterator_cf(family, rocksdb::IteratorMode::Start) {
+                let (key, value) = item?;
+                if !key.starts_with(b"e") {
+                    break;
+                }
+                events.push(serde_json::from_slice::<Event>(&value)?);
+            }
+            Ok(events)
+        })
+        .await
     }
 
     /// The events of one workspace, in log order.
@@ -802,6 +912,14 @@ fn recorded_fingerprint(group: &GroupState, key: &Key, fallback: Key) -> Key {
         .map_or(fallback, |entry| entry.fingerprint().clone())
 }
 
+/// The key an event occupies in the append-only record: `e{log_index}:{position}`.
+///
+/// Big-endian, so a range scan over the family is history in log order, and
+/// `position` distinguishes several events produced by one batched entry.
+fn event_key(log_index: u64, position: u32) -> Vec<u8> {
+    format!("e{log_index:016x}:{position:02x}").into_bytes()
+}
+
 /// Records a committed command in the dedup window and mirrors it for snapshots.
 fn record(group: &mut GroupState, key: Key, fingerprint: Key, log_index: u64) {
     group.registry.insert(
@@ -901,6 +1019,9 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
     {
         let mut responses = Vec::new();
         let mut group = self.state.write().await;
+        // Everything appended to the in-memory history while applying this batch is
+        // this batch's share of the record.
+        let recorded_from = group.applied.len();
 
         for entry in entries {
             let log_index = entry.log_id.index;
@@ -936,27 +1057,7 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
             self.applied.send_replace(last_applied.index);
         }
         drop(group);
-        if self.disk.is_some() && self.persistence == crate::config::StatePersistence::Checkpoint {
-            let group = self.state.read().await;
-            let data = SnapshotData {
-                version: snapshot_version(),
-                last_applied_log: group.last_applied_log,
-                last_membership: group.last_membership.clone(),
-                streams: group.streams.clone(),
-                applied: group.applied.clone(),
-                dedup: group.dedup.clone(),
-            };
-            let stored = StoredSnapshot {
-                meta: SnapshotMeta {
-                    last_log_id: data.last_applied_log,
-                    last_membership: data.last_membership.clone(),
-                    snapshot_id: "checkpoint".into(),
-                },
-                data: serde_json::to_vec(&data)
-                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
-            };
-            self.persist(b"state", &stored).await?;
-        }
+        self.write_applied(recorded_from).await?;
         Ok(responses)
     }
 
@@ -995,10 +1096,11 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
             let bytes =
                 serde_json::to_vec(&stored).map_err(|e| StorageIOError::write_state_machine(&e))?;
             disk.run(move |db| {
-                let mut batch = rocksdb::WriteBatch::default();
-                batch.put(b"state", &bytes);
-                batch.put(b"snapshot", &bytes);
-                let mut options = rocksdb::WriteOptions::default();
+                let family = Family::State.handle(db)?;
+                let mut batch = WriteBatch::default();
+                batch.put_cf(family, b"state", &bytes);
+                batch.put_cf(family, b"snapshot", &bytes);
+                let mut options = WriteOptions::default();
                 options.set_sync(true);
                 db.write_opt(batch, &options)?;
                 Ok(())

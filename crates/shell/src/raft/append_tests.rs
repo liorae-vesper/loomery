@@ -417,7 +417,12 @@ async fn failed_append_reports_error_through_both_return_and_callback() {
     // A real RocksDB write rejection, rather than a mocked callback outcome.
     let path = dir.path().to_owned();
     let database = tokio::task::spawn_blocking(move || {
-        rocksdb::DB::open_for_read_only(&rocksdb::Options::default(), path, false)
+        rocksdb::DB::open_cf_descriptors_read_only(
+            &rocksdb::Options::default(),
+            path,
+            super::disk::Disk::descriptors(&StorageConfig::default()),
+            false,
+        )
     })
     .await
     .unwrap()

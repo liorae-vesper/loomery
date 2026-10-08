@@ -45,13 +45,19 @@ pub(crate) async fn open(path: &Path, config: &StorageConfig) -> anyhow::Result<
 /// itself rather than by a mocked seam.
 ///
 /// This is how the interruption tests inject a durable write failure: the failure
-/// is a real storage rejection, not a callback told to report one.
+/// is a real storage rejection, not a callback told to report one. A read-only open
+/// must list every column family, so it shares the layout with [`Disk::open`].
 pub(crate) async fn open_read_only(path: &Path) -> anyhow::Result<Disk> {
     let deadline = Instant::now() + RELEASE_TIMEOUT;
     loop {
         let path = path.to_owned();
         let attempt = tokio::task::spawn_blocking(move || {
-            rocksdb::DB::open_for_read_only(&rocksdb::Options::default(), path, false)
+            rocksdb::DB::open_cf_descriptors_read_only(
+                &rocksdb::Options::default(),
+                path,
+                Disk::descriptors(&StorageConfig::default()),
+                false,
+            )
         })
         .await?;
         match attempt {
