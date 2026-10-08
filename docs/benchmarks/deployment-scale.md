@@ -24,7 +24,17 @@ mise run bench-deployment-scale            # the sweep below
 python3 scripts/bench-deployment-scale.py --dry-run     # configs and plan, nothing run
 python3 scripts/bench-deployment-scale.py --points 2000 --trials 1 --tag smoke   # one point
 python3 scripts/bench-deployment-scale.py --extra '{"concurrency": 64}'         # one knob probed
+python3 scripts/bench-deployment-scale.py --points 20000 --snapshot-points "" --trials 3 \
+  --extra '{"duration_ms": 60000}'    # time-boxed: 60 s of writes, not a fixed count
 ```
+
+A run is sized either by `operations` or, when `duration_ms` is set, by the clock: the
+measured phase then writes until the deadline and stops. The count is only known
+afterwards, so the harness verifies each replica against the writes it actually
+completed, and the point's `operations` label is just the sweep's bookkeeping key —
+**`overrides.duration_ms` in the collected results is what says a run was time-boxed.**
+Unlike count mode, which prepares every command before the clock starts, a time-boxed
+run prepares commands inside the window, so it reads a little lower for the same work.
 
 Held fixed for the whole curve: **3 nodes**, 3 trials per point, 100 warmup
 commands, **concurrency 8**, 200-byte payload names, `LogsSinceLast(5000)`
@@ -235,6 +245,31 @@ The unbatched path at concurrency 128 keeps a heavy tail — p99 ≈ 100 ms agai
 — in **both** 0.10 arms, which is queueing at 128 writes in flight rather than anything the
 transport does. The low-latency configuration remains the default (c=8): p50 8 ms, p99 12 ms.
 
+### A time-boxed run: batch 256 at concurrency 8, 60 s
+
+`20261008165744-duration-60s-batch256-c8` — `max_batch_commands: 256`,
+`concurrency: 8`, `duration_ms: 60000`, three trials, checkpoint mode. The point of a
+time-boxed run is that it does not assume a throughput: it writes for a minute and reports
+what happened, so drift over a longer window shows up.
+
+| trial | writes | w/s | p50 | p95 | p99 | commands/entry | entries/s |
+|---|---|---|---|---|---|---|---|
+| 1 | 55,856 | 930.9 | 8.3 ms | 9.4 ms | 10.2 ms | 8.00 | 116 |
+| 2 | 52,864 | 881.0 | 8.4 ms | 9.7 ms | 27.7 ms | 8.00 | 110 |
+| 3 | 55,056 | 917.5 | 8.4 ms | 9.5 ms | 11.0 ms | 8.00 | 115 |
+
+165,000 writes, zero failures, all three replicas verified. **The 256 never binds:** the
+observed batch is exactly 8.00 in every trial, because only 8 commands can be in flight —
+the batch is the concurrency. So this measures the batch-of-8 regime at concurrency 8, and
+there it is a wash against not batching at all: ~918 writes/s and p50 ~8.4 ms, against the
+unbatched concurrency-8 points above at 924–983 writes/s and p50 8.0–8.3 ms. The arithmetic
+says why: batching cuts the entry rate to ~115/s, and 115 × 8 = 920. Batching only pays once
+the batch is large enough to beat the entry-rate it costs — the same finding as the 0.9
+matrix, where batches of 2 and 4 were *worse* than none. Throughput and p50 hold flat across
+the minute (930.9 → 917.5 w/s, p50 8.33 → 8.38 ms), so nothing drifts at this scale. One
+trial's p99 is 27.7 ms against 10–11 ms in the others, which is the same tail instability
+noted under [Latency](#latency): a p99 over a few thousand samples still moves.
+
 ### The sweep that wedged, and why
 
 The first attempt at this sweep failed rather than producing numbers: a follower stopped at log
@@ -386,19 +421,28 @@ per-command view says something else — and two of my own readings turned out w
 | batch 8 | 8.0 | 1,067 | 133 | 0.94 |
 | batch 32 | 32.0 | 4,262 | 133 | 0.23 |
 | batch 128 | 127.4 | 13,781 | 108 | **0.073** |
-| batch 256, byte cap lifted | 253.2 | **20,870** | 82 | **0.048** |
+| batch 256, concurrency 256 | 253.2 | **20,870** | 82 | **0.048** |
 
 - **The entry rate does not stay flat — it falls** (777 → 133 → 133 → 108 → 82/s) while
   commands per second rises 27-fold. The per-entry cost is linear in the commands an
   entry carries, so the unbatched path is paying a fixed round trip per *command*
   (1.29 ms), and batching amortizes it away. At the top of the ladder the path spends
   its time on per-command work — about 0.048 ms per command — not on round trips.
-- **Correction: the batch-size matrix was capped by bytes, not by a ceiling.** Every
-  row used `max_batch_bytes: 262144`, which at ~2 KB per command stops a batch at
-  ~127 commands — so "batch 256" and "batch 512" silently measured batch 128, and the
-  apparent plateau at ~13,000 was that cap. With the cap lifted to 8 MB, a batch of
-  256 reaches **20,870 writes/s**. An earlier reading of mine ("the apply ceiling is
-  ~13,000/s") was wrong for the same reason.
+- **Correction to the correction: the batch-size matrix was capped by *concurrency*,
+  not by bytes.** Every row ran at concurrency 128, so "batch 256" and "batch 512"
+  silently measured one concurrency's worth — the observed 127.4. This was first
+  written up as a *byte* cap (`max_batch_bytes: 262144` at ~2 KB per command), and that
+  arithmetic is wrong for this workload: commands encode to **741 bytes** here
+  (`command_json_bytes`, median over 55,856 samples in
+  `20261008165744-duration-60s-batch256-c8`), so the default budget allows ~354
+  commands and cannot be what stopped a batch at 127. The earlier "byte cap lifted" run
+  had raised the byte budget *and* concurrency 128 → 256, and so credited the wrong
+  knob. Holding the default byte budget and raising only concurrency reproduces it:
+  batch 256 at concurrency 256 gives **253.2 commands/entry and 20,741 writes/s**
+  (`20261008170210-concurrency-not-bytes`), against that run's 253.2 at 20,870. The
+  conclusion survives — ~13,000 was not a ceiling, it was a concurrency limit — but the
+  observed batch is `min(concurrency, max_batch_commands, bytes/frame)`, and here only
+  the first two have ever bound.
 - **Correction: the small-batch penalty is batches not filling.** At batch 8 with
   concurrency 8: `max_delay_ms: 0` → observed batch 4.0 → 537 writes/s; 1 ms → batch
   8.0 → 1,067; 5 ms → batch 8.0 → 1,076. The collection delay is what lets a batch

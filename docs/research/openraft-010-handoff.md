@@ -133,8 +133,13 @@ one experiment:
 * **Do not pipe a command into `tail` and read success from it.** The previous session reported
   a dependency bump as done when `cargo add` had exited 101 — the truncation hid the error.
   Verify from the files (`grep` the manifest and the lock) instead.
-* **Benchmark knobs:** `max_batch_bytes` silently caps the batch (~2 KB per command, so the
-  256 KB default stops at ~127 commands); `--snapshot-points ""` disables snapshot points; the
+* **Benchmark knobs:** the observed batch is `min(concurrency, max_batch_commands,
+  max_batch_bytes / frame)`, and in every run measured so far only **concurrency** and the
+  command limit have bound — the byte budget is a red herring here, because commands encode to
+  ~741 bytes and the 256 KB default therefore allows ~354. A "batch 256" row at concurrency 128
+  was measuring 128. `--snapshot-points ""` disables snapshot points; `--extra
+  '{"duration_ms": 60000}'` makes the measured phase a fixed *duration* rather than a fixed
+  count (and then the point's `operations` label is only the sweep's bookkeeping key); the
   harness rejects a `name_bytes` above `MAX_NAME_BYTES` (200).
 * **`act -j` accepts exactly one job id** — repeating it runs only the last one.
 
