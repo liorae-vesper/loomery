@@ -37,7 +37,7 @@ impl Default for Config {
             warmup: 100,
             operations: 1000,
             concurrency: 8,
-            name_bytes: 256,
+            name_bytes: loomery_core::workspace::MAX_NAME_BYTES,
             payload_pattern: PayloadPattern::Pseudorandom,
             worker_threads: 2,
             operation_timeout_ms: 10000,
@@ -72,8 +72,10 @@ impl Config {
             "phase timeout must cover a positive operation timeout"
         );
         anyhow::ensure!(
-            self.name_bytes > 0 && self.name_bytes <= 1024 * 1024,
-            "name_bytes must be between 1 and 1048576"
+            self.name_bytes > 0 && self.name_bytes <= loomery_core::workspace::MAX_NAME_BYTES,
+            "name_bytes must be between 1 and the domain's workspace-name bound ({}): a longer \
+             name is rejected by the state machine, which turns the whole run into rejections",
+            loomery_core::workspace::MAX_NAME_BYTES
         );
         anyhow::ensure!(
             self.group.transport.server_tls.is_some() == self.group.transport.client_tls.is_some(),

@@ -4,7 +4,7 @@
   "warmup": 100,
   "operations": 1000,
   "concurrency": 8,
-  "name_bytes": 256,
+  "name_bytes": 200,
   "payload_pattern": "pseudorandom",
   "worker_threads": 2,
   "operation_timeout_ms": 10000,
