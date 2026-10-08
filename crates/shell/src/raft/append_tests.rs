@@ -6,53 +6,55 @@ use super::{
 };
 use crate::{config::StorageConfig, test_support::bootstrap_value};
 use openraft::{
-    Entry, LogId, OptionalSend, StorageError, Vote,
-    storage::{LogFlushed, LogState, RaftLogReader, RaftLogStorage, RaftLogStorageExt},
+    OptionalSend, StorageError,
+    storage::{IOFlushed, LogState, RaftLogReader, RaftLogStorage, RaftLogStorageExt},
     testing::blank_ent,
 };
-use std::{collections::BTreeMap, fmt::Debug, ops::RangeBounds, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, fmt::Debug, io, ops::RangeBounds, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, task::JoinHandle, time::timeout};
 
-type Completion = JoinHandle<Result<(), StorageError<u64>>>;
+use super::alias::{EntryOf, LogIdOf, VoteOf};
 
-// LogFlushed::new is private. Use the public blocking_append helper to obtain
+type Completion = JoinHandle<Result<(), StorageError<TypeConfig>>>;
+
+// IOFlushed::new is private. Use the public blocking_append helper to obtain
 // a genuine OpenRaft callback, keeping its receiver alive in a separate task.
 // This fixture delays captured callbacks; log visibility uses an in-memory store.
 struct CallbackSource {
     reader: MemLogStore,
-    sender: mpsc::UnboundedSender<LogFlushed<TypeConfig>>,
+    sender: mpsc::UnboundedSender<IOFlushed<TypeConfig>>,
     commands_only: bool,
 }
 impl RaftLogReader<TypeConfig> for CallbackSource {
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<TypeConfig>>, StorageError<u64>> {
+    ) -> Result<Vec<EntryOf>, io::Error> {
         self.reader.try_get_log_entries(range).await
+    }
+    async fn read_vote(&mut self) -> Result<Option<VoteOf>, io::Error> {
+        self.reader.read_vote().await
     }
 }
 impl RaftLogStorage<TypeConfig> for CallbackSource {
     type LogReader = MemLogStore;
 
-    async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, StorageError<u64>> {
+    async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, io::Error> {
         self.reader.get_log_state().await
     }
     fn get_log_reader(&mut self) -> impl std::future::Future<Output = Self::LogReader> + Send {
         std::future::ready(self.reader.clone())
     }
-    async fn save_vote(&mut self, vote: &Vote<u64>) -> Result<(), StorageError<u64>> {
+    async fn save_vote(&mut self, vote: &VoteOf) -> Result<(), io::Error> {
         self.reader.save_vote(vote).await
-    }
-    async fn read_vote(&mut self) -> Result<Option<Vote<u64>>, StorageError<u64>> {
-        self.reader.read_vote().await
     }
     async fn append<I>(
         &mut self,
         entries: I,
-        callback: LogFlushed<TypeConfig>,
-    ) -> Result<(), StorageError<u64>>
+        callback: IOFlushed<TypeConfig>,
+    ) -> Result<(), io::Error>
     where
-        I: IntoIterator<Item = Entry<TypeConfig>> + OptionalSend,
+        I: IntoIterator<Item = EntryOf> + OptionalSend,
         I::IntoIter: OptionalSend,
     {
         let entries: Vec<_> = entries.into_iter().collect();
@@ -63,22 +65,25 @@ impl RaftLogStorage<TypeConfig> for CallbackSource {
         {
             // Entries become readable before returning, but the original callback
             // stays pending until the test acknowledges it explicitly.
-            self.reader.blocking_append(entries).await?;
+            self.reader
+                .blocking_append(entries)
+                .await
+                .map_err(|error| io::Error::other(error.to_string()))?;
             assert!(self.sender.send(callback).is_ok());
             Ok(())
         } else {
             self.reader.append(entries, callback).await
         }
     }
-    async fn truncate(&mut self, log_id: LogId<u64>) -> Result<(), StorageError<u64>> {
-        self.reader.truncate(log_id).await
+    async fn truncate_after(&mut self, last_log_id: Option<LogIdOf>) -> Result<(), io::Error> {
+        self.reader.truncate_after(last_log_id).await
     }
-    async fn purge(&mut self, log_id: LogId<u64>) -> Result<(), StorageError<u64>> {
+    async fn purge(&mut self, log_id: LogIdOf) -> Result<(), io::Error> {
         self.reader.purge(log_id).await
     }
 }
 
-async fn callback() -> (LogFlushed<TypeConfig>, Completion) {
+async fn callback() -> (IOFlushed<TypeConfig>, Completion) {
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let mut source = CallbackSource {
         reader: MemLogStore::default(),
@@ -97,8 +102,14 @@ async fn callback() -> (LogFlushed<TypeConfig>, Completion) {
     (callback, completion)
 }
 
+/// 0.9 serialized local appends behind the previous flush; 0.10 does not — the
+/// core tracks IO completion with a watermark instead, so a second client write
+/// reaches `RaftLogStorage::append` while the first is still unflushed. That is
+/// the pipelining this branch exists for. What must not change is that an entry
+/// is readable as soon as `append` returns, and that a client is answered only
+/// once a flush covering its entry has completed.
 #[tokio::test]
-async fn pinned_raft_core_waits_for_flush_before_appending_the_next_client_write() {
+async fn a_second_append_is_not_serialized_behind_the_first_flush() {
     let (sender, mut callbacks) = mpsc::unbounded_channel();
     let mut reader = MemLogStore::default();
     let store = CallbackSource {
@@ -142,39 +153,41 @@ async fn pinned_raft_core_waits_for_flush_before_appending_the_next_client_write
     let second_raft = raft.clone();
     let second = tokio::spawn(async move { second_raft.client_write(command).await });
 
-    // The first append is visible, yet neither the client response nor another
-    // append may progress while the core is waiting for its flush callback.
-    assert!(
-        timeout(Duration::from_millis(100), &mut first)
-            .await
-            .is_err()
-    );
-    assert!(
-        callbacks.try_recv().is_err(),
-        "no second append to group into the WAL sync"
-    );
+    // 0.10 appends the next entry without waiting for the previous flush: both
+    // callbacks are outstanding at once.
+    let second_callback = timeout(Duration::from_secs(5), callbacks.recv())
+        .await
+        .expect("0.10 does not wait for the previous flush before the next append")
+        .unwrap();
+
+    // Both entries are readable before either flush: `append` makes them visible,
+    // only the callback makes them durable.
     let entries = reader.try_get_log_entries(..).await.unwrap();
     assert_eq!(
         entries
             .iter()
             .filter(|entry| matches!(entry.payload, openraft::EntryPayload::Normal(_)))
             .count(),
-        1
+        2
+    );
+    // Neither client may be answered while its entry is unflushed.
+    assert!(
+        timeout(Duration::from_millis(100), &mut first)
+            .await
+            .is_err()
     );
     assert!(!second.is_finished());
 
-    first_callback.log_io_completed(Ok(()));
-    let second_callback = timeout(Duration::from_secs(5), callbacks.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(!second.is_finished());
-    second_callback.log_io_completed(Ok(()));
+    // The first flush covers the first entry, so that client is answered; the
+    // second entry is still unflushed, so its client is not.
+    first_callback.io_completed(Ok(()));
     timeout(Duration::from_secs(5), first)
         .await
         .unwrap()
         .unwrap()
         .unwrap();
+    assert!(!second.is_finished());
+    second_callback.io_completed(Ok(()));
     timeout(Duration::from_secs(5), second)
         .await
         .unwrap()
@@ -183,7 +196,7 @@ async fn pinned_raft_core_waits_for_flush_before_appending_the_next_client_write
     raft.shutdown().await.unwrap();
 }
 
-async fn completed(completion: Completion) -> Result<(), Box<StorageError<u64>>> {
+async fn completed(completion: Completion) -> Result<(), Box<StorageError<TypeConfig>>> {
     timeout(Duration::from_secs(5), completion)
         .await
         .expect("append must complete its flush callback")
@@ -261,7 +274,7 @@ async fn batched_clients_wait_for_their_shared_flush_callback() {
             .is_err()
     );
     assert!(callbacks.try_recv().is_err());
-    callback.log_io_completed(Ok(()));
+    callback.io_completed(Ok(()));
     let (first, second) = timeout(Duration::from_secs(5), clients)
         .await
         .unwrap()
@@ -333,7 +346,7 @@ async fn failed_flush_never_acknowledges_or_applies_any_batched_command() {
     assert!(!clients.is_finished());
     // The entries are visible, but durability failed. Returning append Ok must
     // never turn this callback error into a successful client acknowledgement.
-    callback.log_io_completed(Err(std::io::Error::other("injected WAL sync failure")));
+    callback.io_completed(Err(std::io::Error::other("injected WAL sync failure")));
     let (first, second) = timeout(Duration::from_secs(5), clients)
         .await
         .unwrap()

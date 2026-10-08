@@ -13,6 +13,8 @@
 
 use std::time::Duration;
 
+use openraft::type_config::async_runtime::WatchReceiver;
+
 use crate::raft::RaftGroup;
 
 /// What the read-your-writes gate decided.
@@ -46,7 +48,9 @@ pub async fn ensure_min_index(group: &RaftGroup, min_index: u64, hold: Duration)
     }
 
     let receiver = group.raft().metrics();
-    let metrics = receiver.borrow();
+    // 0.10 metrics travel over the runtime-agnostic watch channel: reading the
+    // current value is `borrow_watched` rather than tokio's `borrow`.
+    let metrics = receiver.borrow_watched();
     classify(
         metrics.last_applied.map_or(0, |log_id| log_id.index),
         min_index,
@@ -112,7 +116,7 @@ mod tests {
         let applied = group
             .raft()
             .metrics()
-            .borrow()
+            .borrow_watched()
             .last_applied
             .map_or(0, |log_id| log_id.index);
         assert!(applied > 0);

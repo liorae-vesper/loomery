@@ -7,6 +7,7 @@ use crate::{
     test_support::{bootstrap_value, organization},
 };
 use openraft::BasicNode;
+use openraft::type_config::async_runtime::WatchReceiver;
 use std::{collections::BTreeMap, time::Duration};
 
 fn config(mode: StatePersistence) -> GroupConfig {
@@ -56,7 +57,12 @@ async fn concurrent_writers_share_an_entry_and_recover_each_command_in_both_mode
     for mode in [StatePersistence::Checkpoint, StatePersistence::Snapshot] {
         let directory = tempfile::tempdir().unwrap();
         let group = boot(directory.path(), config(mode)).await;
-        let before = group.raft().metrics().borrow().last_log_index.unwrap();
+        let before = group
+            .raft()
+            .metrics()
+            .borrow_watched()
+            .last_log_index
+            .unwrap();
         let writer = group.writer();
         let other = writer.clone();
         let [first, second, third] = commands();
@@ -145,7 +151,12 @@ async fn count_and_byte_limits_split_batches_without_losing_commands() {
         }
         config.proposals.queue_capacity = 1;
         let group = boot(directory.path(), config).await;
-        let before = group.raft().metrics().borrow().last_log_index.unwrap();
+        let before = group
+            .raft()
+            .metrics()
+            .borrow_watched()
+            .last_log_index
+            .unwrap();
         let writer = group.writer();
         let [first, second, third] = commands;
         let (a, b, c) = tokio::join!(
@@ -154,7 +165,12 @@ async fn count_and_byte_limits_split_batches_without_losing_commands() {
             writer.propose(third)
         );
         assert!(a.is_ok() && b.is_ok() && c.is_ok());
-        let after = group.raft().metrics().borrow().last_log_index.unwrap();
+        let after = group
+            .raft()
+            .metrics()
+            .borrow_watched()
+            .last_log_index
+            .unwrap();
         assert_eq!(after - before, if byte_limited { 3 } else { 2 });
         assert_eq!(
             group
@@ -180,7 +196,7 @@ async fn a_lone_command_finishes_and_oversized_commands_never_enter_raft() {
         .await
         .unwrap()
         .unwrap();
-    let before = group.raft().metrics().borrow().last_log_index;
+    let before = group.raft().metrics().borrow_watched().last_log_index;
     let mut oversized = command;
     oversized.payload.data.push_str(&"x".repeat(1000));
     assert!(
@@ -191,7 +207,10 @@ async fn a_lone_command_finishes_and_oversized_commands_never_enter_raft() {
             .to_string()
             .contains("byte limit")
     );
-    assert_eq!(group.raft().metrics().borrow().last_log_index, before);
+    assert_eq!(
+        group.raft().metrics().borrow_watched().last_log_index,
+        before
+    );
     group.shutdown().await.unwrap();
 }
 

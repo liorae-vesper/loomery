@@ -21,19 +21,17 @@ use std::future::Future;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use openraft::Entry;
-use openraft::LogId;
 use openraft::OptionalSend;
-use openraft::RaftLogId;
-use openraft::StorageError;
-use openraft::Vote;
-use openraft::storage::LogFlushed;
+use openraft::storage::IOFlushed;
 use openraft::storage::LogState;
 use openraft::storage::RaftLogReader;
 use openraft::storage::RaftLogStorage;
 use tokio::sync::RwLock;
 
 use super::TypeConfig;
+use super::alias::EntryOf;
+use super::alias::LogIdOf;
+use super::alias::VoteOf;
 
 /// The in-memory replicated log, vote and commit pointer of one group.
 #[derive(Debug, Clone)]
@@ -45,13 +43,13 @@ pub struct MemLogStore {
 #[derive(Debug, Default)]
 struct LogStoreState {
     /// The last vote this replica persisted.
-    vote: Option<Vote<u64>>,
+    vote: Option<VoteOf>,
     /// The log entries, keyed by index.
-    entries: BTreeMap<u64, Entry<TypeConfig>>,
+    entries: BTreeMap<u64, EntryOf>,
     /// The committed pointer, when it has been saved.
-    committed: Option<LogId<u64>>,
+    committed: Option<LogIdOf>,
     /// Entries at or below this id have been purged and must not be read again.
-    last_purged: Option<LogId<u64>>,
+    last_purged: Option<LogIdOf>,
 }
 
 impl Default for MemLogStore {
@@ -66,7 +64,7 @@ impl RaftLogReader<TypeConfig> for MemLogStore {
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<TypeConfig>>, StorageError<u64>> {
+    ) -> Result<Vec<EntryOf>, std::io::Error> {
         let state = self.inner.read().await;
         Ok(state
             .entries
@@ -74,12 +72,18 @@ impl RaftLogReader<TypeConfig> for MemLogStore {
             .map(|(_, entry)| entry.clone())
             .collect())
     }
+
+    // The vote is part of the log, but reading it is the *reader's* job in 0.10:
+    // replication reads it to check that a log stream still belongs to the leader.
+    async fn read_vote(&mut self) -> Result<Option<VoteOf>, std::io::Error> {
+        Ok(self.inner.read().await.vote)
+    }
 }
 
 impl RaftLogStorage<TypeConfig> for MemLogStore {
     type LogReader = Self;
 
-    async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, StorageError<u64>> {
+    async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, std::io::Error> {
         let state = self.inner.read().await;
 
         // The last present entry wins; with an empty log the answer is the
@@ -88,7 +92,7 @@ impl RaftLogStorage<TypeConfig> for MemLogStore {
             .entries
             .values()
             .next_back()
-            .map(|entry| *entry.get_log_id())
+            .map(|entry| entry.log_id)
             .or(state.last_purged);
 
         Ok(LogState {
@@ -100,39 +104,32 @@ impl RaftLogStorage<TypeConfig> for MemLogStore {
     fn get_log_reader(&mut self) -> impl Future<Output = Self::LogReader> + Send {
         std::future::ready(self.clone())
     }
-    async fn save_vote(&mut self, vote: &Vote<u64>) -> Result<(), StorageError<u64>> {
+    async fn save_vote(&mut self, vote: &VoteOf) -> Result<(), std::io::Error> {
         let mut state = self.inner.write().await;
         state.vote = Some(*vote);
         Ok(())
     }
 
-    async fn read_vote(&mut self) -> Result<Option<Vote<u64>>, StorageError<u64>> {
-        Ok(self.inner.read().await.vote)
-    }
-
-    async fn save_committed(
-        &mut self,
-        committed: Option<LogId<u64>>,
-    ) -> Result<(), StorageError<u64>> {
+    async fn save_committed(&mut self, committed: Option<LogIdOf>) -> Result<(), std::io::Error> {
         let mut state = self.inner.write().await;
         state.committed = committed;
         Ok(())
     }
 
-    async fn read_committed(&mut self) -> Result<Option<LogId<u64>>, StorageError<u64>> {
+    async fn read_committed(&mut self) -> Result<Option<LogIdOf>, std::io::Error> {
         Ok(self.inner.read().await.committed)
     }
 
     async fn append<I>(
         &mut self,
         entries: I,
-        callback: LogFlushed<TypeConfig>,
-    ) -> Result<(), StorageError<u64>>
+        callback: IOFlushed<TypeConfig>,
+    ) -> Result<(), std::io::Error>
     where
-        I: IntoIterator<Item = Entry<TypeConfig>> + OptionalSend,
+        I: IntoIterator<Item = EntryOf> + OptionalSend,
         I::IntoIter: OptionalSend,
     {
-        let entries: Vec<Entry<TypeConfig>> = entries.into_iter().collect();
+        let entries: Vec<EntryOf> = entries.into_iter().collect();
 
         {
             let mut state = self.inner.write().await;
@@ -151,17 +148,26 @@ impl RaftLogStorage<TypeConfig> for MemLogStore {
         }
 
         // In-memory writes are durable as soon as the lock is released.
-        callback.log_io_completed(Ok(()));
+        callback.io_completed(Ok(()));
         Ok(())
     }
 
-    async fn truncate(&mut self, log_id: LogId<u64>) -> Result<(), StorageError<u64>> {
+    /// Removes every entry after `last_log_id` (exclusive), which is 0.10's
+    /// spelling of 0.9's "truncate since `log_id`, inclusive".
+    async fn truncate_after(&mut self, last_log_id: Option<LogIdOf>) -> Result<(), std::io::Error> {
         let mut state = self.inner.write().await;
-        state.entries.split_off(&log_id.index);
+        match last_log_id.and_then(|id| id.index.checked_add(1)) {
+            Some(after) => {
+                state.entries.split_off(&after);
+            }
+            // `None`, or a kept id at the index ceiling: nothing can follow it.
+            None if last_log_id.is_none() => state.entries.clear(),
+            None => {}
+        }
         Ok(())
     }
 
-    async fn purge(&mut self, log_id: LogId<u64>) -> Result<(), StorageError<u64>> {
+    async fn purge(&mut self, log_id: LogIdOf) -> Result<(), std::io::Error> {
         let mut state = self.inner.write().await;
         state.entries.retain(|index, _| *index > log_id.index);
         state.last_purged = Some(log_id);
@@ -172,14 +178,19 @@ impl RaftLogStorage<TypeConfig> for MemLogStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openraft::LogId;
     use openraft::testing::blank_ent;
 
     fn store() -> MemLogStore {
         MemLogStore::default()
     }
 
-    fn blank(index: u64) -> Entry<TypeConfig> {
+    fn blank(index: u64) -> EntryOf {
         blank_ent::<TypeConfig>(1, 1, index)
+    }
+
+    fn id(index: u64) -> LogIdOf {
+        LogId::new(blank(index).log_id.leader_id, index)
     }
 
     /// Seeds entries behind the lock. `append` itself needs an `OpenRaft`-built
@@ -215,14 +226,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn truncate_drops_the_conflicting_suffix() {
+    async fn truncate_after_keeps_the_named_entry_and_drops_the_suffix() {
         let mut store = store();
         seed(&store, &[1, 2, 3]).await;
 
-        store
-            .truncate(LogId::new(blank(2).log_id.leader_id, 2))
-            .await
-            .unwrap();
+        // 0.10's contract is "drop everything after this id": entry 1 is kept.
+        store.truncate_after(Some(id(1))).await.unwrap();
 
         assert_eq!(
             store
@@ -237,14 +246,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn truncate_after_nothing_empties_the_log() {
+        let mut store = store();
+        seed(&store, &[1, 2, 3]).await;
+
+        store.truncate_after(None).await.unwrap();
+
+        assert_eq!(store.get_log_state().await.unwrap().last_log_id, None);
+        assert!(store.try_get_log_entries(..).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn purge_moves_the_floor() {
         let mut store = store();
         seed(&store, &[1, 2, 3]).await;
 
-        store
-            .purge(LogId::new(blank(2).log_id.leader_id, 2))
-            .await
-            .unwrap();
+        store.purge(id(2)).await.unwrap();
 
         let state = store.get_log_state().await.unwrap();
         assert_eq!(state.last_purged_log_id.map(|id| id.index), Some(2));

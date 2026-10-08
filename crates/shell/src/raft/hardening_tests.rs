@@ -25,6 +25,7 @@ use loomery_core::timestamp::Timestamp;
 use openraft::BasicNode;
 use openraft::RaftSnapshotBuilder;
 use openraft::storage::RaftStateMachine;
+use openraft::type_config::async_runtime::WatchReceiver;
 
 use crate::config::GroupConfig;
 use crate::config::StatePersistence;
@@ -110,7 +111,7 @@ async fn history_survives_snapshot_and_restart(mode: StatePersistence, commands:
     let applied = group
         .raft()
         .metrics()
-        .borrow()
+        .borrow_watched()
         .last_applied
         .map_or(0, |log_id| log_id.index);
     assert_eq!(
@@ -142,7 +143,7 @@ async fn history_survives_snapshot_and_restart(mode: StatePersistence, commands:
         group
             .raft()
             .metrics()
-            .borrow()
+            .borrow_watched()
             .last_applied
             .map_or(0, |log_id| log_id.index)
             >= applied,
@@ -264,7 +265,7 @@ async fn soak(mode: StatePersistence, commands: u64) {
     let applied_index = group
         .raft()
         .metrics()
-        .borrow()
+        .borrow_watched()
         .last_applied
         .map_or(0, |log_id| log_id.index);
     group.shutdown().await.unwrap();
@@ -287,7 +288,7 @@ async fn soak(mode: StatePersistence, commands: u64) {
         group
             .raft()
             .metrics()
-            .borrow()
+            .borrow_watched()
             .last_applied
             .map_or(0, |log_id| log_id.index)
             >= applied_index,

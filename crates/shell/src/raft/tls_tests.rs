@@ -7,7 +7,7 @@ use super::{
 use crate::config::{ClientTls, GroupConfig, ServerTls, TlsIdentity, TransportConfig};
 use openraft::{
     BasicNode, Vote,
-    network::{RPCOption, RaftNetwork, RaftNetworkFactory},
+    network::{RPCOption, RaftNetworkFactory, v2::RaftNetworkV2},
     raft::VoteRequest,
 };
 use rcgen::{

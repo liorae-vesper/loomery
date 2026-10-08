@@ -22,6 +22,7 @@ use openraft::error::RaftError;
 
 use super::Applied;
 use super::ProposalWriter;
+use super::RaftHandle;
 use super::TypeConfig;
 use super::log_store::MemLogStore;
 use super::network::NoopNetworkFactory;
@@ -38,7 +39,7 @@ use crate::group::ProposeOutcome;
 /// tail's.
 #[derive(Clone)]
 pub struct RaftGroup {
-    raft: Raft<TypeConfig>,
+    raft: RaftHandle,
     writer: ProposalWriter,
     pub(super) state_machine: Arc<MemStateMachine>,
 }
@@ -46,7 +47,7 @@ pub struct RaftGroup {
 impl RaftGroup {
     /// Wraps an already-booted Raft handle and its state machine.
     #[must_use]
-    pub fn new(raft: Raft<TypeConfig>, state_machine: Arc<MemStateMachine>) -> Self {
+    pub fn new(raft: RaftHandle, state_machine: Arc<MemStateMachine>) -> Self {
         Self {
             writer: ProposalWriter::new(raft.clone(), crate::config::ProposalConfig::default()),
             raft,
@@ -145,7 +146,7 @@ impl RaftGroup {
     /// Consensus handle for transport registration, metrics, initialization,
     /// learner admission and membership changes.
     #[must_use]
-    pub fn raft(&self) -> Raft<TypeConfig> {
+    pub fn raft(&self) -> RaftHandle {
         self.raft.clone()
     }
 
@@ -254,7 +255,9 @@ pub enum ProposeError {
 /// Backoff and routing belong *outside* the worker: this only says what the
 /// failure was, and every non-membership variant is retryable in the sense that
 /// re-reading the log first is always safe.
-pub(super) fn classify(error: RaftError<u64, ClientWriteError<u64, BasicNode>>) -> anyhow::Error {
+pub(super) fn classify(
+    error: RaftError<TypeConfig, ClientWriteError<TypeConfig>>,
+) -> anyhow::Error {
     match error {
         RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) => {
             anyhow::Error::new(ProposeError::ForwardToLeader {

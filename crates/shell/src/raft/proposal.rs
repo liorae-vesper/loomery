@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Bounded command batching above the pinned, serialized Raft append path.
 use super::{
-    AppData, Applied, ProposeError, TypeConfig,
+    AppData, Applied, ProposeError, RaftHandle,
     port::{classify, outcome},
 };
 use crate::{config::ProposalConfig, group::ProposeOutcome};
 use loomery_core::envelope::Command;
-use openraft::Raft;
 use std::{
     sync::{
         Arc,
@@ -27,7 +26,7 @@ struct Request {
     reply: Reply,
 }
 struct Writer {
-    raft: Raft<TypeConfig>,
+    raft: RaftHandle,
     queue: Option<mpsc::Sender<Request>>,
     max_bytes: usize,
     stopped: AtomicBool,
@@ -48,7 +47,7 @@ impl Drop for Writer {
 #[derive(Clone)]
 pub struct ProposalWriter(Arc<Writer>);
 impl ProposalWriter {
-    pub(super) fn new(raft: Raft<TypeConfig>, config: ProposalConfig) -> Self {
+    pub(super) fn new(raft: RaftHandle, config: ProposalConfig) -> Self {
         let (queue, task) = if config.max_batch_commands > 1 {
             let (tx, rx) = mpsc::channel(config.queue_capacity);
             let raft = raft.clone();
@@ -124,7 +123,7 @@ fn unknown(message: &str) -> anyhow::Error {
     anyhow::Error::new(ProposeError::Unknown(anyhow::anyhow!(message.to_owned())))
 }
 
-async fn run(raft: Raft<TypeConfig>, mut queue: mpsc::Receiver<Request>, config: ProposalConfig) {
+async fn run(raft: RaftHandle, mut queue: mpsc::Receiver<Request>, config: ProposalConfig) {
     let mut pending = None;
     loop {
         let first = if let Some(request) = pending.take() {
@@ -170,7 +169,7 @@ async fn run(raft: Raft<TypeConfig>, mut queue: mpsc::Receiver<Request>, config:
     }
 }
 
-async fn submit(raft: &Raft<TypeConfig>, requests: Vec<Request>) {
+async fn submit(raft: &RaftHandle, requests: Vec<Request>) {
     let (commands, replies): (Vec<_>, Vec<_>) =
         requests.into_iter().map(|r| (r.command, r.reply)).unzip();
     let batched = commands.len() > 1;

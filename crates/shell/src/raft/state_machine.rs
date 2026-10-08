@@ -22,10 +22,9 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::io;
 use std::io::Cursor;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 
 use tokio::sync::watch;
 
@@ -74,26 +73,26 @@ use loomery_core::workspace::CREATE as CREATE_WORKSPACE;
 use loomery_core::workspace::Workspace;
 use loomery_core::workspace::WorkspaceCode;
 use loomery_core::workspace::WorkspaceState;
-use openraft::BasicNode;
-use openraft::Entry;
 use openraft::EntryPayload;
-use openraft::LogId;
 use openraft::OptionalSend;
 use openraft::RaftSnapshotBuilder;
-use openraft::SnapshotMeta;
-use openraft::StorageError;
-use openraft::StorageIOError;
-use openraft::StoredMembership;
+use openraft::storage::EntryResponder;
 use openraft::storage::RaftStateMachine;
-use openraft::storage::Snapshot;
 use rocksdb::{WriteBatch, WriteOptions};
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
+use tokio_stream::Stream;
+use tokio_stream::StreamExt;
 
 use super::AppData;
 use super::Applied;
 use super::TypeConfig;
+use super::alias::EntryOf;
+use super::alias::LogIdOf;
+use super::alias::SnapshotMetaOf;
+use super::alias::SnapshotOf;
+use super::alias::StoredMembershipOf;
 use super::disk::Family;
 
 /// How many processed causation keys the dedup window keeps.
@@ -111,8 +110,6 @@ pub struct MemStateMachine {
     state: RwLock<GroupState>,
     disk: Option<super::disk::Disk>,
     persistence: crate::config::StatePersistence,
-    /// Identifier counter for snapshots (snapshot ids need only be unique).
-    snapshot_idx: AtomicU64,
     /// The last snapshot this replica built or received.
     current_snapshot: RwLock<Option<StoredSnapshot>>,
     /// Notifies the host's workers that the applied log moved.
@@ -129,7 +126,6 @@ impl Default for MemStateMachine {
             state: RwLock::new(GroupState::default()),
             disk: None,
             persistence: crate::config::StatePersistence::Checkpoint,
-            snapshot_idx: AtomicU64::new(0),
             current_snapshot: RwLock::new(None),
             applied: watch::channel(0).0,
         }
@@ -140,9 +136,9 @@ impl Default for MemStateMachine {
 #[derive(Debug)]
 struct GroupState {
     /// The last log id applied.
-    last_applied_log: Option<LogId<u64>>,
+    last_applied_log: Option<LogIdOf>,
     /// The last membership applied.
-    last_membership: StoredMembership<u64, BasicNode>,
+    last_membership: StoredMembershipOf,
     /// One entry per aggregate stream, keyed by `aggregate_id`.
     streams: BTreeMap<Id, AggregateState>,
     /// Every event the group has applied, in log order — what
@@ -313,7 +309,7 @@ impl Default for GroupState {
     fn default() -> Self {
         Self {
             last_applied_log: None,
-            last_membership: StoredMembership::default(),
+            last_membership: StoredMembershipOf::default(),
             streams: BTreeMap::new(),
             applied: Vec::new(),
             registry: Registry::new(DEDUP_WINDOW),
@@ -365,9 +361,9 @@ struct SnapshotData {
     #[serde(default = "snapshot_version")]
     version: u32,
     /// The last applied log id at snapshot time.
-    last_applied_log: Option<LogId<u64>>,
+    last_applied_log: Option<LogIdOf>,
     /// The last applied membership at snapshot time.
-    last_membership: StoredMembership<u64, BasicNode>,
+    last_membership: StoredMembershipOf,
     /// The per-stream states.
     streams: BTreeMap<Id, AggregateState>,
     /// The applied-event log.
@@ -384,7 +380,7 @@ fn snapshot_version() -> u32 {
 #[derive(Debug, Serialize, Deserialize)]
 struct StoredSnapshot {
     /// The snapshot's metadata.
-    meta: SnapshotMeta<u64, BasicNode>,
+    meta: SnapshotMetaOf,
     /// The serialized [`SnapshotData`].
     data: Vec<u8>,
 }
@@ -392,8 +388,8 @@ struct StoredSnapshot {
 /// The state a checkpoint-mode database holds, read back key by key.
 struct LoadedState {
     streams: BTreeMap<Id, AggregateState>,
-    applied_log: Option<LogId<u64>>,
-    membership: Option<StoredMembership<u64, BasicNode>>,
+    applied_log: Option<LogIdOf>,
+    membership: Option<StoredMembershipOf>,
     /// The dedup window, ordered by the log index each entry was recorded at.
     dedup: Vec<(Key, Key, usize)>,
 }
@@ -480,7 +476,7 @@ impl MemStateMachine {
             if let Some(stored) = &snapshot {
                 machine
                     .clone()
-                    .install_snapshot(&stored.meta, Box::new(Cursor::new(stored.data.clone())))
+                    .install_snapshot(&stored.meta, Cursor::new(stored.data.clone()))
                     .await?;
             }
         } else {
@@ -536,8 +532,7 @@ impl MemStateMachine {
     /// cost the size of the batch rather than the size of the history (D13 step 2).
     /// Snapshot mode persists no state per apply: recovery replays the log into the
     /// state a snapshot carried.
-    #[allow(clippy::result_large_err)] // OpenRaft fixes the storage error type.
-    async fn write_applied(&self, batch: Vec<AppliedEvent>) -> Result<(), StorageError<u64>> {
+    async fn write_applied(&self, batch: Vec<AppliedEvent>) -> Result<(), io::Error> {
         let Some(disk) = &self.disk else {
             return Ok(());
         };
@@ -547,8 +542,7 @@ impl MemStateMachine {
         for applied in &batch {
             events.push((
                 event_key(applied.log_index, position_in(&batch, applied)),
-                serde_json::to_vec(&applied.event)
-                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                serde_json::to_vec(&applied.event).map_err(io::Error::other)?,
             ));
         }
 
@@ -569,20 +563,17 @@ impl MemStateMachine {
                     // any string). The key is only there to place it in the family.
                     writes.push((
                         aggregate_key(&aggregate_id),
-                        serde_json::to_vec(&(&aggregate_id, state))
-                            .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                        serde_json::to_vec(&(&aggregate_id, state)).map_err(io::Error::other)?,
                     ));
                 }
             }
             writes.push((
                 APPLIED_LOG_KEY.to_vec(),
-                serde_json::to_vec(&group.last_applied_log)
-                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                serde_json::to_vec(&group.last_applied_log).map_err(io::Error::other)?,
             ));
             writes.push((
                 MEMBERSHIP_KEY.to_vec(),
-                serde_json::to_vec(&group.last_membership)
-                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                serde_json::to_vec(&group.last_membership).map_err(io::Error::other)?,
             ));
             for (key, fingerprint, first_log_index) in &group.added_dedup {
                 // The same triple the window reports, so a reader can rebuild it
@@ -590,7 +581,7 @@ impl MemStateMachine {
                 writes.push((
                     dedup_key(key),
                     serde_json::to_vec(&(key.clone(), fingerprint.clone(), *first_log_index))
-                        .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                        .map_err(io::Error::other)?,
                 ));
             }
             let deletes = group
@@ -626,26 +617,16 @@ impl MemStateMachine {
             Ok(())
         })
         .await
-        .map_err(|error| {
-            StorageIOError::write_state_machine(&std::io::Error::other(error.to_string()))
-        })?;
+        .map_err(|error| io::Error::other(error.to_string()))?;
         Ok(())
     }
 
-    #[allow(clippy::result_large_err)] // OpenRaft fixes the storage error type.
-    async fn persist(
-        &self,
-        key: &'static [u8],
-        stored: &StoredSnapshot,
-    ) -> Result<(), StorageError<u64>> {
+    async fn persist(&self, key: &'static [u8], stored: &StoredSnapshot) -> Result<(), io::Error> {
         if let Some(disk) = &self.disk {
-            let bytes =
-                serde_json::to_vec(stored).map_err(|e| StorageIOError::write_state_machine(&e))?;
+            let bytes = serde_json::to_vec(stored).map_err(io::Error::other)?;
             disk.put(Family::State, key.to_vec(), bytes)
                 .await
-                .map_err(|e| {
-                    StorageIOError::write_state_machine(&std::io::Error::other(e.to_string()))
-                })?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
         }
         Ok(())
     }
@@ -1126,8 +1107,70 @@ fn to_u64(index: usize) -> u64 {
     u64::try_from(index).unwrap_or(u64::MAX)
 }
 
+/// Applies one batch of entries and returns one response per entry, in input
+/// order.
+///
+/// Keeping the batch logic out of the [`RaftStateMachine`] impl is what lets the
+/// batching, dedup and persistence behaviour be tested without an `OpenRaft`
+/// responder: 0.10 only hands responders to the trait method.
+pub(super) async fn apply_batch(
+    machine: &MemStateMachine,
+    entries: Vec<EntryOf>,
+) -> Result<Vec<Applied>, io::Error> {
+    let mut responses = Vec::new();
+    let mut group = machine.state.write().await;
+    // Everything appended to the in-memory history while applying this batch is
+    // this batch's share of the record.
+    let recorded_from = group.applied.len();
+    group.begin_batch();
+
+    for entry in entries {
+        let log_index = entry.log_id.index;
+        group.last_applied_log = Some(entry.log_id);
+
+        match entry.payload {
+            EntryPayload::Blank => responses.push(Applied::Appended {
+                first_log_index: log_index,
+            }),
+            EntryPayload::Membership(membership) => {
+                group.last_membership = StoredMembershipOf::new(Some(entry.log_id), membership);
+                responses.push(Applied::Appended {
+                    first_log_index: log_index,
+                });
+            }
+            EntryPayload::Normal(AppData::Command(command)) => {
+                responses.push(apply_command(&mut group, command, log_index));
+            }
+            EntryPayload::Normal(AppData::Batch(commands)) => {
+                responses.push(Applied::Batch(
+                    commands
+                        .into_iter()
+                        .map(|command| apply_command(&mut group, command, log_index))
+                        .collect(),
+                ));
+            }
+        }
+    }
+
+    // Wake the host's workers: the applied log moved (outbox tailer, sagas).
+    // `send_replace` never blocks and always leaves the latest index behind.
+    if let Some(last_applied) = group.last_applied_log {
+        machine.applied.send_replace(last_applied.index);
+    }
+    let batch = group
+        .applied
+        .get(recorded_from..)
+        .unwrap_or_default()
+        .to_vec();
+    drop(group);
+    machine.write_applied(batch).await?;
+    Ok(responses)
+}
+
 impl RaftSnapshotBuilder<TypeConfig> for Arc<MemStateMachine> {
-    async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, StorageError<u64>> {
+    type SnapshotData = Cursor<Vec<u8>>;
+
+    async fn build_snapshot(&mut self) -> Result<SnapshotOf<Cursor<Vec<u8>>>, io::Error> {
         let group = self.state.read().await;
 
         let data = SnapshotData {
@@ -1142,20 +1185,15 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<MemStateMachine> {
         let last_membership = data.last_membership.clone();
         let bytes = tokio::task::spawn_blocking(move || serde_json::to_vec(&data))
             .await
-            .map_err(|error| {
-                StorageIOError::read_state_machine(&std::io::Error::other(error.to_string()))
-            })?
-            .map_err(|error| StorageIOError::read_state_machine(&error))?;
+            .map_err(|error| io::Error::other(error.to_string()))?
+            .map_err(io::Error::other)?;
 
-        let snapshot_idx = self.snapshot_idx.fetch_add(1, Ordering::Relaxed);
-        let snapshot_id = match last_applied_log {
-            Some(last) => format!("{}-{}-{snapshot_idx}", last.leader_id, last.index),
-            None => format!("--{snapshot_idx}"),
-        };
-        let meta = SnapshotMeta {
+        // 0.10 drops `snapshot_id` from the metadata: a snapshot *is* the position
+        // it covers, so a transfer id belongs on the wire (leg 5), not in the
+        // record every state machine writes.
+        let meta = SnapshotMetaOf {
             last_log_id: last_applied_log,
             last_membership,
-            snapshot_id,
         };
 
         // Take the snapshot lock *before* releasing the state lock, so a newer
@@ -1169,112 +1207,72 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<MemStateMachine> {
         self.persist(b"snapshot", &stored).await?;
         *current = Some(stored);
 
-        Ok(Snapshot {
+        Ok(SnapshotOf {
             meta,
-            snapshot: Box::new(Cursor::new(bytes)),
+            snapshot: Cursor::new(bytes),
         })
     }
 }
 
 impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
+    type SnapshotData = Cursor<Vec<u8>>;
     type SnapshotBuilder = Self;
 
-    async fn applied_state(
-        &mut self,
-    ) -> Result<(Option<LogId<u64>>, StoredMembership<u64, BasicNode>), StorageError<u64>> {
+    async fn applied_state(&mut self) -> Result<(Option<LogIdOf>, StoredMembershipOf), io::Error> {
         let group = self.state.read().await;
         Ok((group.last_applied_log, group.last_membership.clone()))
     }
 
-    async fn apply<I>(&mut self, entries: I) -> Result<Vec<Applied>, StorageError<u64>>
+    /// 0.10 hands each entry its own responder and expects the response to be
+    /// sent per entry. The stream the core feeds here is one finite
+    /// `first..=last` range, so it is collected and applied through
+    /// [`apply_batch`] in one critical section, exactly as before; the responses
+    /// go out only afterwards, because a failed durable write must not tell a
+    /// writer its command committed.
+    async fn apply<Strm>(&mut self, entries: Strm) -> Result<(), io::Error>
     where
-        I: IntoIterator<Item = Entry<TypeConfig>> + OptionalSend,
-        I::IntoIter: OptionalSend,
+        Strm: Stream<Item = Result<EntryResponder<TypeConfig>, io::Error>> + Unpin + OptionalSend,
     {
-        let mut responses = Vec::new();
-        let mut group = self.state.write().await;
-        // Everything appended to the in-memory history while applying this batch is
-        // this batch's share of the record.
-        let recorded_from = group.applied.len();
-        group.begin_batch();
+        let mut entries = entries;
+        let mut batch = Vec::new();
+        let mut responders = Vec::new();
+        while let Some(item) = entries.next().await {
+            let (entry, responder) = item?;
+            batch.push(entry);
+            responders.push(responder);
+        }
 
-        for entry in entries {
-            let log_index = entry.log_id.index;
-            group.last_applied_log = Some(entry.log_id);
+        let responses = apply_batch(self, batch).await?;
 
-            match entry.payload {
-                EntryPayload::Blank => responses.push(Applied::Appended {
-                    first_log_index: log_index,
-                }),
-                EntryPayload::Membership(membership) => {
-                    group.last_membership = StoredMembership::new(Some(entry.log_id), membership);
-                    responses.push(Applied::Appended {
-                        first_log_index: log_index,
-                    });
-                }
-                EntryPayload::Normal(AppData::Command(command)) => {
-                    responses.push(apply_command(&mut group, command, log_index));
-                }
-                EntryPayload::Normal(AppData::Batch(commands)) => {
-                    responses.push(Applied::Batch(
-                        commands
-                            .into_iter()
-                            .map(|command| apply_command(&mut group, command, log_index))
-                            .collect(),
-                    ));
-                }
+        // `apply_batch` answers exactly once per entry, so these stay aligned.
+        for (responder, response) in responders.into_iter().zip(responses) {
+            if let Some(responder) = responder {
+                responder.send(response);
             }
         }
-
-        // Wake the host's workers: the applied log moved (outbox tailer, sagas).
-        // `send_replace` never blocks and always leaves the latest index behind.
-        if let Some(last_applied) = group.last_applied_log {
-            self.applied.send_replace(last_applied.index);
-        }
-        let batch = group
-            .applied
-            .get(recorded_from..)
-            .unwrap_or_default()
-            .to_vec();
-        drop(group);
-        self.write_applied(batch).await?;
-        Ok(responses)
+        Ok(())
     }
 
     fn get_snapshot_builder(&mut self) -> impl Future<Output = Self::SnapshotBuilder> + Send {
         std::future::ready(Arc::clone(self))
     }
-    fn begin_receiving_snapshot(
-        &mut self,
-    ) -> impl std::future::Future<Output = Result<Box<Cursor<Vec<u8>>>, StorageError<u64>>> + Send
-    {
-        // Nothing to prepare: a fresh, empty buffer is the receiving handle.
-        std::future::ready(Ok(Box::new(Cursor::new(Vec::new()))))
-    }
-
     async fn install_snapshot(
         &mut self,
-        meta: &SnapshotMeta<u64, BasicNode>,
-        snapshot: Box<Cursor<Vec<u8>>>,
-    ) -> Result<(), StorageError<u64>> {
+        meta: &SnapshotMetaOf,
+        snapshot: Cursor<Vec<u8>>,
+    ) -> Result<(), io::Error> {
         let bytes = snapshot.into_inner();
-        let data: SnapshotData = serde_json::from_slice(&bytes)
-            .map_err(|error| StorageIOError::read_snapshot(Some(meta.signature()), &error))?;
+        let data: SnapshotData = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
 
         if data.version != snapshot_version() {
-            return Err(StorageIOError::read_snapshot(
-                Some(meta.signature()),
-                &std::io::Error::other("unsupported snapshot format version"),
-            )
-            .into());
+            return Err(io::Error::other("unsupported snapshot format version"));
         }
         let stored = StoredSnapshot {
             meta: meta.clone(),
             data: bytes.clone(),
         };
         if let Some(disk) = &self.disk {
-            let bytes =
-                serde_json::to_vec(&stored).map_err(|e| StorageIOError::write_state_machine(&e))?;
+            let bytes = serde_json::to_vec(&stored).map_err(io::Error::other)?;
             // The received snapshot is written the way an apply writes: one key per
             // aggregate, plus the markers the dedup window. Its events go into the
             // record too — a replica that installs a snapshot never applies the
@@ -1283,33 +1281,29 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
             for (aggregate_id, state) in &data.streams {
                 writes.push((
                     aggregate_key(aggregate_id),
-                    serde_json::to_vec(&(aggregate_id, state))
-                        .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                    serde_json::to_vec(&(aggregate_id, state)).map_err(io::Error::other)?,
                 ));
             }
             writes.push((
                 APPLIED_LOG_KEY.to_vec(),
-                serde_json::to_vec(&data.last_applied_log)
-                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                serde_json::to_vec(&data.last_applied_log).map_err(io::Error::other)?,
             ));
             writes.push((
                 MEMBERSHIP_KEY.to_vec(),
-                serde_json::to_vec(&data.last_membership)
-                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                serde_json::to_vec(&data.last_membership).map_err(io::Error::other)?,
             ));
             for (key, fingerprint, index) in &data.dedup {
                 writes.push((
                     dedup_key(key),
                     serde_json::to_vec(&(key.clone(), fingerprint.clone(), *index))
-                        .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                        .map_err(io::Error::other)?,
                 ));
             }
             let mut events = Vec::with_capacity(data.applied.len());
             for applied in &data.applied {
                 events.push((
                     event_key(applied.log_index, position_in(&data.applied, applied)),
-                    serde_json::to_vec(&applied.event)
-                        .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                    serde_json::to_vec(&applied.event).map_err(io::Error::other)?,
                 ));
             }
             disk.run(move |db| {
@@ -1331,9 +1325,7 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
                 Ok(())
             })
             .await
-            .map_err(|e| {
-                StorageIOError::write_state_machine(&std::io::Error::other(e.to_string()))
-            })?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         }
         let mut group = self.state.write().await;
         group.last_applied_log = meta.last_log_id;
@@ -1363,11 +1355,11 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
 
     async fn get_current_snapshot(
         &mut self,
-    ) -> Result<Option<Snapshot<TypeConfig>>, StorageError<u64>> {
+    ) -> Result<Option<SnapshotOf<Cursor<Vec<u8>>>>, io::Error> {
         match &*self.current_snapshot.read().await {
-            Some(stored) => Ok(Some(Snapshot {
+            Some(stored) => Ok(Some(SnapshotOf {
                 meta: stored.meta.clone(),
-                snapshot: Box::new(Cursor::new(stored.data.clone())),
+                snapshot: Cursor::new(stored.data.clone()),
             })),
             None => Ok(None),
         }
@@ -1380,16 +1372,20 @@ mod tests {
     use crate::test_support::{bootstrap_value, organization};
     use loomery_genesis::Step;
 
+    /// A log id in term 1, proposed by node 1.
+    fn log_id(index: u64) -> LogIdOf {
+        use openraft::vote::RaftLeaderId;
+        use openraft::vote::leader_id_adv::LeaderId;
+        LogIdOf::new(LeaderId::new(1, 1), index)
+    }
+
     /// Applies one command the way `OpenRaft` would, then reads the response.
     async fn apply_one(machine: &Arc<MemStateMachine>, command: Command) -> Applied {
-        let entry = Entry {
-            log_id: LogId::new(
-                openraft::CommittedLeaderId::new(1, 1),
-                command_index(machine).await,
-            ),
+        let entry = EntryOf {
+            log_id: log_id(command_index(machine).await),
             payload: EntryPayload::Normal(AppData::Command(command)),
         };
-        machine.clone().apply([entry]).await.unwrap().remove(0)
+        apply_batch(machine, vec![entry]).await.unwrap().remove(0)
     }
 
     /// The next index for a test entry — derived from what has been applied.
@@ -1434,11 +1430,11 @@ mod tests {
         rejected.command_type = "task.create".to_owned();
         let second = bootstrap.command(Step::CreateWorkspace).unwrap();
         let commands = vec![first.clone(), first.clone(), rejected, second.clone()];
-        let entry = Entry {
-            log_id: LogId::new(openraft::CommittedLeaderId::new(1, 1), 42),
+        let entry = EntryOf {
+            log_id: log_id(42),
             payload: EntryPayload::Normal(AppData::Batch(commands)),
         };
-        let results = machine.clone().apply([entry]).await.unwrap();
+        let results = apply_batch(&machine, vec![entry]).await.unwrap();
         let results = match results.into_iter().next() {
             Some(Applied::Batch(results)) => results,
             _ => Vec::new(),
@@ -1499,10 +1495,7 @@ mod tests {
         let restored = Arc::new(MemStateMachine::default());
         restored
             .clone()
-            .install_snapshot(
-                &snapshot.meta,
-                Box::new(Cursor::new(snapshot.snapshot.into_inner())),
-            )
+            .install_snapshot(&snapshot.meta, Cursor::new(snapshot.snapshot.into_inner()))
             .await
             .unwrap();
 
@@ -1731,7 +1724,13 @@ mod control_tests {
     use loomery_core::envelope::Payload;
     use loomery_core::tenant::TenantStatus;
     use loomery_core::timestamp::Timestamp;
-    use openraft::CommittedLeaderId;
+
+    /// A log id in term 1, proposed by node 1.
+    fn log_id(index: u64) -> LogIdOf {
+        use openraft::vote::RaftLeaderId;
+        use openraft::vote::leader_id_adv::LeaderId;
+        LogIdOf::new(LeaderId::new(1, 1), index)
+    }
 
     fn tenant_command(command_type: &str, payload: &str) -> Command {
         Command {
@@ -1759,11 +1758,11 @@ mod control_tests {
     }
 
     async fn apply_one(machine: &Arc<MemStateMachine>, command: Command) -> Applied {
-        let entry = Entry {
-            log_id: LogId::new(CommittedLeaderId::new(1, 1), 1),
+        let entry = EntryOf {
+            log_id: log_id(1),
             payload: EntryPayload::Normal(AppData::Command(command)),
         };
-        machine.clone().apply([entry]).await.unwrap().remove(0)
+        apply_batch(machine, vec![entry]).await.unwrap().remove(0)
     }
 
     #[tokio::test]

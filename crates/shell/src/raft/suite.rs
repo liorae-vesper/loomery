@@ -12,8 +12,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use openraft::StorageError;
-use openraft::testing::StoreBuilder;
-use openraft::testing::Suite;
+use openraft::testing::log::StoreBuilder;
+use openraft::testing::log::Suite;
 
 use super::TypeConfig;
 use super::log_store::MemLogStore;
@@ -25,8 +25,9 @@ struct Builder;
 impl StoreBuilder<TypeConfig, MemLogStore, Arc<MemStateMachine>, ()> for Builder {
     fn build(
         &self,
-    ) -> impl Future<Output = Result<((), MemLogStore, Arc<MemStateMachine>), StorageError<u64>>> + Send
-    {
+    ) -> impl Future<
+        Output = Result<((), MemLogStore, Arc<MemStateMachine>), StorageError<TypeConfig>>,
+    > + Send {
         std::future::ready(Ok((
             (),
             MemLogStore::default(),
@@ -35,7 +36,9 @@ impl StoreBuilder<TypeConfig, MemLogStore, Arc<MemStateMachine>, ()> for Builder
     }
 }
 
-#[test]
-fn the_in_memory_store_passes_the_openraft_suite() {
-    Suite::<TypeConfig, MemLogStore, Arc<MemStateMachine>, Builder, ()>::test_all(Builder).unwrap();
+#[tokio::test]
+async fn the_in_memory_store_passes_the_openraft_suite() {
+    Suite::<TypeConfig, MemLogStore, Arc<MemStateMachine>, Builder, ()>::test_all(Builder)
+        .await
+        .unwrap();
 }

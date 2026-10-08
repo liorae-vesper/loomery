@@ -40,6 +40,7 @@ use crate::saga::InvitationAcceptance;
 use crate::saga::SagaMessage;
 use crate::saga::SagaRunner;
 use crate::test_support::bootstrap_value;
+use openraft::type_config::async_runtime::WatchReceiver;
 
 const GROUP: &str = "tenant-1";
 
@@ -392,7 +393,7 @@ async fn a_reused_causation_key_is_a_conflict_and_reads_are_your_writes() {
     let applied = tenant
         .raft()
         .metrics()
-        .borrow()
+        .borrow_watched()
         .last_applied
         .map_or(0, |log_id| log_id.index);
     assert_eq!(

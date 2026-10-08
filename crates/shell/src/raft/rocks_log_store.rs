@@ -8,13 +8,14 @@
 //! at the first key that is not an entry, and finding the last entry is a reverse
 //! scan from `m`: the greatest key below `m` is the greatest `l…`, while the
 //! bookkeeping keys sit above it.
-use super::{TypeConfig, disk::Disk, disk::Family};
-use openraft::storage::{LogFlushed, LogState, RaftLogReader, RaftLogStorage};
-use openraft::{Entry, LogId, OptionalSend, StorageError, StorageIOError, Vote};
+use super::{TypeConfig, alias::EntryOf, alias::LogIdOf, alias::VoteOf, disk::Disk, disk::Family};
+use openraft::OptionalSend;
+use openraft::storage::{IOFlushed, LogState, RaftLogReader, RaftLogStorage};
 use rocksdb::{IteratorMode, WriteBatch, WriteOptions};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     fmt::Debug,
+    io,
     ops::{Bound, RangeBounds},
 };
 
@@ -23,8 +24,8 @@ use std::{
 pub struct RocksLogStore {
     disk: Disk,
 }
-fn io(error: &anyhow::Error) -> StorageError<u64> {
-    StorageIOError::write_logs(&std::io::Error::other(error.to_string())).into()
+fn io(error: &anyhow::Error) -> io::Error {
+    io::Error::other(error.to_string())
 }
 fn key(index: u64) -> Vec<u8> {
     let mut key = vec![b'l'];
@@ -56,7 +57,7 @@ impl RocksLogStore {
             .put(Family::RaftLog, key.to_vec(), serde_json::to_vec(&value)?)
             .await
     }
-    async fn remove(&self, index: u64, purge: Option<LogId<u64>>) -> anyhow::Result<()> {
+    async fn remove(&self, index: u64, purge: Option<LogIdOf>) -> anyhow::Result<()> {
         self.disk
             .run(move |db| {
                 let family = Family::RaftLog.handle(db)?;
@@ -66,7 +67,7 @@ impl RocksLogStore {
                     if !key.starts_with(b"l") {
                         break;
                     }
-                    let entry: Entry<TypeConfig> = serde_json::from_slice(&value)?;
+                    let entry: EntryOf = serde_json::from_slice(&value)?;
                     if if purge.is_some() {
                         entry.log_id.index <= index
                     } else {
@@ -87,7 +88,7 @@ impl RaftLogReader<TypeConfig> for RocksLogStore {
     async fn try_get_log_entries<RB: RangeBounds<u64> + Clone + Debug + OptionalSend>(
         &mut self,
         range: RB,
-    ) -> Result<Vec<Entry<TypeConfig>>, StorageError<u64>> {
+    ) -> Result<Vec<EntryOf>, io::Error> {
         let start = range.start_bound().cloned();
         let end = range.end_bound().cloned();
         self.disk
@@ -106,7 +107,7 @@ impl RaftLogReader<TypeConfig> for RocksLogStore {
                     if !key.starts_with(b"l") {
                         break;
                     }
-                    let entry: Entry<TypeConfig> = serde_json::from_slice(&value)?;
+                    let entry: EntryOf = serde_json::from_slice(&value)?;
                     let index = entry.log_id.index;
                     if match end {
                         Bound::Included(n) => index > n,
@@ -125,14 +126,23 @@ impl RaftLogReader<TypeConfig> for RocksLogStore {
             .await
             .map_err(|e| io(&e))
     }
+
+    // The vote is part of the log, but reading it is the *reader's* job in 0.10:
+    // replication reads it to check that a log stream still belongs to the leader.
+    async fn read_vote(&mut self) -> Result<Option<VoteOf>, io::Error> {
+        self.disk
+            .run(|db| meta(db, Family::RaftLog, b"vote"))
+            .await
+            .map_err(|e| io(&e))
+    }
 }
 impl RaftLogStorage<TypeConfig> for RocksLogStore {
     type LogReader = Self;
-    async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, StorageError<u64>> {
+    async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, io::Error> {
         self.disk
             .run(|db| {
                 let family = Family::RaftLog.handle(db)?;
-                let purged = meta::<LogId<u64>>(db, Family::RaftLog, b"purged")?;
+                let purged = meta::<LogIdOf>(db, Family::RaftLog, b"purged")?;
                 let mut last = None;
                 // `m` is above every entry key and below the bookkeeping keys, so
                 // the greatest key below it is the greatest entry.
@@ -145,7 +155,7 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
                 {
                     let (key, value) = item?;
                     if key.starts_with(b"l") {
-                        last = Some(serde_json::from_slice::<Entry<TypeConfig>>(&value)?.log_id);
+                        last = Some(serde_json::from_slice::<EntryOf>(&value)?.log_id);
                     }
                 }
                 Ok(LogState {
@@ -159,34 +169,25 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
     fn get_log_reader(&mut self) -> impl std::future::Future<Output = Self> + Send {
         std::future::ready(self.clone())
     }
-    async fn save_vote(&mut self, vote: &Vote<u64>) -> Result<(), StorageError<u64>> {
+    async fn save_vote(&mut self, vote: &VoteOf) -> Result<(), io::Error> {
         self.save(b"vote", vote).await.map_err(|e| io(&e))
     }
-    async fn read_vote(&mut self) -> Result<Option<Vote<u64>>, StorageError<u64>> {
-        self.disk
-            .run(|db| meta(db, Family::RaftLog, b"vote"))
-            .await
-            .map_err(|e| io(&e))
-    }
-    async fn save_committed(
-        &mut self,
-        committed: Option<LogId<u64>>,
-    ) -> Result<(), StorageError<u64>> {
+    async fn save_committed(&mut self, committed: Option<LogIdOf>) -> Result<(), io::Error> {
         self.save(b"committed", committed).await.map_err(|e| io(&e))
     }
-    async fn read_committed(&mut self) -> Result<Option<LogId<u64>>, StorageError<u64>> {
+    async fn read_committed(&mut self) -> Result<Option<LogIdOf>, io::Error> {
         self.disk
-            .run(|db| Ok(meta::<Option<LogId<u64>>>(db, Family::RaftLog, b"committed")?.flatten()))
+            .run(|db| Ok(meta::<Option<LogIdOf>>(db, Family::RaftLog, b"committed")?.flatten()))
             .await
             .map_err(|e| io(&e))
     }
     async fn append<I>(
         &mut self,
         entries: I,
-        callback: LogFlushed<TypeConfig>,
-    ) -> Result<(), StorageError<u64>>
+        callback: IOFlushed<TypeConfig>,
+    ) -> Result<(), io::Error>
     where
-        I: IntoIterator<Item = Entry<TypeConfig>> + OptionalSend,
+        I: IntoIterator<Item = EntryOf> + OptionalSend,
         I::IntoIter: OptionalSend,
     {
         let entries: Vec<_> = entries.into_iter().collect();
@@ -204,22 +205,33 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
         match result {
             Ok(()) => {
                 // The synchronous WAL batch has completed on the blocking pool.
-                // OpenRaft permits this callback before append returns. Its 0.9.25
-                // core awaits the callback too, so merely detaching the sync would
-                // not pipeline appends from this group.
-                callback.log_io_completed(Ok(()));
+                // OpenRaft permits this callback before append returns. Its core
+                // awaits the callback too, so merely detaching the sync would not
+                // pipeline appends from this group.
+                callback.io_completed(Ok(()));
                 Ok(())
             }
             Err(error) => {
-                callback.log_io_completed(Err(std::io::Error::other(error.to_string())));
+                callback.io_completed(Err(io::Error::other(error.to_string())));
                 Err(io(&error))
             }
         }
     }
-    async fn truncate(&mut self, log_id: LogId<u64>) -> Result<(), StorageError<u64>> {
-        self.remove(log_id.index, None).await.map_err(|e| io(&e))
+
+    /// Removes every entry after `last_log_id` (exclusive), which is 0.10's
+    /// spelling of 0.9's "truncate since `log_id`, inclusive".
+    async fn truncate_after(&mut self, last_log_id: Option<LogIdOf>) -> Result<(), io::Error> {
+        match last_log_id {
+            // `None` truncates everything; a kept id at the index ceiling cannot
+            // be followed by anything, so there is nothing to delete.
+            None => self.remove(0, None).await.map_err(|e| io(&e)),
+            Some(id) => match id.index.checked_add(1) {
+                Some(after) => self.remove(after, None).await.map_err(|e| io(&e)),
+                None => Ok(()),
+            },
+        }
     }
-    async fn purge(&mut self, log_id: LogId<u64>) -> Result<(), StorageError<u64>> {
+    async fn purge(&mut self, log_id: LogIdOf) -> Result<(), io::Error> {
         self.remove(log_id.index, Some(log_id))
             .await
             .map_err(|e| io(&e))

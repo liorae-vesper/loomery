@@ -6,26 +6,29 @@
 //! the network is never called. This factory exists only to satisfy
 //! `Raft::new`; every RPC it could hand out fails, loudly, rather than
 //! silently pretending a peer answered. Level 3 replaces it with a real
-//! `RaftNetwork` (tonic gRPC) — see `docs/tutorials/openraft-spike.md` §7.
+//! `RaftNetworkV2` (tonic gRPC) — see `docs/tutorials/openraft-spike.md` §7.
 
 use std::future::Future;
+use std::io::Cursor;
 
 use openraft::BasicNode;
-use openraft::error::InstallSnapshotError;
+use openraft::OptionalSend;
 use openraft::error::RPCError;
-use openraft::error::RaftError;
+use openraft::error::ReplicationClosed;
+use openraft::error::StreamingError;
 use openraft::error::Unreachable;
 use openraft::network::RPCOption;
-use openraft::network::RaftNetwork;
 use openraft::network::RaftNetworkFactory;
+use openraft::network::v2::RaftNetworkV2;
 use openraft::raft::AppendEntriesRequest;
 use openraft::raft::AppendEntriesResponse;
-use openraft::raft::InstallSnapshotRequest;
-use openraft::raft::InstallSnapshotResponse;
+use openraft::raft::SnapshotResponse;
 use openraft::raft::VoteRequest;
 use openraft::raft::VoteResponse;
+use openraft::type_config::alias::VoteOf;
 
 use super::TypeConfig;
+use super::alias::SnapshotOf;
 
 /// The factory for a group that has no peers.
 #[derive(Debug, Default, Clone, Copy)]
@@ -40,48 +43,47 @@ pub struct NoopNetwork;
 #[error("this single-node group has no peers")]
 pub struct NoPeers;
 
+/// The "there is no peer" error, ready to wrap in either error family.
+fn no_peers() -> Unreachable<TypeConfig> {
+    Unreachable::new(&NoPeers)
+}
+
+#[allow(clippy::unused_async_trait_impl)] // the factory builds a value, it awaits nothing
 impl RaftNetworkFactory<TypeConfig> for NoopNetworkFactory {
     type Network = NoopNetwork;
 
-    fn new_client(
-        &mut self,
-        _target: u64,
-        _node: &BasicNode,
-    ) -> impl Future<Output = NoopNetwork> + Send {
-        std::future::ready(NoopNetwork)
+    async fn new_client(&mut self, _target: u64, _node: &BasicNode) -> NoopNetwork {
+        NoopNetwork
     }
 }
 
-impl RaftNetwork<TypeConfig> for NoopNetwork {
-    fn append_entries(
+#[allow(clippy::unused_async_trait_impl)] // every no-peer RPC fails without awaiting
+impl RaftNetworkV2<TypeConfig> for NoopNetwork {
+    type SnapshotData = Cursor<Vec<u8>>;
+
+    async fn append_entries(
         &mut self,
         _rpc: AppendEntriesRequest<TypeConfig>,
         _option: RPCOption,
-    ) -> impl Future<
-        Output = Result<AppendEntriesResponse<u64>, RPCError<u64, BasicNode, RaftError<u64>>>,
-    > + Send {
-        std::future::ready(Err(RPCError::Unreachable(Unreachable::new(&NoPeers))))
+    ) -> Result<AppendEntriesResponse<TypeConfig>, RPCError<TypeConfig>> {
+        Err(RPCError::Unreachable(no_peers()))
     }
 
-    fn install_snapshot(
+    async fn vote(
         &mut self,
-        _rpc: InstallSnapshotRequest<TypeConfig>,
+        _rpc: VoteRequest<TypeConfig>,
         _option: RPCOption,
-    ) -> impl Future<
-        Output = Result<
-            InstallSnapshotResponse<u64>,
-            RPCError<u64, BasicNode, RaftError<u64, InstallSnapshotError>>,
-        >,
-    > + Send {
-        std::future::ready(Err(RPCError::Unreachable(Unreachable::new(&NoPeers))))
+    ) -> Result<VoteResponse<TypeConfig>, RPCError<TypeConfig>> {
+        Err(RPCError::Unreachable(no_peers()))
     }
 
-    fn vote(
+    async fn full_snapshot(
         &mut self,
-        _rpc: VoteRequest<u64>,
+        _vote: VoteOf<TypeConfig>,
+        _snapshot: SnapshotOf<Cursor<Vec<u8>>>,
+        _cancel: impl Future<Output = ReplicationClosed> + OptionalSend + 'static,
         _option: RPCOption,
-    ) -> impl Future<Output = Result<VoteResponse<u64>, RPCError<u64, BasicNode, RaftError<u64>>>> + Send
-    {
-        std::future::ready(Err(RPCError::Unreachable(Unreachable::new(&NoPeers))))
+    ) -> Result<SnapshotResponse<TypeConfig>, StreamingError<TypeConfig>> {
+        Err(StreamingError::Unreachable(no_peers()))
     }
 }

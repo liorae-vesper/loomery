@@ -8,10 +8,10 @@ use crate::{
     group::GroupOps,
     test_support::{bootstrap_value, organization},
 };
-use openraft::storage::RaftStateMachine;
+use openraft::type_config::async_runtime::WatchReceiver;
 use openraft::{
     BasicNode, StorageError,
-    testing::{StoreBuilder, Suite},
+    testing::log::{StoreBuilder, Suite},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,7 +23,8 @@ struct Builder(crate::config::StatePersistence);
 impl StoreBuilder<TypeConfig, RocksLogStore, Arc<MemStateMachine>, tempfile::TempDir> for Builder {
     async fn build(
         &self,
-    ) -> Result<(tempfile::TempDir, RocksLogStore, Arc<MemStateMachine>), StorageError<u64>> {
+    ) -> Result<(tempfile::TempDir, RocksLogStore, Arc<MemStateMachine>), StorageError<TypeConfig>>
+    {
         let dir = tempfile::tempdir().unwrap();
         let disk = super::disk::Disk::open(dir.path(), &crate::config::StorageConfig::default())
             .await
@@ -33,18 +34,20 @@ impl StoreBuilder<TypeConfig, RocksLogStore, Arc<MemStateMachine>, tempfile::Tem
         Ok((dir, log, machine))
     }
 }
-#[test]
-fn rocksdb_passes_openraft_storage_suite() {
+#[tokio::test]
+async fn rocksdb_passes_openraft_storage_suite() {
     Suite::<TypeConfig, RocksLogStore, Arc<MemStateMachine>, Builder, tempfile::TempDir>::test_all(
         Builder(crate::config::StatePersistence::Checkpoint),
     )
+    .await
     .unwrap();
 }
-#[test]
-fn snapshot_backed_rocksdb_passes_openraft_storage_suite() {
+#[tokio::test]
+async fn snapshot_backed_rocksdb_passes_openraft_storage_suite() {
     Suite::<TypeConfig, RocksLogStore, Arc<MemStateMachine>, Builder, tempfile::TempDir>::test_all(
         Builder(crate::config::StatePersistence::Snapshot),
     )
+    .await
     .unwrap();
 }
 fn config() -> GroupConfig {
@@ -53,6 +56,13 @@ fn config() -> GroupConfig {
     config.raft.election_timeout_min = 150;
     config.raft.election_timeout_max = 300;
     config
+}
+
+/// The committed leader id for `term`, proposed by `node`.
+fn leader_id(term: u64, node: u64) -> <TypeConfig as openraft::RaftTypeConfig>::LeaderId {
+    use openraft::vote::RaftLeaderId;
+    use openraft::vote::leader_id_adv::LeaderId;
+    LeaderId::new(term, node)
 }
 /// Reopens a persistent group, waiting out the release of the previous handle.
 ///
@@ -153,7 +163,7 @@ async fn three_replicas_commit_and_recover_genesis() {
     let last = groups[0]
         .raft()
         .metrics()
-        .borrow()
+        .borrow_watched()
         .last_applied
         .unwrap()
         .index;
@@ -203,9 +213,9 @@ async fn three_replicas_commit_and_recover_genesis() {
         3
     );
     // Durable dedup can be inspected through the state machine without a live quorum.
-    let mut machine = recovered.state_machine.clone();
-    let entry = openraft::Entry {
-        log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(2, 1), last + 1),
+    let machine = recovered.state_machine.clone();
+    let entry = super::alias::EntryOf {
+        log_id: super::alias::LogIdOf::new(leader_id(2, 1), last + 1),
         payload: openraft::EntryPayload::Normal(AppData::Command(
             bootstrap_value()
                 .command(loomery_genesis::Step::AssignLeader)
@@ -214,7 +224,9 @@ async fn three_replicas_commit_and_recover_genesis() {
     };
 
     assert!(matches!(
-        machine.apply([entry]).await.unwrap()[0],
+        super::state_machine::apply_batch(&machine, vec![entry])
+            .await
+            .unwrap()[0],
         Applied::Replayed { .. }
     ));
     recovered.shutdown().await.unwrap();
@@ -238,7 +250,7 @@ fn configuration_defaults_and_validation() {
 async fn snapshots_cross_tonic_and_unknown_groups_are_rejected() {
     use openraft::{
         RaftSnapshotBuilder,
-        network::{RPCOption, RaftNetwork, RaftNetworkFactory},
+        network::{RPCOption, RaftNetworkFactory, v2::RaftNetworkV2},
     };
     let root = tempfile::tempdir().unwrap();
     let mut source = RaftGroup::boot_single_node(1).await.unwrap();
@@ -276,15 +288,16 @@ async fn snapshots_cross_tonic_and_unknown_groups_are_rejected() {
         config: config().transport,
     };
     let mut client = factory.new_client(2, &BasicNode::new(&address)).await;
-    let rpc = openraft::raft::InstallSnapshotRequest {
-        vote: openraft::Vote::new_committed(10, 1),
-        meta: snapshot.meta,
-        offset: 0,
-        data: snapshot.snapshot.into_inner(),
-        done: true,
-    };
+    // `RPCOption::new` carries no fragment-size advice, so the whole snapshot
+    // travels in one fragment here; the fragmenter and the reassembler are unit
+    // tested in `transport`.
     client
-        .install_snapshot(rpc, RPCOption::new(Duration::from_secs(3)))
+        .full_snapshot(
+            openraft::Vote::new_committed(10, 1),
+            snapshot,
+            std::future::pending::<openraft::error::ReplicationClosed>(),
+            RPCOption::new(Duration::from_secs(3)),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -354,14 +367,19 @@ async fn snapshot_mode_recovers_log_only_and_snapshot_with_purged_prefix() {
             .await
             .unwrap();
         if snapshot_first {
-            let covered = group.raft().metrics().borrow().last_applied.unwrap();
+            let covered = group
+                .raft()
+                .metrics()
+                .borrow_watched()
+                .last_applied
+                .unwrap();
             group.raft().trigger().snapshot().await.unwrap();
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
                     if group
                         .raft()
                         .metrics()
-                        .borrow()
+                        .borrow_watched()
                         .snapshot
                         .is_some_and(|id| id.index >= covered.index)
                     {
@@ -384,7 +402,7 @@ async fn snapshot_mode_recovers_log_only_and_snapshot_with_purged_prefix() {
                     if group
                         .raft()
                         .metrics()
-                        .borrow()
+                        .borrow_watched()
                         .purged
                         .is_some_and(|id| id.index >= covered.index)
                     {
@@ -397,7 +415,13 @@ async fn snapshot_mode_recovers_log_only_and_snapshot_with_purged_prefix() {
             .unwrap();
         }
         bootstrap::run(&mut group, &commands).await.unwrap();
-        let index = group.raft().metrics().borrow().last_applied.unwrap().index;
+        let index = group
+            .raft()
+            .metrics()
+            .borrow_watched()
+            .last_applied
+            .unwrap()
+            .index;
         group.shutdown().await.unwrap();
         drop(group);
         let mut restored =
@@ -609,7 +633,13 @@ async fn shutdown_releases_database_only_after_state_handles_are_dropped() {
         bootstrap::run(&mut group, &bootstrap_value())
             .await
             .unwrap();
-        let index = group.raft().metrics().borrow().last_applied.unwrap().index;
+        let index = group
+            .raft()
+            .metrics()
+            .borrow_watched()
+            .last_applied
+            .unwrap()
+            .index;
         let retained_state = group.state_machine.clone();
         group.shutdown().await.unwrap();
         drop(group);

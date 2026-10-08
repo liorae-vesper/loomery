@@ -16,7 +16,8 @@ use loomery_shell::{
     group::{GroupOps, ProposeOutcome},
     raft::{ProposalWriter, RaftGroup, transport::TonicTransport},
 };
-use openraft::{BasicNode, Raft};
+use openraft::BasicNode;
+use openraft::type_config::async_runtime::WatchReceiver;
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
@@ -25,7 +26,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     task::JoinSet,
 };
-type Consensus = Raft<loomery_shell::raft::TypeConfig>;
+type Consensus = loomery_shell::raft::RaftHandle;
 
 pub fn organization() -> Id {
     Id::from(Key::new(
@@ -147,7 +148,7 @@ pub async fn run(spec: NodeSpec) -> anyhow::Result<()> {
 }
 fn status(raft: &Consensus) -> Status {
     let metrics = raft.metrics();
-    let metrics = metrics.borrow();
+    let metrics = metrics.borrow_watched();
     Status {
         id: metrics.id,
         term: metrics.current_term,

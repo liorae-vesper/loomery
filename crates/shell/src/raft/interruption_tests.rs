@@ -31,6 +31,8 @@ use loomery_core::key::Key;
 use loomery_core::timestamp::Timestamp;
 use openraft::BasicNode;
 use openraft::LogId;
+
+use super::alias::LogIdOf;
 use openraft::RaftSnapshotBuilder;
 use openraft::storage::RaftLogReader;
 use openraft::storage::RaftLogStorage;
@@ -86,7 +88,7 @@ fn task_command(index: u64) -> Command {
 async fn boot_apply_and_snapshot(
     path: &std::path::Path,
     mode: StatePersistence,
-) -> (Vec<u8>, LogId<u64>) {
+) -> (Vec<u8>, LogIdOf) {
     let mut group = RaftGroup::boot_persistent(1, "tenant".to_owned(), path, config(mode))
         .await
         .unwrap();
@@ -139,23 +141,24 @@ async fn boot_apply_and_snapshot(
     (bytes, covered)
 }
 
-/// The covered log index and the id of the stored snapshot.
+/// The log index the stored snapshot covers.
 ///
-/// Read as JSON because the stored type is private to the state machine, and
-/// because the id is what distinguishes a rebuild from the snapshot it replaces.
-async fn stored_snapshot_meta(path: &std::path::Path) -> (u64, String) {
+/// Read as JSON because the stored type is private to the state machine. 0.10's
+/// `SnapshotMeta` carries no transfer id — a snapshot is identified by the
+/// position it covers — so this index is the whole identity to read back.
+async fn stored_snapshot_index(path: &std::path::Path) -> u64 {
     let bytes = stored_snapshot(path).await.expect("a snapshot is stored");
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let meta = &value["meta"];
-    (
-        meta["last_log_id"]["index"]
-            .as_u64()
-            .expect("a covered index"),
-        meta["snapshot_id"]
-            .as_str()
-            .expect("a snapshot id")
-            .to_owned(),
-    )
+    value["meta"]["last_log_id"]["index"]
+        .as_u64()
+        .expect("a covered index")
+}
+
+/// The serialized state the stored record carries in its `data` field.
+async fn stored_snapshot_data(path: &std::path::Path) -> Vec<u8> {
+    let bytes = stored_snapshot(path).await.expect("a snapshot is stored");
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    serde_json::from_value(value["data"].clone()).expect("the record carries the snapshot bytes")
 }
 
 /// The stored snapshot bytes, read through a fresh handle.
@@ -190,11 +193,14 @@ async fn an_abandoned_snapshot_build_keeps_the_previous_one_and_stays_retryable(
         .expect_err("a read-only database cannot persist a snapshot");
     // The injected failure is the store's own write rejection. `RocksDB` words it
     // differently for a put ("read only") than for a batch on a compacted
-    // read-only database ("not supported in compacted db mode"), so the assertion
-    // is on the *kind* of error — an I/O failure from storage, not a logic error.
+    // read-only database ("not supported in compacted db mode"). In 0.10 the
+    // storage API returns `io::Error`, so a logic error cannot arrive here by
+    // type; what is worth asserting is that the store's own rejection is what
+    // surfaced.
+    let message = error.to_string().to_lowercase();
     assert!(
-        matches!(error, openraft::StorageError::IO { .. }),
-        "the injected failure is a storage I/O error, not a logic error: {error}"
+        message.contains("read only") || message.contains("not supported"),
+        "the injected failure is the store's write rejection: {error}"
     );
 
     // Nothing was installed: the machine still holds the snapshot it recovered,
@@ -257,26 +263,34 @@ async fn an_abandoned_snapshot_build_keeps_the_previous_one_and_stays_retryable(
     let retried = {
         let machine = group.state_machine();
         let mut builder = machine.clone();
-        let built = builder.build_snapshot().await.unwrap();
-        built.meta.last_log_id.expect("a snapshot covers the log")
+        builder.build_snapshot().await.unwrap()
     };
+    let retried_index = retried
+        .meta
+        .last_log_id
+        .expect("a snapshot covers the log")
+        .index;
     assert_eq!(
-        retried.index,
+        retried_index,
         covered.index + 1,
         "the retry covers the command applied after the abandoned build"
     );
+    let retried_bytes = retried.snapshot.into_inner();
     group.shutdown().await.unwrap();
     drop(group);
 
-    let (index, id) = stored_snapshot_meta(&path).await;
     assert_eq!(
-        index,
+        stored_snapshot_index(&path).await,
         covered.index + 1,
         "the retry persisted a snapshot covering the newer log"
     );
-    assert!(
-        id.ends_with(&format!("{}-0", covered.index + 1)),
-        "the stored snapshot is the one the retry built: {id}"
+    // 0.10 removed the transfer id from `SnapshotMeta`, so the stored bytes —
+    // not an id — are what show that the retry, and not the snapshot it replaced,
+    // is what got persisted.
+    assert_eq!(
+        stored_snapshot_data(&path).await,
+        retried_bytes,
+        "the stored snapshot is the one the retry built"
     );
 }
 
@@ -320,9 +334,10 @@ async fn a_failed_purge_moves_neither_the_entries_nor_the_floor() {
         .purge(floor)
         .await
         .expect_err("a read-only database cannot purge");
+    let message = error.to_string().to_lowercase();
     assert!(
-        matches!(error, openraft::StorageError::IO { .. }),
-        "the injected failure is a storage I/O error, not a logic error: {error}"
+        message.contains("read only") || message.contains("not supported"),
+        "the injected failure is the store's write rejection: {error}"
     );
 
     let state = store.get_log_state().await.unwrap();
