@@ -327,13 +327,15 @@ others. An opinionated application server (APIs -> `Raft::client_write` ->
 log replication -> `StateMachine::apply`) maps 1:1 onto our command flow
 (see the `raft-kv-memstore` example). Hand-rolling Raft in Rust duplicates
 battle-tested machinery for no benefit at our cluster size (3–5 nodes).
-**Status: DECIDED and implemented (migrated to OpenRaft 0.10).** OpenRaft
-`RaftNetworkV2` over **tonic gRPC** for `append_entries`, `vote` and
+**Status: DECIDED and implemented (migrated to OpenRaft 0.10, pipelined).**
+OpenRaft `RaftNetworkV2` over **tonic gRPC** for `append_entries`, `vote` and
 `full_snapshot`, with the transport owning snapshot fragmentation and
-reassembly. `stream_append` currently uses openraft's default sequential
-implementation; a bidirectional `StreamAppend` RPC is the next step. See
+reassembly. `stream_append` is a **bidirectional `StreamAppend` RPC**: the
+leader streams requests and the follower streams results back, ordered by the
+HTTP/2 stream itself. See
 [openraft-010-migration.md](research/openraft-010-migration.md) for what the
-migration changed.
+migration changed and [deployment-scale.md](benchmarks/deployment-scale.md) for
+what pipelining has and has not measured yet.
 A versioned protobuf envelope routes each request by group id and carries the
 pinned OpenRaft JSON request/Result types. One listener serves many groups.
 

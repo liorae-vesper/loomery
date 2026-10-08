@@ -86,10 +86,14 @@ for tenant creation, startup reconciliation and retry sweeping.
   metrics and triggers. `shutdown()` stops the Raft task.
 - `TonicTransport::register` attaches a group to the shared listener. Its
   `RaftNetworkV2` implementation handles `append_entries` and `vote` over a
-  group-routed protobuf/JSON envelope, and `full_snapshot` as a client-streamed
-  `InstallSnapshot` RPC. 0.10 gives the network the whole snapshot rather than one
-  chunk at a time, so the sender fragments and the follower reassembles within the
-  request, aborting a stream that ends without the final fragment.
+  group-routed protobuf/JSON envelope, `full_snapshot` as a client-streamed
+  `InstallSnapshot` RPC, and replication as a bidirectional `StreamAppend` RPC.
+  0.10 gives the network the whole snapshot rather than one chunk at a time, so
+  the sender fragments and the follower reassembles within the request, aborting a
+  stream that ends without the final fragment. `StreamAppend` needs no such
+  framing: one HTTP/2 stream keeps both directions ordered, so results come back
+  in request order, and the transport bounds a reply-less stream by openraft's
+  `soft_ttl` rather than by the much smaller `hard_ttl`.
 - TLS/mTLS is opt-in. Configured clients require HTTPS and verify the CA and
   peer name. The listener sets TCP_NODELAY and configured keepalive on accepted
   connections. No automatic certificate reload is implemented.

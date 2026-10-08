@@ -356,10 +356,22 @@ itself and sends it as one **client-streamed** `InstallSnapshot` RPC: each
 `SnapshotChunk` carries raw bytes, the first also carries the group id and the
 JSON opening metadata, and the follower reassembles in the handler frame before
 calling `install_full_snapshot`. A stream that ends without the final fragment is
-aborted, never installed. 0.9 fragmented in the core instead, and the `Envelope`
-RPCs still carry JSON request/Result types for appends and votes. The protobuf
-package is versioned, but its JSON payload still couples peers to the pinned
-OpenRaft types. Wire upgrades need compatibility review.
+aborted, never installed.
+
+Replication is a **bidirectional `StreamAppend` RPC**: the leader streams
+`AppendEntries` requests on one envelope stream and the follower streams their
+results back on another, calling `Raft::stream_append` in between. A single
+HTTP/2 stream preserves order in each direction, so results arrive in request
+order without sequence numbers, and requests and results are bounded by a
+64-slot channel on each side — the leader cannot run unboundedly ahead of a slow
+follower. Each awaited result carries openraft's `soft_ttl` as its bound, so a
+peer that stops answering is closed off rather than waited on; `hard_ttl` is the
+heartbeat interval and is not a stream lifetime limit.
+
+0.9 fragmented snapshots in the core and replicated one unary RPC at a time. The
+`Envelope` RPCs still carry JSON request/Result types. The protobuf package is
+versioned, but its JSON payload still couples peers to the pinned OpenRaft types.
+Wire upgrades need compatibility review.
 
 With TLS, use HTTPS membership URIs and configured peer CA/name verification.
 Server TLS is loaded when `serve` starts; outbound material is checked at boot

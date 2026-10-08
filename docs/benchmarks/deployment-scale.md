@@ -100,13 +100,17 @@ deliberately: the curve is about *scale*, and batching has its own
 
 ### On the transport: `RaftNetworkV2`, pipelining, awaiting
 
-- **`RaftNetworkV2` is available to us now, and its default `stream_append` is
-  sequential.** The migration to openraft **0.10.0-alpha.36** is done
-  ([openraft-010-migration.md](../research/openraft-010-migration.md)), so our
-  `TonicNetwork` implements `RaftNetworkV2` over tonic. Until the bidirectional
-  `StreamAppend` RPC lands, `stream_append` sends one unary RPC and waits for its
-  response, which is what the 0.9 numbers below were measured against — so the
-  recorded curve is still the right before-picture.
+- **Pipelining has landed, so the curve below is now the *before* picture.**
+  The migration to openraft **0.10.0-alpha.36**
+  ([openraft-010-migration.md](../research/openraft-010-migration.md)) and the
+  bidirectional `StreamAppend` RPC are both in: the leader streams AppendEntries
+  requests to a follower and the follower streams results back on one ordered
+  HTTP/2 stream, without waiting for a per-entry response. **Everything in this
+  file was measured before that**, on the 0.9 sequential path, so its numbers are
+  the baseline the pipelined path has to beat rather than current behaviour. Note
+  also that openraft 0.10 no longer serializes local appends behind the previous
+  flush, which changes the per-entry cost even where batching already amortized
+  the round trip.
 - **We do await each write.** `Raft::client_write` is awaited per command, and the
   apply awaits its durable write (D2's contract). What keeps the path busy is the
   harness's in-flight window, which is exactly what the concurrency probe moves.

@@ -3,14 +3,15 @@
 This is a self-contained work packet. Everything needed to continue is here or in the two
 files it names; the previous session's context is not required.
 
-**Leg 1 (the bump) and leg 2 (the migration) are complete.** `crates/shell` is on
-openraft **0.10.0-alpha.36** with `cargo check -p loomery-shell --all-features` clean and
-`mise run test` / `mise run verify` green on branch `feature/openraft-pipelined-append`.
-`main` is untouched. The migration commit is the first commit that may merge; it is followed
-by leg 5 (the bidirectional `StreamAppend` RPC) and leg 6 (the benchmark), neither started.
-Read `docs/research/openraft-010-migration.md` for the surface inventory, the measured error
-counts per step, and **the three 0.10 behaviour changes the migration had to accept** — that
-last section is the one to read before the benchmark.
+**Legs 1, 2 and 5 are complete: the migration is in, the snapshot transport is streamed, and
+replication is pipelined.** `crates/shell` is on openraft **0.10.0-alpha.36** with
+`cargo check -p loomery-shell --all-features` clean and `mise run test` / `mise run verify`
+green on branch `feature/openraft-pipelined-append`. `main` is untouched, and the first commit
+that may merge is the migration one. **Only leg 6 (the before/after benchmark) is
+outstanding.** Read `docs/research/openraft-010-migration.md` for the surface inventory, the
+measured error counts per step, the `StreamAppend` design, and **the behaviour changes the
+migration had to accept** — two of those move the write path on their own, so the benchmark's
+delta is not all pipelining.
 
 ## The job
 
@@ -54,11 +55,12 @@ What landed:
   `EntryResponder`s. The existing batching/dedup/persistence logic is unchanged and lives in
   `state_machine::apply_batch`, which the tests drive directly.
 * **Network:** `NoopNetwork` and `TonicNetwork` implement `RaftNetworkV2` (the `Net*`
-  sub-traits come from openraft's blanket impls), so `stream_append` uses the default
-  sequential implementation. `full_snapshot` is a client-streamed `InstallSnapshot` RPC:
-  the sender fragments (`SnapshotChunk`, raw bytes, routing key and JSON `{vote, meta}` on the
-  first fragment) and the follower reassembles inside the handler frame, aborting a stream
-  that ends early.
+  sub-traits come from openraft's blanket impls). `stream_append` is **overridden** with a
+  bidirectional `StreamAppend` RPC: the leader streams requests, the follower streams results
+  back through `Raft::stream_append`, and HTTP/2 ordering supplies the in-order contract.
+  `full_snapshot` is a client-streamed `InstallSnapshot` RPC: the sender fragments
+  (`SnapshotChunk`, raw bytes, routing key and JSON `{vote, meta}` on the first fragment) and
+  the follower reassembles inside the handler frame, aborting a stream that ends early.
 * **Tests:** the whole suite is green, including `openraft::testing::log::Suite` (note the new
   path), the hardening and interruption suites. Two tests changed for 0.10 semantics rather
   than because of a bug; both are documented in the migration doc: the append-serialization
@@ -66,19 +68,18 @@ What landed:
 
 ## Next actions, in order
 
-1. **The bidirectional `StreamAppend` RPC — the rest of leg 5.** The snapshot half is done:
-   `InstallSnapshot` is client-streamed and the follower reassembles in the handler frame. What
-   remains is the bidirectional `StreamAppend` in `crates/shell/proto/raft.proto`, the receiving
-   side calling `Raft::stream_append`, responses yielded in input order (one ordered HTTP/2
-   stream per follower avoids needing sequence numbers), honouring `option.soft_ttl()` for idle
-   policy rather than `hard_ttl`. Override `RaftNetworkV2::stream_append` on `TonicNetwork` for
-   it. Test ordering and TTL. The response stream is also where a real idle-timeout policy
-   becomes implementable, which is the open item the snapshot stream could not answer.
-2. **Measure — leg 6.** `mise run bench-deployment-scale` on the unbatched *and* batched paths,
-   one node and three, against the recorded 0.9 numbers in
+1. **Measure — leg 6.** `mise run bench-deployment-scale` on the unbatched *and* batched
+   paths, one node and three, against the recorded 0.9 numbers in
    `docs/benchmarks/results/deployment-path.json`. This decides whether leg 5 was worth it.
+   Three things are in the tree at once and the write path moved for all three, so a single
+   before/after delta cannot attribute it: the 0.10 migration (local appends no longer wait for
+   the previous flush), the pipelined `StreamAppend`, and the streamed snapshot transport. If
+   attribution matters, isolate the pipelined append by measuring with `StreamAppend` reverted
+   to openraft's default sequential `stream_append` — that is a one-method change.
 
-Both are for the next session; nothing in leg 2 depends on them.
+Nothing else is outstanding. If a measurement surprises us, the next question is whether the
+per-response `soft_ttl` bound or the 64-slot channel is the limiter, and both are single
+constants in `transport.rs`.
 
 ## Constraints that are not negotiable
 
@@ -153,6 +154,20 @@ Both are for the next session; nothing in leg 2 depends on them.
   implement the `Net*` traits or `RaftNetworkV2`.
 * **A remote `RaftError` cannot be carried by `RPCError<C>`** (its error parameter is
   `Infallible`). Report it as `Unreachable`, which is what openraft's own example network does.
+* **openraft's first log index is 0**, so `prev_log_id: None` only matches a request whose first
+  entry is index 0. A hand-built `AppendEntriesRequest` with index 1 trips an assertion inside
+  openraft's following handler (`first_ent.index() == prev_log_id.next_index()`) and panics a
+  core task — the test sees a `Panicked` error rather than a clear message.
+* **`StreamAppendResult` is `Result<Option<LogId>, StreamAppendError>`.** `Conflict` and
+  `HigherVote` are *answers*, not RPC failures: they ride as `Ok(..)` and both the core and
+  `stream_append_sequential` end the stream right after delivering one. Mapping them to an
+  `RPCError` would lose the leader's conflict recovery.
+* **The server's `stream_append` output drains accepted requests after the input ends** (it
+  queues a oneshot per request before yielding). That is why a one-request heartbeat stream
+  still gets its answer, and why closing the request half is safe.
+* **`tokio_stream::pending()` plus a stub `Transport` impl** is a clean way to test a peer that
+  accepts a stream and never answers; `Status::unimplemented` covers the methods the stub does
+  not care about without tripping the `unimplemented!` lint.
 
 ## What this is expected to buy, honestly
 

@@ -1,14 +1,14 @@
 # Migrating to openraft 0.10 for pipelined append
 
-Status: **migrated and green. The bidirectional `stream_append` RPC (leg 5) and the
-before/after benchmark (leg 6) are not started.** Branch
-`feature/openraft-pipelined-append`.
+Status: **migrated, pipelined and green. Only the before/after benchmark (leg 6) is
+outstanding.** Branch `feature/openraft-pipelined-append`.
 
-The migration is one commit: `cargo check -p loomery-shell --all-features` is clean,
-`mise run test` (174 shell lib tests, including `testing::log::Suite`, the hardening and
-interruption suites) and `mise run verify` are green, and `main` is untouched. **What 0.10
-changed under us is in [What 0.10 changed under us](#what-010-changed-under-us) — read that
-before trusting the benchmark.**
+`cargo check -p loomery-shell --all-features` is clean, `mise run test` (177 shell lib tests,
+including `testing::log::Suite`, the hardening and interruption suites) and `mise run verify`
+are green, and `main` is untouched. **What 0.10 changed under us is in
+[What 0.10 changed under us](#what-010-changed-under-us) — read that before trusting the
+benchmark**; two of those changes move the write path on their own, so a before/after delta is
+not all pipelining.
 
 ## What the migration cost, measured
 
@@ -68,8 +68,9 @@ the things to re-check before the benchmark:
      default) as `hard_ttl`, which 0.9 applied *per chunk*; on one stream it would abort every
      non-trivial transfer and openraft would restart it. The bounds are openraft's `cancel`
      future, the configured TCP keepalive, and `max_message_bytes` per fragment. A true idle
-     policy needs per-fragment progress, which the request side does not expose — that belongs
-     with `StreamAppend`, where the response side is a stream.
+     policy needs per-fragment progress, which the request side does not expose; the append
+     stream has that signal and uses it (see
+     [Pipelined append](#pipelined-append-leg-5)).
 
    **Peak follower memory is unchanged** by all of this: `Raft::install_full_snapshot` takes
    the whole snapshot and `SnapshotData` is in-memory, so streaming removes the round trips and
@@ -236,14 +237,42 @@ without sequence numbers; a multiplexed design would have to reorder by sequence
 4. ~~Get the full suite green (`mise run test`, including the hardening and interruption tests)
    and `mise run verify`, and **commit that** — a working 0.10 migration with no behaviour
    change.~~ **Done, with the three documented behaviour changes above.**
-5. Only then the bidi RPC and true pipelining, with tests for ordering and for `soft_ttl`.
-   **The snapshot half of leg 5 is done** (client-streaming `InstallSnapshot`, above); the
-   bidirectional `StreamAppend` is next. An idle-timeout policy for the streams is the open
-   item there, because the append response stream is where per-response progress is visible.
+5. ~~Only then the bidi RPC and true pipelining, with tests for ordering and for `soft_ttl`.~~
+   **Done**: the snapshot stream and the bidirectional `StreamAppend`, below.
 6. Measure: deployment harness unbatched and batched, single node and three, against the
-   recorded 0.9 numbers in `docs/benchmarks/results/deployment-path.json`.
+   recorded 0.9 numbers in `docs/benchmarks/results/deployment-path.json`. **Not started.**
 
 Steps 1–4 are a migration; step 5 is the feature; step 6 decides whether step 5 was worth it.
+
+## Pipelined append (leg 5)
+
+The feature the migration exists for. `StreamAppend` is a bidirectional RPC in
+`crates/shell/proto/raft.proto`:
+
+* The leader streams `AppendEntries` requests on one `Envelope` stream; the follower relays
+  them into `Raft::stream_append` and streams its results back on the response direction.
+  **One HTTP/2 stream preserves order in each direction**, so the trait's "responses in input
+  order" contract needs no sequence numbers and the transport never reorders anything.
+* Requests and results each get a 64-slot channel, matched to openraft's own pipeline depth
+  (`PIPELINE_BUFFER_SIZE`) so the transport is not the tighter bottleneck, and bounded so a
+  leader cannot run unboundedly ahead of a slow follower.
+* Opening the stream carries the unary timeout, because a peer that never sends response
+  headers would otherwise hang replication. Each awaited result then carries **`soft_ttl`**
+  as its bound. That is the right choice here and not the snapshot case: on the replication
+  path `hard_ttl` is the *heartbeat interval* (50 ms by default), which the docs explicitly
+  exclude from being a stream-lifetime limit, while `soft_ttl` is the per-response/idle bound
+  they ask for. A peer that stops answering is closed off and reported rather than waited on.
+* `Conflict` and `HigherVote` are protocol *answers*, not transport failures: they travel as
+  `Ok(..)` and end the stream after delivery, matching `stream_append_sequential`. Only a
+  remote `Fatal` becomes an `RPCError` (as `Unreachable` — `RPCError<C>` cannot carry a
+  `RemoteError`, exactly as on the unary path).
+
+Tests: `append_results_come_back_in_request_order` drives three distinct requests (each ack
+carries the index it matched, so a reordering would show) through the raw bidi client and
+asserts the acks come back in order; `a_stalled_append_stream_is_closed_on_soft_ttl` serves a
+peer that accepts the stream and never answers, and asserts the stream is reported closed
+before the hard ceiling. The three-replica tonic test now replicates over this path, and
+heartbeats do too.
 
 ## Risks
 
