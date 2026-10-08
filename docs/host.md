@@ -133,6 +133,20 @@ Consensus, transport, storage and proposal settings, shared by every group the
 host runs: see [Raft configuration](raft-configuration.md) and
 [implementation.md](implementation.md).
 
+## On disk today, and where it is going
+
+Each group owns one RocksDB directory under `data_dir` (`data_dir/<group_id>/`,
+with the control group at `data_dir/<control_group>/`), and the outbox cursor for a
+group lives beside it. Within that database every kind of data currently shares one
+key space: Raft entries, the aggregate state, and — inside the state record — every
+applied event and the dedup window.
+
+That layout is being replaced by
+[column families](storage-layout.md) (with the append-only `events` family, deltas
+instead of whole-state writes, and the search index in a sibling `index/`
+directory). The document below describes the running code; where the two differ,
+[storage-layout.md](storage-layout.md) is the decided target.
+
 ## What it does at boot
 
 1. Opens the **control group**. A data directory that does not exist yet is a new

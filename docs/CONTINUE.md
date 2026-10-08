@@ -112,7 +112,10 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
    deployment wiring behind `LOOMERY_NATS_URL`.
 0. Runtime follow-ups: multi-node control groups and placements (the runbook
    work), and a read model behind the (now scoped) reads — today they filter the
-   applied log, which is `O(history)` per read.
+   applied log, which is `O(history)` per read. The decided shape of that work is
+   recorded: [storage-layout.md](storage-layout.md) (column families, the `events`
+   family, deltas and state-only recovery) and [search.md](search.md) (the tantivy
+   index beside the database). Each step's tests are named in [D13](design.md#d13--history-is-append-only-checkpoints-carry-state).
 5. ~~Extend persistence validation to large histories, interrupted snapshot
    creation/installation/purge and storage failures before changing the default.~~
    **Done:** a 300-command history survives restart in both modes; interrupted

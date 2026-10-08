@@ -16,6 +16,8 @@ Start with [design.md](design.md) for the architecture and decisions, or
 | [Gateway](gateway.md) | Identity, admin claim, edge pre-compute, command plane and read-your-writes |
 | [Outbox and sagas](outbox-and-sagas.md) | Committed-event publishing, cursors, retry classification and the invitation saga |
 | [Runtime host](host.md) | `loomery-server`: configuration, wiring, boot sequence and known gaps |
+| [Storage layout](storage-layout.md) | The decided column-family layout: keys, the atomic apply batch, recovery, purge, the record/derived split |
+| [Search](search.md) | "Find anything" within a tenant: the index beside the database, scoping, rebuild, staleness |
 | [Test services](testing-services.md) | Keycloak and NATS JetStream for the opt-in integration suite |
 | [Third-party licenses](third-party-licenses.md) | The bundled dependency license texts, how they are generated and checked |
 | [Raft configuration](raft-configuration.md) | Persistent replica startup, tuning, TLS/mTLS and immutable persistence modes |

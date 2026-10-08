@@ -431,6 +431,10 @@ database (`<group>/index/`), because the index wants real files it can mmap — 
 [D6](#d6--fts-engine) — and it is derived, so it is rebuilt from `events` whenever
 it is wrong.
 
+The full layout — families, key formats, the atomic batch, recovery, snapshots and
+purge, the record/derived split, and the tests each step owes — is
+[storage-layout.md](storage-layout.md).
+
 The reasoning and upstream contracts are recorded in
 [checkpoint-policy.md](research/checkpoint-policy.md). Configuration and startup
 examples are in [raft-configuration.md](raft-configuration.md).
@@ -475,7 +479,10 @@ no stemming, no facets or aggregations.
 The comparison, including how each option scopes results to the caller's
 permissions, is in
 [read-model-store-options.md](research/read-model-store-options.md#search-is-the-cornerstone).
-**Status: OPEN**
+The decided design — what is findable, the schema sketch, where the scope filter
+sits, how the index is built and rebuilt, and what stays out of scope — is
+[search.md](search.md).
+**Status: OPEN (the engine choice is settled: tantivy)**
 
 ### D7 — Vector store (Phase 4)
 **Options:** tenant-scale brute force with `ndarray`/`half` (simple, no deps)
@@ -751,10 +758,19 @@ recorded in [`domain-model.md`](domain-model.md).
         `invitation.create` requires owning a workspace of the organization. The
         membership index those checks read is derived from the applied events, so
         they are map lookups rather than scans
-- [ ] The append-only record (D13): archive purged log segments, back reads with
-      read models, then take the event list out of the checkpoint payload — the
-      last step changes the D2 contract and needs its crash/purge/replay tests and
-      latency/recovery benchmarks first
+- [ ] Column families and the `events` family (D2 amendment, D13 step 1): split
+      the database into `default`/`raft_log`/`state`/`events`/`projections`, append
+      each apply's events to `events`, fail closed on an unknown format marker —
+      additive, so the checkpoint keeps carrying what it does today
+- [ ] Deltas and state-only recovery (D13 step 2): `state` keyed per aggregate so an
+      apply writes only what it changed, the checkpoint drops the event list, and
+      nothing keeps a second copy of the record in RAM — this changes the D2
+      contract, so it lands with its crash/purge/replay tests and latency/recovery
+      benchmarks, and with the soak showing the apply rate no longer halving as the
+      history doubles
+- [ ] Projections and the search index (D9, D6): the `projections` family for
+      boards and lookups, a tantivy directory per group for "find anything", both
+      rebuilt from `events`
 - [ ] Phase 2 work core
 - [ ] Phase 3 notifications
 - [ ] Phase 4 knowledge base & RAG

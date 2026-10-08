@@ -221,6 +221,11 @@ wrong certificate name, missing client identity and invalid configuration.
 
 ### Experimental snapshot-backed recovery
 
+The layout these modes write into is being replaced by
+[column families](storage-layout.md): the same two modes remain (how state is made
+durable), but they will write into `state`/`events` families rather than one key
+space, and `snapshot` mode's record will no longer carry the event list.
+
 `GroupConfig.storage.state_persistence` accepts `"checkpoint"` (default) or
 `"snapshot"` (experimental). Set the configuration flag when creating a new
 replica database:
