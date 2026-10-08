@@ -524,6 +524,44 @@ naming for the first outbox slice:**
 
 ---
 
+### D13 — History is append-only; checkpoints carry state
+
+**Status: DECIDED (target shape; amends [D2](#d2--storage-engine), which is the
+current implementation).** The record of what happened is **append-only**: the
+replicated log, plus an archive of any segment that is purged once a snapshot
+covers it. The state machine keeps **current state** — the fold — and checkpoints
+persist *that*, not a copy of the event list they were folded from. Two read
+paths follow from it: **query reads come from read models**, and **history reads
+(the event log of an organization or workspace) come from the append-only
+record**, never from an in-memory list that happens to be one replica's copy.
+
+D2's checkpoint carries aggregate state *and* applied events on every apply. That
+keeps the whole history durable — the union of the current checkpoint and the log
+tail is complete — but it rewrites the entire history on every committed batch,
+so its cost is quadratic in the history: the opt-in soak measures 162 → 34 → 17
+commands per second at 200 → 1,000 → 2,000 commands, while snapshot mode (which
+does not persist per apply) degrades far more gently
+([persistence hardening](benchmarks/persistence-hardening.md)). The in-memory
+event list grows the same way and is never trimmed, so every replica of every
+group holds its group's whole history in RAM.
+
+**Order of work, because each step is what makes the next one safe:**
+
+1. **Archive on purge.** Purged entries go to an append-only archive before the
+   purge commits, so the record stays complete. Nothing else changes; this is
+   strictly additive and is what makes step 3 non-destructive.
+2. **Read models** ([D9](#d9--storage-of-cold-read-model-state) decides the
+   store). Status and query reads stop filtering the applied list. Until this
+   lands, the in-memory list cannot be bounded, because reads need it.
+3. **State-only checkpoints.** The checkpoint payload drops the event list and
+   keeps state, dedup, membership and the applied index. This changes the D2
+   contract, so it needs its crash/purge/replay tests and latency/recovery
+   benchmarks first, exactly as D2 requires of any change to that contract.
+
+History reads move to the append-only record as part of 2 and 3; the
+`X-Min-Index` gate keeps reading the applied index from state, which both steps
+keep.
+
 ## 8. Progress tracker
 
 ### Scaffold
@@ -640,6 +678,10 @@ recorded in [`domain-model.md`](domain-model.md).
         `invitation.create` requires owning a workspace of the organization. The
         membership index those checks read is derived from the applied events, so
         they are map lookups rather than scans
+- [ ] The append-only record (D13): archive purged log segments, back reads with
+      read models, then take the event list out of the checkpoint payload — the
+      last step changes the D2 contract and needs its crash/purge/replay tests and
+      latency/recovery benchmarks first
 - [ ] Phase 2 work core
 - [ ] Phase 3 notifications
 - [ ] Phase 4 knowledge base & RAG
