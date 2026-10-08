@@ -125,25 +125,34 @@ snapshot pattern already in the architecture), wrong for the growing ones.
 
 ## Recommendation
 
-**redb for ordered and structured reads, tantivy for search** — both per group,
-both rebuilt by replaying the append-only record. redb keeps the list-shaped
-paths that want a range scan and keyset pagination; tantivy answers "find
-anything" with the ranking, fuzzy matching and facet arithmetic that a KV store
-would make us hand-roll. Both are pure Rust, MIT/Apache (already allowlisted), and
-neither needs an advisory exception, so the licence and build story does not
-change. This is a revision of this note's first version, which recommended redb
-alone: that assumed query reads were list-shaped and left search to a later
-engine.
+**Use the database that is already there.** The column-family layout now recorded
+in [D2](../design.md#d2--storage-engine) gives the log, the aggregate state, the
+append-only record and the projections separate key spaces inside one per-tenant
+RocksDB — the separation this note kept asking a second engine for — and a
+`WriteBatch` across families is atomic, which is what makes "state and events" one
+durable fact. So: **projections in the `projections` family**, ordered reads as
+range scans with keyset pagination, and **tantivy beside the database** for
+["find anything"](../design.md#1-what-loomery-is), which is the ranking, fuzzy
+matching and facet arithmetic a KV store would otherwise make us hand-roll.
+
+This supersedes both earlier versions of this recommendation. The first said redb
+alone (it assumed list-shaped reads and left search for later); the second said
+redb plus tantivy (it predates the column-family layout). A second embedded engine
+would now buy isolation we can get from a family, at the cost of another licence
+surface, another set of failure modes and another thing to rebuild. The
+column-family route needs no new crate at all: tantivy is the only addition, and
+it is there for search, not for storage.
 
 Take **rusqlite (bundled SQLite + FTS5)** instead if one file per tenant is worth
 more than ranking quality — it keeps entities, text search and (with
 `sqlite-vec`) vectors in a single artifact, at the cost of a C build, a second
-engine's failure modes, and the weaker text engine. Take **RocksDB reuse** only if
-adding a dependency is worse than sharing the log's database for the first slice;
-**sled** stays out for the reasons above.
+engine's failure modes, and the weaker text engine. **redb** and **sled** stay out
+for the reasons in the table above: with families available, neither earns a
+second engine.
 
 Reversal is cheap either way: projections and indexes are derived, so changing the
-store later costs a rebuild, not a migration.
+store later costs a rebuild, not a migration — which is also why the projections
+family can be dropped and rebuilt whenever its shape changes.
 
 **Decided by:** open — this note is the input; the register entry
 [D9](../design.md#d9--storage-of-cold-read-model-state) is updated once chosen.

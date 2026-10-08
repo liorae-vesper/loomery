@@ -395,6 +395,42 @@ replay. The default remains `"checkpoint"`; each database records its mode and
 rejects changes. See the [paired checkpoint spike](benchmarks/checkpoint-spike.md)
 for measurements and remaining validation.
 
+**Amendment — column families (decided).** One database per group stays, and the
+tenant *is* the namespace: the database is the tenant, so every key inside it is
+already tenant-scoped and no `tenant:` prefix is needed (an escape hatch if
+per-database overhead ever hurts: one database per node with prefixed keys and a
+shared `Env`/block cache — isolation then becomes a naming convention, which is
+why it is not the default). Inside that database, the kinds of data live in
+**column families** rather than sharing one key space:
+
+| Column family | Holds |
+|---|---|
+| `default` | format marker and persistence mode (openers fail closed on unknown) |
+| `raft_log` | Raft entries, vote, committed pointer, purge floor |
+| `state` | aggregate state — written as **deltas**, only the aggregates a batch touched — plus the dedup window and the applied index |
+| `events` | **the append-only record**: the events of each apply, in order |
+| `projections` | materialized read models, droppable and rebuildable at will (D9) |
+
+Two consequences, both verified against `rocksdb` 0.24.0 rather than assumed:
+
+- **A `WriteBatch` spans column families atomically** (`put_cf`/`delete_cf`/`delete_range_cf`),
+  so "the state moved and these events happened" is one durable fact, and so is
+  "these Raft entries are purged and the record already has their events".
+- **Every opener must list every existing column family** — RocksDB refuses to
+  open otherwise (`Column families not opened: …`). The list lives in one place,
+  guarded by the format marker, and an unknown family fails closed.
+
+Because the `events` family is written at apply time — always before Raft purges
+the entries carrying those events — purging the Raft log cannot lose history, and
+the separate archive-on-purge step this design first described is unnecessary. The
+per-apply cost also stops growing with the history: a batch writes its own state
+deltas and its own events, not the whole state ([D13](#d13--history-is-append-only-checkpoints-carry-state)).
+
+The search index is **not** a column family. It is a tantivy directory beside the
+database (`<group>/index/`), because the index wants real files it can mmap — see
+[D6](#d6--fts-engine) — and it is derived, so it is rebuilt from `events` whenever
+it is wrong.
+
 The reasoning and upstream contracts are recorded in
 [checkpoint-policy.md](research/checkpoint-policy.md). Configuration and startup
 examples are in [raft-configuration.md](raft-configuration.md).
@@ -463,9 +499,13 @@ The candidates, with what each implies for reads, rebuilds, licences and the
 build, are compared in
 [read-model-store-options.md](research/read-model-store-options.md). Because the
 cornerstone is ["find anything"](#1-what-loomery-is) (principle 11), the store
-question now has a search half, and the note's recommendation reflects it: **redb
-for ordered and structured reads, tantivy for search** — both per group, both
-rebuilt from the append-only record.
+question has a search half, and because
+[D2's amendment](#d2--storage-engine) puts the durable data in RocksDB column
+families, the answer is: **the `projections` family for ordered and structured
+reads, tantivy beside the database for search** — both per group, both rebuilt
+from the append-only record. That supersedes the note's earlier `redb`
+recommendation, which predates the column-family layout and would add a second
+engine where the first one now suffices.
 **Status: OPEN (Phase 3)**
 
 ### D10 — Data-shape validation
@@ -574,18 +614,22 @@ does not persist per apply) degrades far more gently
 event list grows the same way and is never trimmed, so every replica of every
 group holds its group's whole history in RAM.
 
-**Order of work, because each step is what makes the next one safe:**
+**Order of work** (revised: the `events` column family in
+[D2's amendment](#d2--storage-engine) makes the record durable per apply, which
+replaces the archive-on-purge step this decision first described):
 
-1. **Archive on purge.** Purged entries go to an append-only archive before the
-   purge commits, so the record stays complete. Nothing else changes; this is
-   strictly additive and is what makes step 3 non-destructive.
-2. **Read models** ([D9](#d9--storage-of-cold-read-model-state) decides the
-   store). Status and query reads stop filtering the applied list. Until this
-   lands, the in-memory list cannot be bounded, because reads need it.
-3. **State-only checkpoints.** The checkpoint payload drops the event list and
-   keeps state, dedup, membership and the applied index. This changes the D2
-   contract, so it needs its crash/purge/replay tests and latency/recovery
+1. **Column families and the `events` family.** Split the database into families
+   and append each apply's events to `events`. Additive to the contract: the
+   checkpoint still carries what it did yesterday, and the record is now complete
+   without an archive.
+2. **Deltas and state-only recovery.** `state` is written per aggregate, so an
+   apply writes only what it changed; the checkpoint drops the event list; reads
+   stop needing an in-memory list of every event. This is the step that changes
+   the D2 contract, so it needs its crash/purge/replay tests and latency/recovery
    benchmarks first, exactly as D2 requires of any change to that contract.
+3. **Read models** ([D9](#d9--storage-of-cold-read-model-state)): status and query
+   reads answer from `projections` and from the search index, history reads from
+   `events`.
 
 History reads move to the append-only record as part of 2 and 3; the
 `X-Min-Index` gate keeps reading the applied index from state, which both steps
