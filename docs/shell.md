@@ -92,8 +92,9 @@ for tenant creation, startup reconciliation and retry sweeping.
   the sender fragments and the follower reassembles within the request, aborting a
   stream that ends without the final fragment. `StreamAppend` needs no such
   framing: one HTTP/2 stream keeps both directions ordered, so results come back
-  in request order, and the transport bounds a reply-less stream by openraft's
-  `soft_ttl` rather than by the much smaller `hard_ttl`.
+  in request order, and the transport bounds a reply-less stream by
+  `transport.stream_stall_timeout_ms` rather than by openraft's TTLs, which are
+  derived from the heartbeat interval and are too small to use as a stream bound.
 - TLS/mTLS is opt-in. Configured clients require HTTPS and verify the CA and
   peer name. The listener sets TCP_NODELAY and configured keepalive on accepted
   connections. No automatic certificate reload is implemented.

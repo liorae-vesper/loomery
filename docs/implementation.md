@@ -364,9 +364,12 @@ results back on another, calling `Raft::stream_append` in between. A single
 HTTP/2 stream preserves order in each direction, so results arrive in request
 order without sequence numbers, and requests and results are bounded by a
 64-slot channel on each side — the leader cannot run unboundedly ahead of a slow
-follower. Each awaited result carries openraft's `soft_ttl` as its bound, so a
-peer that stops answering is closed off rather than waited on; `hard_ttl` is the
-heartbeat interval and is not a stream lifetime limit.
+follower. A stream that produces nothing is closed after
+`transport.stream_stall_timeout_ms` (10 s by default) rather than by openraft's
+TTLs: on the replication path `hard_ttl` is the heartbeat interval and `soft_ttl`
+is derived from it, and using either as a per-response bound tears the stream
+down mid-burst under load, which openraft cannot repair (see
+[the benchmark note](benchmarks/deployment-scale.md#the-sweep-that-wedged-and-why)).
 
 0.9 fragmented snapshots in the core and replicated one unary RPC at a time. The
 `Envelope` RPCs still carry JSON request/Result types. The protobuf package is

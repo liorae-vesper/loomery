@@ -1,14 +1,21 @@
 # Migrating to openraft 0.10 for pipelined append
 
-Status: **migrated, pipelined and green. Only the before/after benchmark (leg 6) is
-outstanding.** Branch `feature/openraft-pipelined-append`.
+Status: **all six legs done — migrated, measured and green. The append half of leg 5 is
+awaiting a keep-or-revert decision.** Branch `feature/openraft-pipelined-append`.
 
 `cargo check -p loomery-shell --all-features` is clean, `mise run test` (177 shell lib tests,
 including `testing::log::Suite`, the hardening and interruption suites) and `mise run verify`
-are green, and `main` is untouched. **What 0.10 changed under us is in
-[What 0.10 changed under us](#what-010-changed-under-us) — read that before trusting the
-benchmark**; two of those changes move the write path on their own, so a before/after delta is
-not all pipelining.
+are green, and `main` is untouched.
+
+**The measured verdict: the migration paid, the pipelining did not show up.** The deployment
+path is 2.4–2.7× faster at the default config and 11.8–15.5× at concurrency 128 unbatched, and
+the 0.9 single-node anomaly (294 writes/s against 777 on three nodes) is gone. But the same
+build with `stream_append` reverted to openraft's sequential default matches the pipelined one
+within run-to-run noise, so **the win is 0.10's removal of the per-flush append serialization,
+not the bidirectional RPC**. Numbers, attribution arms and the wedge the first sweep hit are in
+[deployment-scale.md § After](../benchmarks/deployment-scale.md#after-openraft-010-and-pipelined-append);
+what this means for shipping is
+[Pipelined append](#pipelined-append-leg-5).
 
 ## What the migration cost, measured
 
@@ -207,9 +214,11 @@ staging it:
    `crates/shell/proto/raft.proto`, with the receiving side calling `Raft::stream_append`.
 
 The trait's contract to respect: responses must be yielded **in the same order as the input
-requests**, and the implementation enforces `option.soft_ttl()` (a long-lived stream uses
-`soft_ttl` for setup/idle policy, not `hard_ttl`). One HTTP/2 stream per follower keeps order
-without sequence numbers; a multiplexed design would have to reorder by sequence number.
+requests**. One HTTP/2 stream per follower keeps order without sequence numbers; a multiplexed
+design would have to reorder by sequence number. The trait also asks that the implementation
+use `option.soft_ttl()` for a stream's setup or idle policy rather than `hard_ttl` — that
+guidance was followed first and had to be abandoned, see
+[Pipelined append](#pipelined-append-leg-5).
 
 ## Surface to migrate
 
@@ -239,10 +248,17 @@ without sequence numbers; a multiplexed design would have to reorder by sequence
    change.~~ **Done, with the three documented behaviour changes above.**
 5. ~~Only then the bidi RPC and true pipelining, with tests for ordering and for `soft_ttl`.~~
    **Done**: the snapshot stream and the bidirectional `StreamAppend`, below.
-6. Measure: deployment harness unbatched and batched, single node and three, against the
-   recorded 0.9 numbers in `docs/benchmarks/results/deployment-path.json`. **Not started.**
+6. ~~Measure: deployment harness unbatched and batched, single node and three, against the
+   recorded 0.9 numbers in `docs/benchmarks/results/deployment-path.json`.~~ **Done**: five
+   configs, three trials each, 39/39 passing, plus the sequential-arm attribution runs.
 
-Steps 1–4 are a migration; step 5 is the feature; step 6 decides whether step 5 was worth it.
+Steps 1–4 are a migration; step 5 is the feature; step 6 was to decide whether step 5 was worth
+it. **It says no, measurably.** The migration should ship. The append half of leg 5 is neutral
+performance and carries a wedge-prone failure mode that we already had to fix once, so the
+honest options are (a) revert the `StreamAppend` RPC and keep the migration plus the streamed
+snapshot transfer, or (b) keep it and treat it as groundwork for a deployment where RTT
+dominates — with the loopback caveat above standing as the reason to decide on grounds other
+than these numbers.
 
 ## Pipelined append (leg 5)
 
@@ -256,12 +272,23 @@ The feature the migration exists for. `StreamAppend` is a bidirectional RPC in
 * Requests and results each get a 64-slot channel, matched to openraft's own pipeline depth
   (`PIPELINE_BUFFER_SIZE`) so the transport is not the tighter bottleneck, and bounded so a
   leader cannot run unboundedly ahead of a slow follower.
-* Opening the stream carries the unary timeout, because a peer that never sends response
-  headers would otherwise hang replication. Each awaited result then carries **`soft_ttl`**
-  as its bound. That is the right choice here and not the snapshot case: on the replication
-  path `hard_ttl` is the *heartbeat interval* (50 ms by default), which the docs explicitly
-  exclude from being a stream-lifetime limit, while `soft_ttl` is the per-response/idle bound
-  they ask for. A peer that stops answering is closed off and reported rather than waited on.
+* Opening the stream carries the configured RPC deadline (`request_timeout_ms`), because a
+  peer that never sends response headers would otherwise hang replication. A failure *there*
+  surfaces from `stream_append` itself, which openraft answers by backing off and retrying, so
+  it cannot corrupt progress.
+* A stream that produces nothing is closed after **`transport.stream_stall_timeout_ms`**
+  (10 s by default). This is where the trait's `soft_ttl` guidance had to be abandoned, and
+  the reason is worth keeping: `soft_ttl` is three quarters of `hard_ttl`, and on the
+  replication path `hard_ttl` is the *heartbeat interval* — 100 ms in the benchmark, so a
+  75 ms bound. A 75 ms gap is ordinary under load, so the stream was torn down mid-burst with
+  requests outstanding; openraft's progress then keeps a `matching` index ahead of what the
+  follower has, and the conflict that would repair it is *discarded* (`update_conflicting`
+  ignores a conflict at or above `searching_end`, and one carrying a stale inflight id leaves
+  the entry untouched). Its own docs note replication then "cannot make progress", so the
+  follower never catches up. A stall detector is the bound this needs to be, not a latency
+  budget, and no TTL openraft passes is usable for it.
+* The follower stops feeding its `Raft` the moment the caller drops the results stream, so an
+  abandoned stream cannot apply requests behind the leader's back.
 * `Conflict` and `HigherVote` are protocol *answers*, not transport failures: they travel as
   `Ok(..)` and end the stream after delivery, matching `stream_append_sequential`. Only a
   remote `Fatal` becomes an `RPCError` (as `Unreachable` — `RPCError<C>` cannot carry a
@@ -269,10 +296,19 @@ The feature the migration exists for. `StreamAppend` is a bidirectional RPC in
 
 Tests: `append_results_come_back_in_request_order` drives three distinct requests (each ack
 carries the index it matched, so a reordering would show) through the raw bidi client and
-asserts the acks come back in order; `a_stalled_append_stream_is_closed_on_soft_ttl` serves a
-peer that accepts the stream and never answers, and asserts the stream is reported closed
-before the hard ceiling. The three-replica tonic test now replicates over this path, and
+asserts the acks come back in order; `a_stalled_append_stream_is_closed` serves a peer that
+accepts the stream and never answers, and asserts the stream is reported closed — attributed
+by the error message rather than a wall clock, because timing assertions here are flaky under
+a fully parallel suite. The three-replica tonic test now replicates over this path, and
 heartbeats do too.
+
+**What it bought: nothing measurable.** See
+[the measurement](../benchmarks/deployment-scale.md#after-openraft-010-and-pipelined-append).
+Pipelining is within run-to-run noise in every configuration measured, and the large wins over
+0.9 come from the migration itself: openraft 0.10 no longer serializes local appends behind the
+previous flush. The same 0.10 build with `stream_append` reverted to openraft's sequential
+default matches the pipelined one, so the append half of leg 5 is a candidate for reverting
+without losing the numbers.
 
 ## Risks
 

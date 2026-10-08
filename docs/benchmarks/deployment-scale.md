@@ -123,6 +123,106 @@ deliberately: the curve is about *scale*, and batching has its own
   replication bookkeeping and the two synchronous writes per command is the next
   measurement, and it is open.
 
+## After: openraft 0.10 and pipelined append
+
+Everything above was measured on **0.9.25**, before the migration. This section is the
+same harness, same machine, same configs, re-run on **0.10.0-alpha.36 with pipelined
+append** — branch `feature/openraft-pipelined-append`, commit `ee0bb08` onward (the code
+under test was committed before the runs; each run's `environment.json` records the
+commit and whether the tree was dirty).
+
+Three trials per point, release, medians. Raw runs are collected in
+[`results/deployment-path.json`](results/deployment-path.json); the table names the run
+directories so each number is traceable.
+
+| Config | Point | 0.9.25 | 0.10 + pipelining | × | p50 before → after |
+|---|---|---|---|---|---|
+| 3 nodes, c=8, unbatched | checkpoint 2k | 365 | 983 | 2.7× | 19.6 → 8.0 ms |
+| | checkpoint 5k | 379 | 926 | 2.4× | 19.5 → 8.3 ms |
+| | checkpoint 10k | 363 | 964 | 2.7× | 19.6 → 8.0 ms |
+| | checkpoint 20k | 367 | 924 | 2.5× | 19.6 → 8.1 ms |
+| | snapshot 20k | 384 | 959 | 2.5× | 19.5 → 7.7 ms |
+| 3 nodes, c=128, batch 1 | checkpoint 2k | 823 | 12,768 | **15.5×** | 155 → 9.7 ms |
+| | checkpoint 20k | 777 | 9,134 | **11.8×** | 157 → 11.2 ms |
+| 3 nodes, c=128, batch 8 | checkpoint 2k | 1,129 | 1,108 | 0.98× | 113 → 110 ms |
+| | checkpoint 20k | 1,067 | 1,139 | 1.07× | 114 → 112 ms |
+| 3 nodes, c=128, batch 128 | checkpoint 2k | 14,226 | 14,307 | 1.01× | 8.5 → 8.6 ms |
+| | checkpoint 20k | 13,781 | 13,160 | 0.95× | 9.2 → 9.3 ms |
+| **1 node**, c=128, batch 1 | checkpoint 20k | 294 | 8,634 | **29.3×** | 420 → 11.7 ms |
+
+Before: `20261008013400-deployment-scale`, `…022806-matrix-batch1`,
+`…023612-matrix-batch8`, `…023836-matrix-batch128`, `…025912-split-single-node-unbatched`.
+After: `20261008153608-after-deployment-scale`, `…153935-after-matrix-batch1`,
+`…153950-after-matrix-batch8`, `…154057-after-matrix-batch128`,
+`…154109-after-single-node-unbatched`. Zero failed trials in all 39.
+
+### The win is the migration, not the pipelining
+
+The branch exists for pipelining, so the obvious reading of that table is wrong. Disabling
+**only** the bidirectional `stream_append` override — one `#[cfg(any())]`, leaving openraft's
+`stream_append_sequential` to send one request and wait for each response — gives:
+
+| Config | Point | 0.9.25 | 0.10, sequential | 0.10, pipelined |
+|---|---|---|---|---|
+| 3 nodes, c=8, batch 1 | checkpoint 5k | 379 | **939** | 926 |
+| 3 nodes, c=128, batch 1 | checkpoint 2k | 823 | **12,463** | 12,768 |
+| 3 nodes, c=128, batch 1 | checkpoint 20k | 777 | **9,380** | 9,134 |
+| 1 node, c=128, batch 1 | checkpoint 20k | 294 | **9,689** | 8,634 |
+
+Sequential runs: `20261008152851-bisect-sequential`, `…154144-seq-arm-matrix-batch1`,
+`…154159-seq-arm-single-node` (all measured with the override disabled in the working tree,
+which those runs' `environment.json` record as a dirty tree).
+
+So **pipelining is inside the noise band in every configuration measured**, and the 2.4–29×
+gains come from openraft 0.10 itself: its core no longer waits for the previous append's flush
+before issuing the next one, which was the serialization this benchmark was actually hitting.
+The single-node anomaly from 0.9 disappears in *both* 0.10 arms, which is more evidence that it
+lived in the 0.9 core's unbatched entry path rather than in the network round trip.
+
+How wide is "noise"? The same config was re-run as a check: batch 1 c=128 20k gave 9,134,
+9,401, and (sequential) 9,380; single node 20k gave 8,634 and 9,912 where sequential gave
+9,689. Three-node comparisons are tight (~3%); the single-node, high-concurrency points spread
+~15%, which is wider than the pipelined-versus-sequential gap in either direction.
+
+Two caveats on that conclusion. It is **loopback**: pipelining's theoretical advantage is
+removing a round trip per exchange, and here every round trip is microseconds, while openraft's
+`LogsSince` payload accumulation already packs many entries into each unary request. On a link
+where RTT dominates, the sequential arm would pay that RTT per request and the pipelined arm
+would not — this benchmark cannot show that, and does not. And the batched rows are unmoved
+from 0.9 in both arms, which is consistent with everything above: once batching amortizes the
+exchange, neither the flush-wait nor the round trip is what limits the path.
+
+### The sweep that wedged, and why
+
+The first attempt at this sweep failed rather than producing numbers: a follower stopped at log
+index 5017 while the cluster committed 5105, and never recovered — the trial hit the 900 s
+barrier deadline, twice. The cause was in the pipelined transport, and it is worth recording
+because the failure mode is silent and permanent:
+
+- `stream_append` used `soft_ttl` — three quarters of `hard_ttl`, which on the replication path
+  is `heartbeat_interval`, so **75 ms** in this config — as a per-response read timeout.
+- A 75 ms gap is ordinary here (a durable fsync with 128 writes in flight), so the stream was
+  torn down mid-burst with requests outstanding.
+- Openraft's progress bookkeeping then holds a `matching` index ahead of what the follower
+  actually has, and the conflict response that would repair it is *discarded*: a conflict at or
+  above `searching_end` "carries no new information", and one carrying a stale inflight id
+  leaves the progress entry untouched. Openraft's own docs note that in this state "log
+  replication cannot make progress". So the follower is not retried into catching up; it is
+  left behind until something else restarts replication.
+
+The fix is `transport.stream_stall_timeout_ms` (default 10 s): a stall detector rather than a
+latency budget, plus opening the stream under the configured `request_timeout_ms` (a failure
+there returns from `stream_append` itself, which openraft retries safely) and having the
+follower stop feeding its `Raft` the moment the caller drops the results stream. The numbers
+above are from the fixed tree; `20261008152723-repro-5000-mine` is the failing run, kept in the
+results file.
+
+**What this does not say.** These are medians of three trials on one machine, and the
+attribution arms are single runs per config rather than an interleaved, order-randomized
+experiment — enough to rule *out* a large pipelining win, not enough to resolve a 3% one. The
+recommendation that follows is a [revert-or-keep decision](../research/openraft-010-migration.md#pipelined-append-leg-5)
+for the append half of leg 5, not a performance claim.
+
 ## The cheap path, measured: batching and concurrency
 
 Before reaching for a newer consensus library, the two levers already in the tree

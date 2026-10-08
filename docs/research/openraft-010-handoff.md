@@ -3,15 +3,28 @@
 This is a self-contained work packet. Everything needed to continue is here or in the two
 files it names; the previous session's context is not required.
 
-**Legs 1, 2 and 5 are complete: the migration is in, the snapshot transport is streamed, and
-replication is pipelined.** `crates/shell` is on openraft **0.10.0-alpha.36** with
+**All six legs are complete.** `crates/shell` is on openraft **0.10.0-alpha.36** with
 `cargo check -p loomery-shell --all-features` clean and `mise run test` / `mise run verify`
 green on branch `feature/openraft-pipelined-append`. `main` is untouched, and the first commit
-that may merge is the migration one. **Only leg 6 (the before/after benchmark) is
-outstanding.** Read `docs/research/openraft-010-migration.md` for the surface inventory, the
-measured error counts per step, the `StreamAppend` design, and **the behaviour changes the
-migration had to accept** — two of those move the write path on their own, so the benchmark's
-delta is not all pipelining.
+that may merge is the migration one.
+
+**The measured verdict: the migration paid, the pipelining did not show up.** 2.4–2.7× at the
+default deployment config, 11.8–15.5× unbatched at concurrency 128, and 0.9's single-node
+anomaly gone — but a build with `stream_append` reverted to openraft's sequential default
+matches the pipelined one within noise, so the win is 0.10's core, not the bidirectional RPC.
+The numbers and the attribution arms are in
+[deployment-scale.md](../benchmarks/deployment-scale.md#after-openraft-010-and-pipelined-append).
+
+**One decision is outstanding, and it is not a measurement:** whether to keep or revert the
+append half of leg 5 (`StreamAppend`). It is performance-neutral here and it introduced a
+silent wedge that had to be fixed once (see the sweep note in the benchmark doc and
+`docs/raft-configuration.md` on `stream_stall_timeout_ms`). The streamed snapshot transfer is
+independent of it and is a robustness improvement either way.
+
+Read `docs/research/openraft-010-migration.md` for the surface inventory, the measured error
+counts per step, the `StreamAppend` design, and **the behaviour changes the migration had to
+accept** — two of those move the write path on their own, which is why the benchmark needed the
+sequential-arm runs to say anything.
 
 ## The job
 
@@ -68,18 +81,22 @@ What landed:
 
 ## Next actions, in order
 
-1. **Measure — leg 6.** `mise run bench-deployment-scale` on the unbatched *and* batched
-   paths, one node and three, against the recorded 0.9 numbers in
-   `docs/benchmarks/results/deployment-path.json`. This decides whether leg 5 was worth it.
-   Three things are in the tree at once and the write path moved for all three, so a single
-   before/after delta cannot attribute it: the 0.10 migration (local appends no longer wait for
-   the previous flush), the pipelined `StreamAppend`, and the streamed snapshot transport. If
-   attribution matters, isolate the pipelined append by measuring with `StreamAppend` reverted
-   to openraft's default sequential `stream_append` — that is a one-method change.
+Nothing is measured-outstanding. What remains is one decision and, if it goes the other way,
+one experiment:
 
-Nothing else is outstanding. If a measurement surprises us, the next question is whether the
-per-response `soft_ttl` bound or the 64-slot channel is the limiter, and both are single
-constants in `transport.rs`.
+1. **Keep or revert the append half of leg 5 (`StreamAppend`).** Reverting is deleting the
+   override in `RaftNetworkV2 for TonicNetwork` plus the `StreamAppend` RPC in
+   `crates/shell/proto/raft.proto`; openraft's `stream_append_sequential` takes over and the
+   measured numbers do not change (see the sequential arms in
+   [the benchmark](../benchmarks/deployment-scale.md#the-win-is-the-migration-not-the-pipelining)).
+   Keeping it costs the bidi plumbing, the stall knob and the failure mode that produced the
+   first wedged sweep. The snapshot streaming is independent and stays either way.
+2. **If it is kept, the open question is where the remaining time goes.** The batched ceiling
+   is unmoved at ~13,000 writes/s (batch 128, concurrency 128) and the unbatched path is now
+   ~9,000–12,000, so the next lever is per-entry cost rather than the exchange — which is what
+   `docs/benchmarks/deployment-scale.md#where-the-per-entry-cost-actually-is` already says.
+   Verifying whether the stall bound or the 64-slot channel is the limiter is a two-constant
+   change in `transport.rs`; both are `TransportConfig`-visible now except the channel size.
 
 ## Constraints that are not negotiable
 
