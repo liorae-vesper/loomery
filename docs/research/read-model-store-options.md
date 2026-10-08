@@ -12,6 +12,46 @@ archive of purged segments) and projections are **derived** — so a projection 
 always be thrown away and rebuilt from the record. That is the property that makes
 this decision low-risk and reversible, and it is assumed throughout.
 
+## Search is the cornerstone
+
+["Find anything" within the tenant](../design.md#1-what-loomery-is) (principle 11)
+is the requirement that reorganises this note. It makes **search a first-class
+read path** — free text *and* field filters, ranked, over every entity type — and
+it must never return what the caller may not read. Two consequences:
+
+- **The index is part of the read model**, so D6 (the FTS engine) and D9 (the
+  store) are one decision, not two. An index that lives in a different process
+  from the projection it indexes is an operational dependency we would have to
+  run per tenant.
+- **Scoping is a query-time property, not a post-filter.** Filtering results
+  after the fact breaks counts and pagination, and invites leaks; the filter
+  (workspace, project, visibility) has to be inside the query.
+
+With search in the picture, the options above split into two shapes: one engine
+that does both (SQLite tables + FTS5 + later `sqlite-vec`, in one file), or a
+purpose-built search engine beside a small ordered store (tantivy + redb). The
+facts for the search half, checked 2026-10:
+
+| | **tantivy** | **SQLite FTS5** |
+|---|---|---|
+| Version / upkeep | 0.26.x, actively maintained, 180 contributors | ships inside the bundled SQLite 3.53.2 |
+| Licence | MIT ✅ | public domain ✅ (crate MIT ✅) |
+| Ranking | BM25, field weights, configurable tokenizers, **stemming for 17 languages** | BM25, no stemming |
+| Matching | phrase, prefix, regex, **Levenshtein fuzzy** (`FuzzyTermQuery`) | phrase, prefix, `MATCH` |
+| Filters / facets | **fast fields** + facets + aggregations, so filter and rank in one pass | SQL `WHERE` beside the `MATCH` |
+| Snippets | built in | `snippet()`/`highlight()` |
+| Write model | single writer, readers see committed snapshots | single writer, WAL readers |
+
+Both can scope a query to the caller's permissions (tantivy: a fast-field filter
+on workspace/visibility; SQLite: a join or `WHERE`). Neither is a substitute for
+the authorization check itself — the gateway still decides, the index only
+narrows.
+
+**Still open:** whether "find anything" means the projected *entities*, the
+*history* that produced them, or both. The append-only record (D13) makes an
+event-level index cheap to add later; the recommendation below indexes entities
+first.
+
 ## What the store has to do
 
 | Requirement | Why |
@@ -85,16 +125,25 @@ snapshot pattern already in the architecture), wrong for the growing ones.
 
 ## Recommendation
 
-**redb**, one database file per group (holding all of that group's projection
-tables), rebuilt by replaying the append-only record. Rationale: it satisfies
-every requirement without a C build, a new advisory ignore, or a query-time
-network hop; its single-writer/MVCC model matches the projector exactly; and the
-decision is reversible — projections are derived, so changing the store later
-costs a rebuild, not a migration.
+**redb for ordered and structured reads, tantivy for search** — both per group,
+both rebuilt by replaying the append-only record. redb keeps the list-shaped
+paths that want a range scan and keyset pagination; tantivy answers "find
+anything" with the ranking, fuzzy matching and facet arithmetic that a KV store
+would make us hand-roll. Both are pure Rust, MIT/Apache (already allowlisted), and
+neither needs an advisory exception, so the licence and build story does not
+change. This is a revision of this note's first version, which recommended redb
+alone: that assumed query reads were list-shaped and left search to a later
+engine.
 
-Take **rusqlite** instead if Phase 4 wants vectors and SQL in one file before the
-first projection ships; take **RocksDB reuse** only if adding a dependency is
-worse than sharing the log's database for the first slice.
+Take **rusqlite (bundled SQLite + FTS5)** instead if one file per tenant is worth
+more than ranking quality — it keeps entities, text search and (with
+`sqlite-vec`) vectors in a single artifact, at the cost of a C build, a second
+engine's failure modes, and the weaker text engine. Take **RocksDB reuse** only if
+adding a dependency is worse than sharing the log's database for the first slice;
+**sled** stays out for the reasons above.
+
+Reversal is cheap either way: projections and indexes are derived, so changing the
+store later costs a rebuild, not a migration.
 
 **Decided by:** open — this note is the input; the register entry
 [D9](../design.md#d9--storage-of-cold-read-model-state) is updated once chosen.
@@ -109,3 +158,8 @@ worse than sharing the log's database for the first slice.
 - sled maintenance: <https://github.com/spacejam/sled/issues/1513> ·
   <https://github.com/spacejam/sled/issues/1514>
 - RustSec advisories: <https://rustsec.org/advisories/>
+- tantivy: <https://github.com/quickwit-oss/tantivy> ·
+  <https://docs.rs/tantivy/latest/tantivy/query/struct.FuzzyTermQuery.html> ·
+  <https://github.com/quickwit-oss/tantivy/releases/tag/0.26.1>
+- SQLite FTS5: <https://sqlite.org/fts5.html> (amalgamation default,
+  `SQLITE_ENABLE_FTS5` for source-tree builds)

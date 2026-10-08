@@ -36,6 +36,12 @@ non-negotiable principles:
 8. **Frozen payloads + upcast + writer gating** — old events decode forever.
 9. **DedupIndex** — the only idempotency store, folded into group state.
 10. **No 2PC.** Cross-group coordination is choreography via NATS + sagas.
+11. **"Find anything" within the tenant.** Search is a first-class read path, not
+    a report: any entity — and, where it matters, the history that produced it —
+    is findable by free text *and* by its fields, and a result a caller may not
+    read is a result they do not get. The tenant (one organization, one consensus
+    group) is the search boundary, so an index lives beside its group and is
+    rebuilt from the record ([D13](#d13--history-is-append-only-checkpoints-carry-state)).
 
 ---
 
@@ -240,7 +246,7 @@ retention caps + replay.
 
 ### Phase 4 — Knowledge base & RAG
 Documentation aggregate; document processing pipeline; **tantivy** FTS engine
-([D6](#d6--fts-engine-phase-4)); embedding sidecar (checkpointed, never re-call the LLM);
+([D6](#d6--fts-engine)); embedding sidecar (checkpointed, never re-call the LLM);
 tenant-scale brute-force KNN (or `pgvector`, [D7](#d7--vector-store-phase-4)).
 
 ### Phase 5 — Automation & integrations
@@ -415,10 +421,25 @@ Convert to `chrono::DateTime`-style types at API boundaries.
 **Status: DECIDED (scaffold — `crate::timestamp`, i64 ms; `now()` is
 shell-side)**
 
-### D6 — FTS engine (Phase 4)
-Options: **tantivy** (pure-Rust, mature, the standard choice) vs SQLite FTS via
-`rusqlite` vs a hand-rolled index. Needs a spike.
-**Status: OPEN (Phase 4)**
+### D6 — FTS engine
+The search half of ["find anything"](#1-what-loomery-is) (principle 11), which
+makes it the twin of [D9](#d9--storage-of-cold-read-model-state): whichever store
+holds the projections has to hold, or sit beside, the index.
+
+Options as recorded: **tantivy** (pure-Rust, mature, the standard choice) vs
+SQLite FTS5 via `rusqlite` vs a hand-rolled index. Current facts (2026-10):
+tantivy is at 0.26.x, MIT-licensed, actively maintained, and gives BM25 scoring,
+stemming for 17 languages, phrase and prefix queries, Levenshtein `FuzzyTermQuery`,
+fast fields (Lucene doc-values equivalent), facets and aggregations — so it can
+filter and rank in one pass, which is what permission-scoped search needs.
+SQLite's FTS5 is in the amalgamation and enabled by default there (a
+non-amalgamation build must define `SQLITE_ENABLE_FTS5`), but it offers less:
+no stemming, no facets or aggregations.
+
+The comparison, including how each option scopes results to the caller's
+permissions, is in
+[read-model-store-options.md](research/read-model-store-options.md#search-is-the-cornerstone).
+**Status: OPEN**
 
 ### D7 — Vector store (Phase 4)
 **Options:** tenant-scale brute force with `ndarray`/`half` (simple, no deps)
@@ -440,8 +461,11 @@ for durable read models (retention, archives), or a consensus-backed
 projection store. Phase 3 concern.
 The candidates, with what each implies for reads, rebuilds, licences and the
 build, are compared in
-[read-model-store-options.md](research/read-model-store-options.md) (recommendation:
-**redb**, one file per group, rebuilt from the append-only record).
+[read-model-store-options.md](research/read-model-store-options.md). Because the
+cornerstone is ["find anything"](#1-what-loomery-is) (principle 11), the store
+question now has a search half, and the note's recommendation reflects it: **redb
+for ordered and structured reads, tantivy for search** — both per group, both
+rebuilt from the append-only record.
 **Status: OPEN (Phase 3)**
 
 ### D10 — Data-shape validation
