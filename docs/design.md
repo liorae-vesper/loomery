@@ -434,9 +434,14 @@ model; dedup by `(group_id, log_index)`.
 re-issued publishes from leader failover or restart ([D11](#d11--outbox-subjects-stream-naming-and-dedup-identity)).
 
 ### D9 — Storage of "cold" read-model state
+
 ETS/Sled-equivalent question: in Rust, `sled`/`redb`/SQLite (`rusqlite`)
 for durable read models (retention, archives), or a consensus-backed
 projection store. Phase 3 concern.
+The candidates, with what each implies for reads, rebuilds, licences and the
+build, are compared in
+[read-model-store-options.md](research/read-model-store-options.md) (recommendation:
+**redb**, one file per group, rebuilt from the append-only record).
 **Status: OPEN (Phase 3)**
 
 ### D10 — Data-shape validation

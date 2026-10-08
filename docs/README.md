@@ -59,6 +59,7 @@ configuration reference describe what was selected and implemented.
 |---|---|
 | [OpenRaft versus alternatives](research/openraft-vs-alternatives.md) | Consensus and per-tenant groups |
 | [Storage engine alternatives](research/storage-engine-alternatives.md) | Log storage, projections, backups and vector storage |
+| [Read-model store options](research/read-model-store-options.md) | The D9 candidates for durable projections, with sources |
 | [Indexed segment format](research/indexed-segment-file-format.md) | Alternative log format; not the implemented RocksDB backend |
 | [OpenRaft storage](research/openraft-storage.md) | Storage contracts and version-specific integration notes |
 | [Consensus storage performance](research/consensus-storage-performance.md) | Serialized syncs, batching, blocking-pool timing and database closure investigation |
