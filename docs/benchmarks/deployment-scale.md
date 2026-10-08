@@ -110,14 +110,13 @@ deliberately: the curve is about *scale*, and batching has its own
 
 ### On the transport: `RaftNetworkV2`, pipelining, awaiting
 
-- **Pipelining has landed, so the curve below is now the *before* picture.**
-  The migration to openraft **0.10.0-alpha.36**
-  ([openraft-010-migration.md](../research/openraft-010-migration.md)) and the
-  bidirectional `StreamAppend` RPC are both in: the leader streams AppendEntries
-  requests to a follower and the follower streams results back on one ordered
-  HTTP/2 stream, without waiting for a per-entry response. **Everything in this
-  file was measured before that**, on the 0.9 sequential path, so its numbers are
-  the baseline the pipelined path has to beat rather than current behaviour. Note
+- **The migration landed and the pipelining did not, so the curve below is the *before*
+  picture.** openraft **0.10.0-alpha.36**
+  ([openraft-010-migration.md](../research/openraft-010-migration.md)) is in, with replication on
+  openraft's default sequential `stream_append`; a bidirectional `StreamAppend` RPC was built,
+  measured at level to a few percent either way, and removed. **Everything in this file was
+  measured before all of that**, on the 0.9 path, so its numbers are the baseline — and
+  [#after](#after-openraft-010) is what replaced them. Note
   also that openraft 0.10 no longer serializes local appends behind the previous
   flush, which changes the per-entry cost even where batching already amortized
   the round trip.
@@ -133,38 +132,45 @@ deliberately: the curve is about *scale*, and batching has its own
   replication bookkeeping and the two synchronous writes per command is the next
   measurement, and it is open.
 
-## After: openraft 0.10 and pipelined append
+## After: openraft 0.10
 
 Everything above was measured on **0.9.25**, before the migration. This section is the
-same harness, same machine, same configs, re-run on **0.10.0-alpha.36 with pipelined
-append** — branch `feature/openraft-pipelined-append`, commit `ee0bb08` onward (the code
-under test was committed before the runs; each run's `environment.json` records the
-commit and whether the tree was dirty).
+same harness, same machine, same configs, re-run on **0.10.0-alpha.36** — branch
+`feature/openraft-pipelined-append`. The pipelined arm was measured at `ee0bb08`; the shipped
+arm at `f1c0b60` with the removal still in the working tree, which those runs'
+`environment.json` record as a dirty tree, and which `b82a2b1` then committed.
+
+**The shipped configuration replicates through openraft's default sequential
+`stream_append`.** A bidirectional `StreamAppend` RPC was built for this branch, measured
+here, and then removed — it did not pay for itself, on either throughput or latency (see
+[what it bought](#the-win-is-the-migration-not-the-pipelining)). The `pipelined` column
+below is that removed build; the `shipped` column is what this branch now contains.
 
 Three trials per point, release, medians. Raw runs are collected in
 [`results/deployment-path.json`](results/deployment-path.json); the table names the run
 directories so each number is traceable.
 
-| Config | Point | 0.9.25 | 0.10 + pipelining | × | p50 before → after |
-|---|---|---|---|---|---|
-| 3 nodes, c=8, unbatched | checkpoint 2k | 365 | 983 | 2.7× | 19.6 → 8.0 ms |
-| | checkpoint 5k | 379 | 926 | 2.4× | 19.5 → 8.3 ms |
-| | checkpoint 10k | 363 | 964 | 2.7× | 19.6 → 8.0 ms |
-| | checkpoint 20k | 367 | 924 | 2.5× | 19.6 → 8.1 ms |
-| | snapshot 20k | 384 | 959 | 2.5× | 19.5 → 7.7 ms |
-| 3 nodes, c=128, batch 1 | checkpoint 2k | 823 | 12,768 | **15.5×** | 155 → 9.7 ms |
-| | checkpoint 20k | 777 | 9,134 | **11.8×** | 157 → 11.2 ms |
-| 3 nodes, c=128, batch 8 | checkpoint 2k | 1,129 | 1,108 | 0.98× | 113 → 110 ms |
-| | checkpoint 20k | 1,067 | 1,139 | 1.07× | 114 → 112 ms |
-| 3 nodes, c=128, batch 128 | checkpoint 2k | 14,226 | 14,307 | 1.01× | 8.5 → 8.6 ms |
-| | checkpoint 20k | 13,781 | 13,160 | 0.95× | 9.2 → 9.3 ms |
-| **1 node**, c=128, batch 1 | checkpoint 20k | 294 | 8,634 | **29.3×** | 420 → 11.7 ms |
+| Config | Point | 0.9.25 | pipelined | **shipped** | × vs 0.9 | p50 0.9 → shipped |
+|---|---|---|---|---|---|---|
+| 3 nodes, c=8, unbatched | checkpoint 2k | 365 | 983 | **970** | 2.7× | 19.6 → 8.1 ms |
+| | checkpoint 5k | 379 | 926 | **925** | 2.4× | 19.5 → 8.3 ms |
+| | checkpoint 10k | 363 | 964 | **902** | 2.5× | 19.6 → 8.6 ms |
+| | checkpoint 20k | 367 | 924 | **846** | 2.3× | 19.6 → 8.3 ms |
+| | snapshot 20k | 384 | 959 | **872** | 2.3× | 19.5 → 8.4 ms |
+| 3 nodes, c=128, batch 1 | checkpoint 2k | 823 | 12,768 | **12,937** | **15.7×** | 155 → 9.7 ms |
+| | checkpoint 20k | 777 | 9,134 | **9,272** | **11.9×** | 157 → 10.7 ms |
+| 3 nodes, c=128, batch 8 | checkpoint 2k | 1,129 | 1,108 | **1,094** | 0.97× | 113 → 117 ms |
+| | checkpoint 20k | 1,067 | 1,139 | **1,062** | 1.00× | 114 → 117 ms |
+| 3 nodes, c=128, batch 128 | checkpoint 2k | 14,226 | 14,307 | **14,587** | 1.03× | 8.5 → 8.4 ms |
+| | checkpoint 20k | 13,781 | 13,160 | **13,574** | 0.98× | 9.2 → 9.2 ms |
+| **1 node**, c=128, batch 1 | checkpoint 20k | 294 | 8,634 | **9,337** | **31.8×** | 420 → 10.7 ms |
 
 Before: `20261008013400-deployment-scale`, `…022806-matrix-batch1`,
 `…023612-matrix-batch8`, `…023836-matrix-batch128`, `…025912-split-single-node-unbatched`.
-After: `20261008153608-after-deployment-scale`, `…153935-after-matrix-batch1`,
-`…153950-after-matrix-batch8`, `…154057-after-matrix-batch128`,
-`…154109-after-single-node-unbatched`. Zero failed trials in all 39.
+Shipped: `20261008171847-shipped-deployment-scale`, `…shipped-matrix-batch1`,
+`…shipped-matrix-batch8`, `…shipped-matrix-batch128`, `…shipped-single-node-unbatched`.
+Pipelined: the `after-*` runs of the same names. Zero failed trials in all 39 shipped
+points, and in all 39 pipelined ones.
 
 ### The win is the migration, not the pipelining
 
@@ -180,14 +186,28 @@ The branch exists for pipelining, so the obvious reading of that table is wrong.
 | 1 node, c=128, batch 1 | checkpoint 20k | 294 | **9,689** | 8,634 |
 
 Sequential runs: `20261008152851-bisect-sequential`, `…154144-seq-arm-matrix-batch1`,
-`…154159-seq-arm-single-node` (all measured with the override disabled in the working tree,
-which those runs' `environment.json` record as a dirty tree).
+`…154159-seq-arm-single-node` (measured with the override disabled in the working tree, which
+those runs' `environment.json` record as a dirty tree), and the `shipped-*` runs above, which
+are the same code committed.
 
-So **pipelining is inside the noise band in every configuration measured**, and the 2.4–29×
-gains come from openraft 0.10 itself: its core no longer waits for the previous append's flush
-before issuing the next one, which was the serialization this benchmark was actually hitting.
-The single-node anomaly from 0.9 disappears in *both* 0.10 arms, which is more evidence that it
-lived in the 0.9 core's unbatched entry path rather than in the network round trip.
+So the 2.3–31.8× gains come from openraft 0.10 itself: its core no longer waits for the previous
+append's flush before issuing the next one, which was the serialization this benchmark was
+actually hitting. The single-node anomaly from 0.9 disappears in both 0.10 arms, which is more
+evidence that it lived in the 0.9 core's unbatched entry path rather than in the network round
+trip.
+
+**What the pipelining was worth, honestly.** Comparing the two arms trial by trial rather than
+by median: at **c=128** the shipped build is level to ~8% ahead (batch 1 20k: 9,272 against
+9,134; single node: 9,337 against 8,634), while at **c=8** the removed build read up to ~9%
+higher at the large points (20k: 924 against 846; snapshot 20k: 959 against 872) with
+**non-overlapping trial ranges**, so that difference is probably real rather than noise. Read
+together: at low concurrency with one command per entry the leader's per-entry round trip is on
+the critical path, which is exactly where pipelining should help — and it is worth a few
+percent, not the order of magnitude this work was premised on. Against a ~±10% spread between
+repeats of the same arm (see [Latency](#latency)), a few percent in each direction is not a
+result either way. **It was removed for that reason**, and because it cost a bidirectional RPC,
+a stall knob and a failure mode that wedged a follower permanently (below). The migration, the
+streamed snapshot transfer and this measurement all stay.
 
 How wide is "noise"? The same config was re-run as a check: batch 1 c=128 20k gave 9,134,
 9,401, and (sequential) 9,380; single node 20k gave 8,634 and 9,912 where sequential gave
@@ -214,26 +234,31 @@ the migration's:
 | Config, 20k | | p50 | p95 | p99 |
 |---|---|---|---|---|
 | 3 nodes, c=8, batch 1 | 0.9.25 | 19.6 ms | 25.4 ms | 59.2 ms |
-| | 0.10 + pipelining | **8.1 ms** | **9.4 ms** | **12.1 ms** |
+| | 0.10, shipped | **8.3 ms** | **9.5 ms** | 61.0 ms |
 | 3 nodes, c=128, batch 1 | 0.9.25 | 156.7 ms | 178.5 ms | 355.6 ms |
-| | 0.10 + pipelining | **11.2 ms** | **20.9 ms** | **110.4 ms** |
+| | 0.10, shipped | **10.7 ms** | **20.9 ms** | **99.5 ms** |
 | 3 nodes, c=128, batch 128 | 0.9.25 | 9.2 ms | 10.7 ms | 11.0 ms |
-| | 0.10 + pipelining | 9.3 ms | 10.8 ms | 11.2 ms |
+| | 0.10, shipped | 9.2 ms | 10.7 ms | 11.3 ms |
 | 1 node, c=128, batch 1 | 0.9.25 | 420.1 ms | 499.2 ms | 855.6 ms |
-| | 0.10 + pipelining | **11.7 ms** | **21.3 ms** | **110.1 ms** |
+| | 0.10, shipped | **10.7 ms** | **19.5 ms** | **81.6 ms** |
+
+The p99s are from three trials, so they move: the pipelined arm of the same configs measured
+12.1, 110.4 and 11.2 ms respectively where the shipped one reads 61.0, 99.5 and 11.3. Treat p50
+and p95 as the finding and p99 as an indicator.
 
 Two things fall out that are not visible in throughput alone.
 
-**Pipelining does not improve latency either.** An A/B/A/B of the two arms at 3 nodes,
-c=128, batch 1, five trials each (`20261008163210-lat-a-batch1-pipelined` and its
-sequential, pipelined-r2 and sequential-r2 siblings) gives p50 medians 10.94, 9.96,
-10.98, 10.74 ms — sequential ahead in both rounds, by 9% and 2%. That is *weak*
-evidence of a small real cost rather than a win: the sequential arm's own two rounds
-differ by 7.8%, which is the same size as the effect, so treat "pipelining is a few
-percent worse on p50 and more stable" as a hypothesis for a longer run, not a finding.
-No difference is resolvable at batch 128 (p50 9,232 vs 9,322 µs, p99 11,190 vs 11,226 µs,
-five trials each). Why pipelining would cost anything is not established; it is not a
-mechanism this benchmark identifies.
+**Pipelining did not improve latency either**, which is the half of the decision the throughput
+numbers could not settle. An A/B/A/B of the two arms at 3 nodes, c=128, batch 1, five trials
+each (`20261008163210-lat-a-batch1-pipelined` and its sequential, pipelined-r2 and
+sequential-r2 siblings) gives p50 medians 10.94, 9.96, 10.98, 10.74 ms — the shipped
+(sequential) arm ahead in both rounds, by 9% and 2%. That is weak evidence of a small cost
+rather than a win, because the sequential arm's own two rounds differ by 7.8%, the same size as
+the effect. No difference is resolvable at batch 128 (p50 9,232 vs 9,322 µs, p99 11,190 vs
+11,226 µs, five trials each). Why pipelining would cost anything is not established; it is not a
+mechanism this benchmark identifies. Combined with the few-percent-favouring-pipelining result
+at c=8, the honest summary is that the two are within a few percent of each other in both
+directions, which is not enough to carry the extra RPC and the failure mode below.
 
 **A p99 from three trials was not a stable statistic, and one earlier reading of it was
 wrong.** The batch-128 arm initially showed p99 27.6 and 30.9 ms in two of its three
@@ -247,18 +272,20 @@ transport does. The low-latency configuration remains the default (c=8): p50 8 m
 
 ### A time-boxed run: batch 256 at concurrency 8, 60 s
 
-`20261008165744-duration-60s-batch256-c8` — `max_batch_commands: 256`,
-`concurrency: 8`, `duration_ms: 60000`, three trials, checkpoint mode. The point of a
+`20261008174312-shipped-duration-60s-batch256-c8` — `max_batch_commands: 256`,
+`concurrency: 8`, `duration_ms: 60000`, three trials, checkpoint mode. (The identical run on the
+pipelined build, `20261008165744-duration-60s-batch256-c8`, read 918 writes/s and p50
+8,375 µs — the same within noise.) The point of a
 time-boxed run is that it does not assume a throughput: it writes for a minute and reports
 what happened, so drift over a longer window shows up.
 
 | trial | writes | w/s | p50 | p95 | p99 | commands/entry | entries/s |
 |---|---|---|---|---|---|---|---|
-| 1 | 55,856 | 930.9 | 8.3 ms | 9.4 ms | 10.2 ms | 8.00 | 116 |
-| 2 | 52,864 | 881.0 | 8.4 ms | 9.7 ms | 27.7 ms | 8.00 | 110 |
-| 3 | 55,056 | 917.5 | 8.4 ms | 9.5 ms | 11.0 ms | 8.00 | 115 |
+| 1 | 55,344 | 922 | 8.4 ms | 9.5 ms | 11.4 ms | 8.00 | 115 |
+| 2 | 54,976 | 916 | 8.4 ms | 9.5 ms | 11.4 ms | 8.00 | 114 |
+| 3 | 51,896 | 865 | 8.4 ms | 9.6 ms | 12.3 ms | 8.00 | 108 |
 
-165,000 writes, zero failures, all three replicas verified. **The 256 never binds:** the
+162,000 writes, zero failures, all three replicas verified. **The 256 never binds:** the
 observed batch is exactly 8.00 in every trial, because only 8 commands can be in flight —
 the batch is the concurrency. So this measures the batch-of-8 regime at concurrency 8, and
 there it is a wash against not batching at all: ~918 writes/s and p50 ~8.4 ms, against the
@@ -267,7 +294,8 @@ says why: batching cuts the entry rate to ~115/s, and 115 × 8 = 920. Batching o
 the batch is large enough to beat the entry-rate it costs — the same finding as the 0.9
 matrix, where batches of 2 and 4 were *worse* than none. Throughput and p50 hold flat across
 the minute (930.9 → 917.5 w/s, p50 8.33 → 8.38 ms), so nothing drifts at this scale. One
-trial's p99 is 27.7 ms against 10–11 ms in the others, which is the same tail instability
+trial's p99 was 27.7 ms against 10–11 ms in the others (measured on the pipelined build,
+before the removal), which is the same tail instability
 noted under [Latency](#latency): a p99 over a few thousand samples still moves.
 
 ### The sweep that wedged, and why
@@ -288,12 +316,13 @@ because the failure mode is silent and permanent:
   replication cannot make progress". So the follower is not retried into catching up; it is
   left behind until something else restarts replication.
 
-The fix is `transport.stream_stall_timeout_ms` (default 10 s): a stall detector rather than a
-latency budget, plus opening the stream under the configured `request_timeout_ms` (a failure
-there returns from `stream_append` itself, which openraft retries safely) and having the
-follower stop feeding its `Raft` the moment the caller drops the results stream. The numbers
-above are from the fixed tree; `20261008152723-repro-5000-mine` is the failing run, kept in the
-results file.
+The fix was a stall bound instead of a per-response one (`stream_stall_timeout_ms`, 10 s),
+opening the stream under the configured `request_timeout_ms`, and having the follower stop
+feeding its `Raft` the moment the caller drops the results stream. That made the sweep pass —
+and then the whole RPC was removed anyway, because the numbers above show it was worth a few
+percent at most: the fix was only ever repairing a cost the feature had introduced. The failing
+run, `20261008152723-repro-5000-mine`, is kept in the results file; the fix's commit is
+`ee0bb08` and the removal is `b82a2b1`.
 
 **What this does not say.** These are medians of three trials on one machine, and the
 attribution arms are single runs per config rather than an interleaved, order-randomized
@@ -438,8 +467,12 @@ per-command view says something else — and two of my own readings turned out w
   commands and cannot be what stopped a batch at 127. The earlier "byte cap lifted" run
   had raised the byte budget *and* concurrency 128 → 256, and so credited the wrong
   knob. Holding the default byte budget and raising only concurrency reproduces it:
-  batch 256 at concurrency 256 gives **253.2 commands/entry and 20,741 writes/s**
-  (`20261008170210-concurrency-not-bytes`), against that run's 253.2 at 20,870. The
+  batch 256 at concurrency 256 gives **253.2 commands/entry and 21,250 writes/s**
+  (`20261008175447-shipped-c256-rerun`; a first attempt,
+  `20261008172921-shipped-concurrency-not-bytes`, lost one of its three trials to a startup
+  race in `raft.initialize` — "already undergoing a configuration change" — which is recorded
+  here rather than retried away), against that run's 253.2 at 20,870. The pipelined build read
+  253.2 at 20,741 for the same probe (`20261008170210-concurrency-not-bytes`). The
   conclusion survives — ~13,000 was not a ceiling, it was a concurrency limit — but the
   observed batch is `min(concurrency, max_batch_commands, bytes/frame)`, and here only
   the first two have ever bound.

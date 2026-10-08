@@ -18,7 +18,6 @@ shell settings fail validation. JSON example:
     "request_timeout_ms": 5000,
     "max_message_bytes": 16777216,
     "tcp_keepalive_ms": 30000,
-    "stream_stall_timeout_ms": 10000,
     "stream_window_bytes": 1048576,
     "connection_window_bytes": 4194304
   },
@@ -145,19 +144,34 @@ Transport requests have the lesser of OpenRaft's RPC TTL and
 to both clients and servers. Plaintext HTTP/2 is the default; TLS and mutual
 TLS are available through the opt-in settings below.
 
-Two RPCs are streams, and they are bounded differently on purpose.
-`InstallSnapshot` is a client stream of raw-byte fragments sized by
-`raft.snapshot_max_chunk_size`, so `GroupConfig::validate` requires that size to
-be at most half of `max_message_bytes`. `StreamAppend` is bidirectional and each
-direction is ordered by the HTTP/2 stream, so responses need no sequence numbers.
-Its bound is `stream_stall_timeout_ms` — how long the stream may produce nothing
-before it is treated as stalled — rather than OpenRaft's `hard_ttl`/`soft_ttl`.
-That is deliberate: on the replication path those TTLs are derived from
-`raft.heartbeat_interval`, and using them to abort a per-response read tears the
-stream down mid-burst under load, which leaves the leader believing a follower
-has entries it never received and stops replication for good. Raise this if
-snapshots or a slow follower legitimately go quiet for longer; the cost is a
-longer wait before an unresponsive peer is reported. Its versioned protobuf envelope carries the pinned
+`InstallSnapshot` is a stream: raw-byte fragments sized by
+`raft.snapshot_max_chunk_size`, so `GroupConfig::validate` requires that size to be
+at most half of `max_message_bytes`. Replication itself is openraft's default
+sequential `stream_append` — one request, one response — because a bidirectional
+`StreamAppend` measured within a few percent of it in both directions; the design
+record is in
+[the migration note](research/openraft-010-migration.md#pipelined-append-leg-5-built-measured-removed).
+
+**Batch limits.** `proposals.max_batch_commands` and `proposals.max_batch_bytes`
+are ceilings, not promises, and the batch a writer actually forms is
+`min(commands in flight, max_batch_commands, max_batch_bytes / frame size)`. Only
+the first term reflects the deployment; the others are policy. Two consequences
+worth knowing before tuning:
+
+* A count limit above the writes a group receives concurrently is dead
+  configuration: eight concurrent callers produce batches of eight whatever the
+  limit says. `GroupConfig::validate` rejects the one case that is decidable up
+  front (a byte budget below the count limit, which makes that count unreachable at
+  any concurrency), and `ProposalWriter::batch_stats()` publishes what the writer
+  actually did — entries, commands, the mean and largest batch, which limit bound
+  each batch, and how many of the largest command the byte budget holds. The host
+  prints that line per group at shutdown, which is where an inert limit becomes
+  visible.
+* Batching lowers the entry rate as it raises commands per entry, so commands per
+  second is roughly `batch depth × entries per second`. At concurrency 8 the depth
+  cannot exceed 8, and batching is then a wash: 918 writes/s against 924–983
+  unbatched, measured.
+ Its versioned protobuf envelope carries the pinned
 OpenRaft JSON request/Result types; rolling wire upgrades need compatibility
 review.
 

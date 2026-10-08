@@ -1,21 +1,22 @@
 # Migrating to openraft 0.10 for pipelined append
 
-Status: **all six legs done — migrated, measured and green. The append half of leg 5 is
-awaiting a keep-or-revert decision.** Branch `feature/openraft-pipelined-append`.
+Status: **all six legs done — migrated, measured, and the one thing that did not pay was
+removed.** Branch `feature/openraft-pipelined-append`.
 
 `cargo check -p loomery-shell --all-features` is clean, `mise run test` (177 shell lib tests,
 including `testing::log::Suite`, the hardening and interruption suites) and `mise run verify`
 are green, and `main` is untouched.
 
-**The measured verdict: the migration paid, the pipelining did not show up.** The deployment
-path is 2.4–2.7× faster at the default config and 11.8–15.5× at concurrency 128 unbatched, and
-the 0.9 single-node anomaly (294 writes/s against 777 on three nodes) is gone. But the same
-build with `stream_append` reverted to openraft's sequential default matches the pipelined one
-within run-to-run noise, so **the win is 0.10's removal of the per-flush append serialization,
-not the bidirectional RPC**. Numbers, attribution arms and the wedge the first sweep hit are in
-[deployment-scale.md § After](../benchmarks/deployment-scale.md#after-openraft-010-and-pipelined-append);
-what this means for shipping is
-[Pipelined append](#pipelined-append-leg-5).
+**The measured verdict: the migration paid, the pipelining did not show up — so the
+`StreamAppend` RPC was removed.** The deployment path is 2.3–2.7× faster at the default config
+and 11.9–15.7× at concurrency 128 unbatched, and the 0.9 single-node anomaly (294 writes/s
+against 777 on three nodes) is gone. But the same build with `stream_append` on openraft's
+sequential default matches the pipelined one within a few percent in *both* directions, so
+**the win is 0.10's removal of the per-flush append serialization, not the bidirectional RPC**.
+Numbers, attribution arms, the latency A/B/A/B and the wedge the first sweep hit are in
+[deployment-scale.md § After](../benchmarks/deployment-scale.md#after-openraft-010);
+the design record of what was built and why it went is
+[Pipelined append](#pipelined-append-leg-5-built-measured-removed).
 
 ## What the migration cost, measured
 
@@ -255,15 +256,19 @@ guidance was followed first and had to be abandoned, see
 Steps 1–4 are a migration; step 5 is the feature; step 6 was to decide whether step 5 was worth
 it. **It says no, measurably.** The migration should ship. The append half of leg 5 is neutral
 performance and carries a wedge-prone failure mode that we already had to fix once, so the
-honest options are (a) revert the `StreamAppend` RPC and keep the migration plus the streamed
-snapshot transfer, or (b) keep it and treat it as groundwork for a deployment where RTT
-dominates — with the loopback caveat above standing as the reason to decide on grounds other
-than these numbers.
+honest options were (a) revert the `StreamAppend` RPC and keep the migration plus the streamed
+snapshot transfer, or (b) keep it as groundwork for a deployment where RTT dominates. **The
+decision was (a)**: the unpipelined build measured level to a few percent in each direction, so
+the RPC, its stall knob and its failure mode bought nothing that the same numbers could not be
+had without.
 
-## Pipelined append (leg 5)
+## Pipelined append (leg 5): built, measured, removed
 
-The feature the migration exists for. `StreamAppend` is a bidirectional RPC in
-`crates/shell/proto/raft.proto`:
+This section is the design record of the feature the migration existed for — it was implemented
+and measured, and then deleted in `b82a2b1`. It is kept because the two hard-won details below
+cost real time and would cost it again.
+
+`StreamAppend` was a bidirectional RPC in `crates/shell/proto/raft.proto`:
 
 * The leader streams `AppendEntries` requests on one `Envelope` stream; the follower relays
   them into `Raft::stream_append` and streams its results back on the response direction.
@@ -302,15 +307,24 @@ by the error message rather than a wall clock, because timing assertions here ar
 a fully parallel suite. The three-replica tonic test now replicates over this path, and
 heartbeats do too.
 
-**What it bought: nothing measurable on throughput, and no latency benefit.** See
-[the measurement](../benchmarks/deployment-scale.md#after-openraft-010-and-pipelined-append)
-and its [latency comparison](../benchmarks/deployment-scale.md#latency). Pipelining is within
-run-to-run noise in every configuration measured, and the large wins over 0.9 come from the
-migration itself: openraft 0.10 no longer serializes local appends behind the previous flush.
-The same 0.10 build with `stream_append` reverted to openraft's sequential default matches the
-pipelined one, and on p50 it is weakly *ahead* (a few percent, in both rounds of an A/B/A/B).
-So the append half of leg 5 is a candidate for reverting without losing anything except the
-groundwork for a deployment where round-trip time dominates.
+**What it bought: nothing measurable, and it was removed.** See
+[the measurement](../benchmarks/deployment-scale.md#after-openraft-010) and its
+[latency comparison](../benchmarks/deployment-scale.md#latency). Comparing the two arms trial by
+trial, the unpipelined build is level to ~8% ahead at concurrency 128 and up to ~9% *behind* at
+concurrency 8, where a per-entry round trip is genuinely on the critical path — i.e. a few
+percent either way, against a spread of ±10% between repeats of the same arm. The large wins over
+0.9 come from the migration itself: openraft 0.10 no longer serializes local appends behind the
+previous flush. Removing the RPC cost the branch ~200 lines of transport, one config knob
+(`stream_stall_timeout_ms`) and two tests, and removed the failure mode described above. It also
+removed the branch's entire premise, which is the honest result: the premise was wrong, and the
+migration was still worth doing.
+
+**The lesson to keep.** Do not put a per-response deadline on a replication stream. Openraft's
+`hard_ttl` on that path is the heartbeat interval and its `soft_ttl` is derived from it, so the
+natural reading of "honour `soft_ttl` for idle policy" produces a 75 ms bound that tears the
+stream down mid-burst under load — and openraft cannot repair the progress that leaves behind,
+because `update_conflicting` discards the conflict that would (see the wedge note in the
+benchmark doc).
 
 ## Risks
 

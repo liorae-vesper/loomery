@@ -3,29 +3,25 @@
 This is a self-contained work packet. Everything needed to continue is here or in the two
 files it names; the previous session's context is not required.
 
-**All six legs are complete.** `crates/shell` is on openraft **0.10.0-alpha.36** with
-`cargo check -p loomery-shell --all-features` clean and `mise run test` / `mise run verify`
-green on branch `feature/openraft-pipelined-append`. `main` is untouched, and the first commit
-that may merge is the migration one.
+**All six legs are complete, and the pipelining leg was reverted.** `crates/shell` is on
+openraft **0.10.0-alpha.36** with `cargo check -p loomery-shell --all-features` clean and
+`mise run test` / `mise run verify` green on branch `feature/openraft-pipelined-append`. `main`
+is untouched. The migration, the streamed snapshot transport, the batching observability and
+the benchmark stay; the bidirectional `StreamAppend` RPC and its `stream_stall_timeout_ms` knob
+were removed, because they measured level-to-few-percent and carried a wedge. The migration is
+what pays.
 
-**The measured verdict: the migration paid, the pipelining did not show up.** 2.4–2.7× at the
-default deployment config, 11.8–15.5× unbatched at concurrency 128, and 0.9's single-node
-anomaly gone — but a build with `stream_append` reverted to openraft's sequential default
-matches the pipelined one on throughput and is weakly ahead on p50, so the win is 0.10's core,
-not the bidirectional RPC.
-The numbers and the attribution arms are in
-[deployment-scale.md](../benchmarks/deployment-scale.md#after-openraft-010-and-pipelined-append).
-
-**One decision is outstanding, and it is not a measurement:** whether to keep or revert the
-append half of leg 5 (`StreamAppend`). It is performance-neutral here and it introduced a
-silent wedge that had to be fixed once (see the sweep note in the benchmark doc and
-`docs/raft-configuration.md` on `stream_stall_timeout_ms`). The streamed snapshot transfer is
-independent of it and is a robustness improvement either way.
+**Why the pipelining went.** It measured level to a few percent *either way* — up to ~9% behind
+at concurrency 8 (where a per-entry round trip is genuinely on the critical path) and level to
+~8% ahead at concurrency 128 — against ±10% between repeats of the same arm. The migration is
+what pays: 2.3–2.7× at the default deployment config, 11.9–15.7× unbatched at concurrency 128,
+and 0.9's single-node anomaly gone. The numbers, the attribution arms and the latency A/B/A/B
+are in [deployment-scale.md](../benchmarks/deployment-scale.md#after-openraft-010).
 
 Read `docs/research/openraft-010-migration.md` for the surface inventory, the measured error
-counts per step, the `StreamAppend` design, and **the behaviour changes the migration had to
-accept** — two of those move the write path on their own, which is why the benchmark needed the
-sequential-arm runs to say anything.
+counts per step, what the `StreamAppend` RPC was before it was removed, and **the behaviour
+changes the migration had to accept** — two of those move the write path on their own, which is
+why the benchmark needed the sequential-arm runs to say anything.
 
 ## The job
 
@@ -69,9 +65,9 @@ What landed:
   `EntryResponder`s. The existing batching/dedup/persistence logic is unchanged and lives in
   `state_machine::apply_batch`, which the tests drive directly.
 * **Network:** `NoopNetwork` and `TonicNetwork` implement `RaftNetworkV2` (the `Net*`
-  sub-traits come from openraft's blanket impls). `stream_append` is **overridden** with a
-  bidirectional `StreamAppend` RPC: the leader streams requests, the follower streams results
-  back through `Raft::stream_append`, and HTTP/2 ordering supplies the in-order contract.
+  sub-traits come from openraft's blanket impls), and `stream_append` is openraft's default
+  sequential implementation. A bidirectional `StreamAppend` RPC was built and measured here and
+  then removed — see the reversion note at the top.
   `full_snapshot` is a client-streamed `InstallSnapshot` RPC: the sender fragments
   (`SnapshotChunk`, raw bytes, routing key and JSON `{vote, meta}` on the first fragment) and
   the follower reassembles inside the handler frame, aborting a stream that ends early.
@@ -82,22 +78,20 @@ What landed:
 
 ## Next actions, in order
 
-Nothing is measured-outstanding. What remains is one decision and, if it goes the other way,
-one experiment:
+Nothing is outstanding from the six legs. Two observations are left for whoever picks this up,
+neither of them blocking:
 
-1. **Keep or revert the append half of leg 5 (`StreamAppend`).** Reverting is deleting the
-   override in `RaftNetworkV2 for TonicNetwork` plus the `StreamAppend` RPC in
-   `crates/shell/proto/raft.proto`; openraft's `stream_append_sequential` takes over and the
-   measured numbers do not change (see the sequential arms in
-   [the benchmark](../benchmarks/deployment-scale.md#the-win-is-the-migration-not-the-pipelining)).
-   Keeping it costs the bidi plumbing, the stall knob and the failure mode that produced the
-   first wedged sweep. The snapshot streaming is independent and stays either way.
-2. **If it is kept, the open question is where the remaining time goes.** The batched ceiling
-   is unmoved at ~13,000 writes/s (batch 128, concurrency 128) and the unbatched path is now
-   ~9,000–12,000, so the next lever is per-entry cost rather than the exchange — which is what
-   `docs/benchmarks/deployment-scale.md#where-the-per-entry-cost-actually-is` already says.
-   Verifying whether the stall bound or the 64-slot channel is the limiter is a two-constant
-   change in `transport.rs`; both are `TransportConfig`-visible now except the channel size.
+1. **Where the remaining time goes.** The batched ceiling is unmoved at ~13,000 writes/s
+   (batch 128, concurrency 128) and unbatched at concurrency 128 is ~9,000–13,000, so the lever
+   is per-entry cost rather than the exchange — which is what
+   `docs/benchmarks/deployment-scale.md#where-the-per-entry-cost-actually-is` already says, and
+   it is still open.
+2. **A startup race in the harness.** One trial in
+   `20261008172921-shipped-concurrency-not-bytes` failed at `raft.initialize` with "already
+   undergoing a configuration change" on a fresh three-node cluster, with no client load yet —
+   a single `initialize` call, no retry in the harness, so the race is on the node's side (or in
+   how the harness boots it). It is rare and it is recorded in the results file rather than
+   retried away. Worth reproducing before trusting the harness for gating.
 
 ## Constraints that are not negotiable
 
@@ -165,7 +159,10 @@ one experiment:
   a real stream.
 * **Do not put openraft's `hard_ttl` on a stream.** For snapshots it is
   `install_snapshot_timeout`, 200 ms by default, which 0.9 applied per chunk; a whole-stream
-  deadline aborts every non-trivial transfer and openraft restarts it.
+  deadline aborts every non-trivial transfer and openraft restarts it. On the replication path
+  it is worse than useless: `hard_ttl` is the heartbeat interval and `soft_ttl` is derived from
+  it, so a per-response bound at that scale tears the stream down mid-burst and wedges the
+  follower permanently (the failure mode the removed `StreamAppend` had).
 * **`openraft::testing::{StoreBuilder, Suite}` moved** to `openraft::testing::log`, and
   `Suite::test_all` is now `async`.
 * **Metrics moved to the runtime-agnostic watch channel:** `metrics().borrow_watched()` (bring

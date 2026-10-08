@@ -358,18 +358,12 @@ JSON opening metadata, and the follower reassembles in the handler frame before
 calling `install_full_snapshot`. A stream that ends without the final fragment is
 aborted, never installed.
 
-Replication is a **bidirectional `StreamAppend` RPC**: the leader streams
-`AppendEntries` requests on one envelope stream and the follower streams their
-results back on another, calling `Raft::stream_append` in between. A single
-HTTP/2 stream preserves order in each direction, so results arrive in request
-order without sequence numbers, and requests and results are bounded by a
-64-slot channel on each side — the leader cannot run unboundedly ahead of a slow
-follower. A stream that produces nothing is closed after
-`transport.stream_stall_timeout_ms` (10 s by default) rather than by openraft's
-TTLs: on the replication path `hard_ttl` is the heartbeat interval and `soft_ttl`
-is derived from it, and using either as a per-response bound tears the stream
-down mid-burst under load, which openraft cannot repair (see
-[the benchmark note](benchmarks/deployment-scale.md#the-sweep-that-wedged-and-why)).
+Replication uses openraft's **default sequential `stream_append`**: one
+`AppendEntries` request on the envelope, one response back, per follower. A
+bidirectional `StreamAppend` RPC was built on this branch, measured at level to a
+few percent either way, and removed — the design record and the measurement are in
+[the migration note](research/openraft-010-migration.md#pipelined-append-leg-5-built-measured-removed)
+and [the benchmark](benchmarks/deployment-scale.md#the-win-is-the-migration-not-the-pipelining).
 
 0.9 fragmented snapshots in the core and replicated one unary RPC at a time. The
 `Envelope` RPCs still carry JSON request/Result types. The protobuf package is

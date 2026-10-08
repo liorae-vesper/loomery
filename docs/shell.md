@@ -85,16 +85,18 @@ for tenant creation, startup reconciliation and retry sweeping.
 - `raft()` exposes initialization, learner admission, membership changes,
   metrics and triggers. `shutdown()` stops the Raft task.
 - `TonicTransport::register` attaches a group to the shared listener. Its
-  `RaftNetworkV2` implementation handles `append_entries` and `vote` over a
-  group-routed protobuf/JSON envelope, `full_snapshot` as a client-streamed
-  `InstallSnapshot` RPC, and replication as a bidirectional `StreamAppend` RPC.
-  0.10 gives the network the whole snapshot rather than one chunk at a time, so
-  the sender fragments and the follower reassembles within the request, aborting a
-  stream that ends without the final fragment. `StreamAppend` needs no such
-  framing: one HTTP/2 stream keeps both directions ordered, so results come back
-  in request order, and the transport bounds a reply-less stream by
-  `transport.stream_stall_timeout_ms` rather than by openraft's TTLs, which are
-  derived from the heartbeat interval and are too small to use as a stream bound.
+  `RaftNetworkV2` implementation handles `append_entries`, `vote` and replication
+  over a group-routed protobuf/JSON envelope, and `full_snapshot` as a
+  client-streamed `InstallSnapshot` RPC. 0.10 gives the network the whole snapshot
+  rather than one chunk at a time, so the sender fragments and the follower
+  reassembles within the request, aborting a stream that ends without the final
+  fragment. Replication uses openraft's default sequential `stream_append`; a
+  bidirectional `StreamAppend` was measured and removed for not paying for itself
+  (`docs/research/openraft-010-migration.md`).
+- `ProposalWriter::batch_stats()` publishes what the batching actually did —
+  entries, commands, mean and largest batch, and which limit bound each batch — so
+  a `max_batch_commands` that nothing can reach is visible rather than assumed. The
+  host prints it per group at shutdown.
 - TLS/mTLS is opt-in. Configured clients require HTTPS and verify the CA and
   peer name. The listener sets TCP_NODELAY and configured keepalive on accepted
   connections. No automatic certificate reload is implemented.

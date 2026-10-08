@@ -9,7 +9,12 @@ It does not change the production durability or recovery policy.
 > ([openraft-010-migration.md](openraft-010-migration.md)). One finding below no
 > longer holds: 0.10 does *not* wait for the first append's flush callback before
 > issuing the next append — it tracks IO completion with a watermark and lets
-> appends overlap. That is the pipelining lever this note says is missing.
+> appends overlap. That is the lever this note says is missing, and it is where
+> the win came from: the deployment path is 2.3–2.7× faster at the default config
+> and up to 15.7× unbatched at concurrency 128, *without* the network-side
+> pipelining this note's next steps anticipated (that was built, measured within a
+> few percent, and removed). See
+> [deployment-scale.md](../benchmarks/deployment-scale.md#after-openraft-010).
 
 ## Findings from the pinned code
 
@@ -207,8 +212,12 @@ reproduced in this investigation.
 
 ## Next experiments, preserving durability
 
-1. Measure larger application batches as an explicit API/response semantics
-   change, or spike a verified OpenRaft version with truly pipelined I/O. An
+1. ~~Measure larger application batches as an explicit API/response semantics
+   change, or spike a verified OpenRaft version with truly pipelined I/O.~~ Done:
+   command batching is implemented and measured (2.50× checkpoint, 3.31×
+   snapshot), and 0.10 was spiked — the win was in its *core*, not in the
+   network-side pipelining, which measured within a few percent and was removed.
+   An
    ordered writer must preserve vote/log/truncation ordering, read visibility
    when append returns, callback durability and error propagation. A dedicated
    writer thread alone would not have bypassed 0.9.25's callback wait; 0.10
