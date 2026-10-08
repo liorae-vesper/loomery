@@ -8,6 +8,9 @@ use std::time::Duration;
 
 use openraft::BasicNode;
 use openraft::OptionalSend;
+use openraft::base::BoxFuture;
+use openraft::base::BoxStream;
+use openraft::error::Fatal;
 use openraft::error::RPCError;
 use openraft::error::RaftError;
 use openraft::error::ReplicationClosed;
@@ -19,6 +22,7 @@ use openraft::network::v2::RaftNetworkV2;
 use openraft::raft::AppendEntriesRequest;
 use openraft::raft::AppendEntriesResponse;
 use openraft::raft::SnapshotResponse;
+use openraft::raft::StreamAppendResult;
 use openraft::raft::VoteRequest;
 use openraft::raft::VoteResponse;
 use openraft::type_config::alias::VoteOf;
@@ -26,6 +30,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
+use tokio_stream::Stream;
+use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Response;
@@ -51,6 +57,13 @@ use wire::SnapshotChunk;
 use wire::transport_client::TransportClient;
 use wire::transport_server::Transport;
 use wire::transport_server::TransportServer;
+
+/// How many requests or results may be in flight on one append stream.
+///
+/// Matched to openraft's own pipeline depth (`PIPELINE_BUFFER_SIZE`, 64) so the
+/// transport is never the tighter bottleneck; the bound is what stops a leader
+/// from running unboundedly ahead of a slow follower.
+const STREAM_BUFFER: usize = 64;
 
 /// A snapshot transfer's opening metadata, JSON on the first fragment.
 ///
@@ -208,6 +221,9 @@ fn answer(value: &impl Serialize) -> Result<Response<Envelope>, Status> {
 }
 #[tonic::async_trait]
 impl Transport for TonicTransport {
+    /// The follower's results, relayed as the core produces them.
+    type StreamAppendStream = ReceiverStream<Result<Envelope, Status>>;
+
     async fn append_entries(
         &self,
         request: Request<Envelope>,
@@ -250,6 +266,104 @@ impl Transport for TonicTransport {
         Err(Status::aborted(
             "snapshot stream ended before the final fragment",
         ))
+    }
+    /// Relays an append stream to this node's `Raft` and its results back.
+    ///
+    /// The handler returns as soon as the stream is routed, then works in both
+    /// directions at once: requests are decoded into `Raft::stream_append`'s
+    /// input, its output is encoded back. Ordering is HTTP/2's on a single stream,
+    /// so nothing here reorders, and a stalled peer is bounded by the configured
+    /// TCP keepalive rather than by a guessed timer.
+    async fn stream_append(
+        &self,
+        request: Request<Streaming<Envelope>>,
+    ) -> Result<Response<Self::StreamAppendStream>, Status> {
+        let mut inbound = request.into_inner();
+        let Some(first) = inbound.message().await? else {
+            // No request, no group to route: answer with an empty stream.
+            let (_open, closed) = mpsc::channel(1);
+            return Ok(Response::new(ReceiverStream::new(closed)));
+        };
+        let raft = self.group(&first.group_id).await?;
+        let (results_tx, results_rx) = mpsc::channel(STREAM_BUFFER);
+        let (requests_tx, requests_rx) = mpsc::channel(STREAM_BUFFER);
+        tokio::spawn(decode_append_requests(
+            first,
+            inbound,
+            requests_tx,
+            results_tx.clone(),
+        ));
+        let outbound = raft.stream_append(ReceiverStream::new(requests_rx));
+        tokio::spawn(encode_append_results(outbound, results_tx));
+        Ok(Response::new(ReceiverStream::new(results_rx)))
+    }
+}
+/// Decodes inbound envelopes into [`Raft::stream_append`] input.
+///
+/// A request that cannot be decoded cannot be answered, so it is reported on the
+/// results stream and the input ends: the leader sees the error and
+/// re-establishes replication. Dropping the results receiver (a cancelled
+/// stream) stops this at the next send.
+async fn decode_append_requests(
+    first: Envelope,
+    mut inbound: Streaming<Envelope>,
+    requests: mpsc::Sender<AppendEntriesRequest<TypeConfig>>,
+    results: mpsc::Sender<Result<Envelope, Status>>,
+) {
+    let mut next = Some(first);
+    loop {
+        let envelope = match next.take() {
+            Some(envelope) => envelope,
+            None => match inbound.message().await {
+                Ok(Some(envelope)) => envelope,
+                Ok(None) => return,
+                Err(status) => {
+                    let _ = results.send(Err(status)).await;
+                    return;
+                }
+            },
+        };
+        match serde_json::from_slice::<AppendEntriesRequest<TypeConfig>>(&envelope.json) {
+            Ok(rpc) => {
+                if requests.send(rpc).await.is_err() {
+                    return;
+                }
+            }
+            Err(e) => {
+                let _ = results
+                    .send(Err(Status::invalid_argument(e.to_string())))
+                    .await;
+                return;
+            }
+        }
+    }
+}
+/// Encodes the core's results onto the wire.
+///
+/// The wire carries openraft's own `Result<StreamAppendResult, Fatal>` for this
+/// call, exactly as [`Raft::stream_append`] yields it. The stream ends when the
+/// core's does, which is how the follower's answer for the last request still
+/// gets through: the core drains accepted requests before it ends.
+async fn encode_append_results<S>(outbound: S, results: mpsc::Sender<Result<Envelope, Status>>)
+where
+    S: Stream<Item = Result<StreamAppendResult<TypeConfig>, Fatal<TypeConfig>>> + OptionalSend,
+{
+    let mut outbound = std::pin::pin!(outbound);
+    while let Some(item) = outbound.next().await {
+        let json = match serde_json::to_vec(&item) {
+            Ok(json) => json,
+            Err(e) => {
+                let _ = results.send(Err(Status::internal(e.to_string()))).await;
+                return;
+            }
+        };
+        let envelope = Envelope {
+            group_id: String::new(),
+            json,
+        };
+        if results.send(Ok(envelope)).await.is_err() {
+            return;
+        }
     }
 }
 /// Creates reusable gRPC channels to addresses in Raft membership metadata.
@@ -509,6 +623,67 @@ impl RaftNetworkV2<TypeConfig> for TonicNetwork {
         self.call_vote(rpc, &option).await
     }
 
+    /// Streams `AppendEntries` requests to the follower and yields its results in
+    /// the order they were asked.
+    ///
+    /// One bidirectional HTTP/2 stream carries both directions, and HTTP/2 keeps
+    /// each direction ordered, so the trait's in-order contract needs no sequence
+    /// numbers: whatever the follower answers arrives in request order.
+    ///
+    /// Two deliberate bounds. Opening the stream carries the same timeout as a
+    /// unary RPC, so a peer that never sends response headers cannot hang
+    /// replication. Each awaited result then carries `soft_ttl`: on the
+    /// replication path `hard_ttl` is the heartbeat interval (50 ms by default)
+    /// and is explicitly *not* a limit on a stream's life, while a stream that has
+    /// produced nothing for `soft_ttl` has stopped making progress.
+    fn stream_append<'s, S>(
+        &'s mut self,
+        input: S,
+        option: RPCOption,
+    ) -> BoxFuture<
+        's,
+        Result<
+            BoxStream<'s, Result<StreamAppendResult<TypeConfig>, RPCError<TypeConfig>>>,
+            RPCError<TypeConfig>,
+        >,
+    >
+    where
+        S: Stream<Item = AppendEntriesRequest<TypeConfig>> + OptionalSend + Unpin + 'static,
+    {
+        let fu = async move {
+            let mut client = self.client().await.map_err(|e| {
+                RPCError::Unreachable(Unreachable::new(&std::io::Error::other(e.to_string())))
+            })?;
+            let (requests_tx, requests_rx) = mpsc::channel(STREAM_BUFFER);
+            tokio::spawn(pump_append_requests(
+                input,
+                self.factory.group_id.clone(),
+                requests_tx,
+            ));
+
+            let open_timeout = option.hard_ttl().min(Duration::from_millis(
+                self.factory.config.request_timeout_ms,
+            ));
+            let response = tokio::time::timeout(
+                open_timeout,
+                client.stream_append(ReceiverStream::new(requests_rx)),
+            )
+            .await
+            .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?
+            .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
+
+            let (results_tx, results_rx) = mpsc::channel(STREAM_BUFFER);
+            tokio::spawn(pump_append_results(
+                response.into_inner(),
+                option.soft_ttl(),
+                results_tx,
+            ));
+            let stream: BoxStream<'s, _> = Box::pin(ReceiverStream::new(results_rx));
+            Ok(stream)
+        };
+        Box::pin(fu)
+    }
+
     /// Sends the snapshot to the follower as one client stream.
     ///
     /// 0.10 gives the network the whole snapshot and makes fragmentation its job,
@@ -551,6 +726,83 @@ impl RaftNetworkV2<TypeConfig> for TonicNetwork {
         };
         pump.abort();
         result
+    }
+}
+
+/// Encodes the caller's requests onto the wire.
+async fn pump_append_requests<S>(mut input: S, group_id: String, requests: mpsc::Sender<Envelope>)
+where
+    S: Stream<Item = AppendEntriesRequest<TypeConfig>> + OptionalSend + Unpin + 'static,
+{
+    while let Some(rpc) = input.next().await {
+        let Ok(json) = serde_json::to_vec(&rpc) else {
+            // A request that cannot be encoded cannot be asked about, so the
+            // stream ends and replication re-establishes.
+            return;
+        };
+        let envelope = Envelope {
+            group_id: group_id.clone(),
+            json,
+        };
+        if requests.send(envelope).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Decodes the follower's results into the ordered stream the trait promises.
+///
+/// `RPCError<C>` fixes its error parameter to `Infallible`, so a remote `Fatal`
+/// has no `RemoteError` to live in and is reported as unreachable — the mapping
+/// the unary path uses. Like `stream_append_sequential`, an error ends the stream
+/// after it has been delivered.
+async fn pump_append_results(
+    mut inbound: Streaming<Envelope>,
+    idle: Duration,
+    results: mpsc::Sender<Result<StreamAppendResult<TypeConfig>, RPCError<TypeConfig>>>,
+) {
+    loop {
+        let message = match tokio::time::timeout(idle, inbound.message()).await {
+            Ok(Ok(Some(envelope))) => envelope,
+            Ok(Ok(None)) => return,
+            Ok(Err(status)) => {
+                let _ = results
+                    .send(Err(RPCError::Unreachable(Unreachable::new(&status))))
+                    .await;
+                return;
+            }
+            Err(_elapsed) => {
+                let _ = results
+                    .send(Err(RPCError::Unreachable(Unreachable::from_string(
+                        "append stream made no progress",
+                    ))))
+                    .await;
+                return;
+            }
+        };
+        let decoded: Result<StreamAppendResult<TypeConfig>, Fatal<TypeConfig>> =
+            match serde_json::from_slice(&message.json) {
+                Ok(decoded) => decoded,
+                Err(e) => {
+                    let _ = results
+                        .send(Err(RPCError::Unreachable(Unreachable::new(&e))))
+                        .await;
+                    return;
+                }
+            };
+        // `Conflict` and `HigherVote` are protocol answers, not transport
+        // failures: they travel as `Ok(..)` and end the stream after delivery,
+        // which is what `stream_append_sequential` does with them.
+        let (item, stop) = match decoded {
+            Ok(result) => {
+                let stop = result.is_err();
+                (Ok(result), stop)
+            }
+            Err(fatal) => (Err(RPCError::Unreachable(Unreachable::new(&fatal))), true),
+        };
+        if results.send(item).await.is_err() || stop {
+            return;
+        }
     }
 }
 

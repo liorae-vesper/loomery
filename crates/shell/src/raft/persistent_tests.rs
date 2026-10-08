@@ -382,6 +382,208 @@ async fn snapshots_cross_tonic_and_unknown_groups_are_rejected() {
     server.await.unwrap();
 }
 
+/// A follower answers the requests of one append stream in the order it was
+/// asked.
+///
+/// This is the transport's half of `NetStreamAppend`'s contract, and the results
+/// are made distinct on purpose — each ack carries the log index it matched — so
+/// a reordered stream would show up as out-of-order acks instead of passing
+/// quietly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn append_results_come_back_in_request_order() {
+    use openraft::Vote;
+    use openraft::raft::AppendEntriesRequest;
+    use openraft::raft::StreamAppendResult;
+    use openraft::testing::blank_ent;
+
+    let root = tempfile::tempdir().unwrap();
+    let follower = RaftGroup::boot_persistent(2, "tenant".into(), root.path(), config())
+        .await
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let transport = TonicTransport::default();
+    transport
+        .register("tenant".into(), follower.raft())
+        .await
+        .unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        transport
+            .serve(listener, config().transport, async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+    });
+
+    // A high term: the follower may have campaigned before it was told about a
+    // leader, and this request must be accepted either way. The first log index
+    // is 0, so `prev_log_id: None` is what matches request 0.
+    let term = 100;
+    let request = |index: u64| AppendEntriesRequest::<TypeConfig> {
+        vote: Vote::new_committed(term, 1),
+        prev_log_id: (index > 0).then(|| blank_ent::<TypeConfig>(term, 1, index - 1).log_id),
+        leader_commit: None,
+        entries: vec![blank_ent::<TypeConfig>(term, 1, index)],
+    };
+
+    let mut raw = transport::wire::transport_client::TransportClient::connect(address)
+        .await
+        .unwrap();
+    // The raw client is the wire level: each request travels as an envelope whose
+    // JSON is the pinned openraft type.
+    let envelope = |rpc: AppendEntriesRequest<TypeConfig>| transport::wire::Envelope {
+        group_id: "tenant".to_owned(),
+        json: serde_json::to_vec(&rpc).unwrap(),
+    };
+    let mut results = raw
+        .stream_append(tokio_stream::iter(vec![
+            envelope(request(0)),
+            envelope(request(1)),
+            envelope(request(2)),
+        ]))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let drained = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut acked = Vec::new();
+        while let Some(envelope) = results.message().await.unwrap() {
+            let decoded: Result<
+                StreamAppendResult<TypeConfig>,
+                openraft::error::Fatal<TypeConfig>,
+            > = serde_json::from_slice(&envelope.json).unwrap();
+            acked.push(
+                decoded
+                    .expect("the follower accepted the request")
+                    .expect("an ack, since nothing conflicted")
+                    .map(|id| id.index),
+            );
+        }
+        acked
+    })
+    .await
+    .expect("the stream must end when the requests do");
+
+    assert_eq!(drained, vec![Some(0), Some(1), Some(2)]);
+
+    follower.shutdown().await.unwrap();
+    stop.send(()).unwrap();
+    server.await.unwrap();
+}
+
+/// A peer that accepts an append stream and never answers it.
+struct SilentTransport;
+
+#[tonic::async_trait]
+impl transport::wire::transport_server::Transport for SilentTransport {
+    type StreamAppendStream =
+        tokio_stream::Pending<Result<transport::wire::Envelope, tonic::Status>>;
+
+    async fn append_entries(
+        &self,
+        _request: tonic::Request<transport::wire::Envelope>,
+    ) -> Result<tonic::Response<transport::wire::Envelope>, tonic::Status> {
+        Err(tonic::Status::unimplemented("silent transport"))
+    }
+    async fn vote(
+        &self,
+        _request: tonic::Request<transport::wire::Envelope>,
+    ) -> Result<tonic::Response<transport::wire::Envelope>, tonic::Status> {
+        Err(tonic::Status::unimplemented("silent transport"))
+    }
+    async fn install_snapshot(
+        &self,
+        _request: tonic::Request<tonic::Streaming<transport::wire::SnapshotChunk>>,
+    ) -> Result<tonic::Response<transport::wire::Envelope>, tonic::Status> {
+        Err(tonic::Status::unimplemented("silent transport"))
+    }
+    async fn stream_append(
+        &self,
+        _request: tonic::Request<tonic::Streaming<transport::wire::Envelope>>,
+    ) -> Result<tonic::Response<Self::StreamAppendStream>, tonic::Status> {
+        Ok(tonic::Response::new(tokio_stream::pending()))
+    }
+}
+
+/// An append stream that stops making progress is closed on `soft_ttl`, and the
+/// caller is told rather than left waiting.
+///
+/// The distinction matters: `hard_ttl` on the replication path is the heartbeat
+/// interval (50 ms by default) and is explicitly not a lifetime limit for a
+/// stream, so the idle bound must be the smaller `soft_ttl` and the stream must
+/// fail before the hard ceiling.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stalled_append_stream_is_closed_on_soft_ttl() {
+    use openraft::network::RPCOption;
+    use openraft::network::RaftNetworkFactory;
+    use openraft::network::v2::RaftNetworkV2;
+    use openraft::raft::AppendEntriesRequest;
+    use tokio_stream::StreamExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(transport::wire::transport_server::TransportServer::new(
+                SilentTransport,
+            ))
+            .serve_with_incoming_shutdown(
+                tonic::transport::server::TcpIncoming::from(listener),
+                async {
+                    let _ = stopped.await;
+                },
+            )
+            .await
+            .unwrap();
+    });
+
+    // `soft_ttl` is 3/4 of this, so the gap between the two is the assertion's
+    // margin: an error at ~3s passes, one at the 4s ceiling does not.
+    let hard = Duration::from_secs(4);
+    let mut factory = transport::TonicNetworkFactory {
+        group_id: "silent".into(),
+        config: crate::config::TransportConfig::default(),
+    };
+    let mut client = factory.new_client(1, &BasicNode::new(&address)).await;
+    let request = AppendEntriesRequest::<TypeConfig> {
+        vote: openraft::Vote::new_committed(1, 1),
+        prev_log_id: None,
+        leader_commit: None,
+        entries: Vec::new(),
+    };
+
+    let started = std::time::Instant::now();
+    let mut results = client
+        .stream_append(tokio_stream::iter(vec![request]), RPCOption::new(hard))
+        .await
+        .expect("the stream opens; it is the answers that never come");
+    let first = results
+        .next()
+        .await
+        .expect("the idle bound reports an error");
+    let elapsed = started.elapsed();
+
+    let error = first.unwrap_err();
+    assert!(
+        error.to_string().contains("made no progress"),
+        "the idle bound, not some other failure: {error}"
+    );
+    assert!(
+        results.next().await.is_none(),
+        "the stream ends after the error"
+    );
+    assert!(
+        elapsed < hard,
+        "soft_ttl is the idle bound, hard_ttl the ceiling; {elapsed:?} elapsed"
+    );
+
+    stop.send(()).unwrap();
+    server.await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)] // Recovery scenarios deliberately share the full lifecycle.
 async fn snapshot_mode_recovers_log_only_and_snapshot_with_purged_prefix() {
