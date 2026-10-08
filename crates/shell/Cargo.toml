@@ -10,7 +10,11 @@ description = "Imperative shell: consesus, storage, gateway and workers"
 loomery-core.workspace = true
 loomery-genesis.workspace = true
 anyhow = "1.0.104"
-argon2 = "0.5"
+# `std` is what turns on `password-hash/std` -> `rand_core/std` -> `getrandom`, and
+# therefore `OsRng` for salt generation. Without it the default build of this crate
+# only compiles because a workspace build unifies `rand_core` features in through
+# `jsonwebtoken` (server enables `oidc`); see gateway::precompute.
+argon2 = { version = "0.5", features = ["std"] }
 axum = "0.8"
 dashmap = "6.2.1"
 thiserror = "2.0.21"
