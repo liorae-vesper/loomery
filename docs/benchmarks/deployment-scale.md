@@ -108,7 +108,7 @@ and concurrency keeps more writes in flight. Neither is on in the curve above,
 deliberately: the curve is about *scale*, and batching has its own
 [controlled matrix](batch-matrix.md).
 
-### On the transport: `RaftNetworkV2`, pipelining, awaiting
+### On the transport: `RaftNetworkV2`
 
 - **The migration landed and the pipelining did not, so the curve below is the *before*
   picture.** openraft **0.10.0-alpha.36**
@@ -168,7 +168,7 @@ directories so each number is traceable.
 
 Before: `20261008013400-deployment-scale`, `…022806-matrix-batch1`,
 `…023612-matrix-batch8`, `…023836-matrix-batch128`, `…025912-split-single-node-unbatched`.
-Shipped: `20261008171847-shipped-deployment-scale`, `…shipped-matrix-batch1`,
+Shipped: `20261008171930-shipped-deployment-scale`, `…shipped-matrix-batch1`,
 `…shipped-matrix-batch8`, `…shipped-matrix-batch128`, `…shipped-single-node-unbatched`.
 Pipelined: the `after-*` runs of the same names. Zero failed trials in all 39 shipped
 points, and in all 39 pipelined ones.
@@ -251,7 +251,7 @@ Two things fall out that are not visible in throughput alone.
 
 **Pipelining did not improve latency either**, which is the half of the decision the throughput
 numbers could not settle. An A/B/A/B of the two arms at 3 nodes, c=128, batch 1, five trials
-each (`20261008163210-lat-a-batch1-pipelined` and its sequential, pipelined-r2 and
+each (`20261008164656-lat-a-batch1-pipelined` and its sequential, pipelined-r2 and
 sequential-r2 siblings) gives p50 medians 10.94, 9.96, 10.98, 10.74 ms — the shipped
 (sequential) arm ahead in both rounds, by 9% and 2%. That is weak evidence of a small cost
 rather than a win, because the sequential arm's own two rounds differ by 7.8%, the same size as
@@ -273,7 +273,7 @@ transport does. The low-latency configuration remains the default (c=8): p50 8 m
 
 ### A time-boxed run: batch 256 at concurrency 8, 60 s
 
-`20261008174312-shipped-duration-60s-batch256-c8` — `max_batch_commands: 256`,
+`20261008172600-shipped-duration-60s-batch256-c8` — `max_batch_commands: 256`,
 `concurrency: 8`, `duration_ms: 60000`, three trials, checkpoint mode. (The identical run on the
 pipelined build, `20261008165744-duration-60s-batch256-c8`, read 918 writes/s and p50
 8,375 µs — the same within noise.) The point of a
@@ -327,9 +327,10 @@ run, `20261008152723-repro-5000-mine`, is kept in the results file; the fix's co
 
 **What this does not say.** These are medians of three trials on one machine, and the
 attribution arms are single runs per config rather than an interleaved, order-randomized
-experiment — enough to rule *out* a large pipelining win, not enough to resolve a 3% one. The
-recommendation that follows is a [revert-or-keep decision](../research/openraft-010-migration.md#pipelined-append-leg-5)
-for the append half of leg 5, not a performance claim.
+experiment — enough to rule *out* a large pipelining win, not enough to resolve a 3% one. That
+is the ground on which the append half of leg 5 was
+[reverted](../research/openraft-010-migration.md#pipelined-append-leg-5-built-measured-removed),
+and it is why this is a migration claim rather than a pipelining one.
 
 ## The cheap path, measured: batching and concurrency
 
@@ -469,7 +470,7 @@ per-command view says something else — and two of my own readings turned out w
   had raised the byte budget *and* concurrency 128 → 256, and so credited the wrong
   knob. Holding the default byte budget and raising only concurrency reproduces it:
   batch 256 at concurrency 256 gives **253.2 commands/entry and 21,250 writes/s**
-  (`20261008175447-shipped-c256-rerun`; a first attempt,
+  (`20261008173020-shipped-c256-rerun`; a first attempt,
   `20261008172921-shipped-concurrency-not-bytes`, lost one of its three trials to a startup
   race in `raft.initialize` — "already undergoing a configuration change" — which is recorded
   here rather than retried away), against that run's 253.2 at 20,870. The pipelined build read

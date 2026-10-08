@@ -1,5 +1,10 @@
 # Checkpoint versus snapshot-backed apply
 
+> **Measured before the openraft 0.10 migration.** The numbers below come from 0.9.25, and the
+> migration moved the write path — 2.3–31.8× on the
+> [deployment path](deployment-scale.md#after-openraft-010). Read them as the record of the
+> decision they informed, not as current throughput.
+
 Measured on 2026-09-30 using the experimental modes in this workspace. The
 snapshot-backed implementation improves single-group write throughput by about
 3.1× on this host. It remains opt-in; the default is still checkpoint recovery.

@@ -46,11 +46,15 @@ networked deployment.
 - [Multi-group probe](benchmarks/multigroup.md) — co-resident group read/write capacity, methodology and limits.
 - [Services stress profiles](benchmarks/services-stress.md) — the Keycloak and NATS adapters under load, the invariants asserted and the measured results.
 - [Example workload](benchmarks/consensus.json) — configuration for the release harness.
+- [Collected results](benchmarks/results/deployment-path.json) — every run behind the scale note, committed as JSON: the config overrides, medians, the harness's own verification counts and the environment each ran on.
 
 The paired runner is executable tooling in
 [../scripts/bench-persistence.py](../scripts/bench-persistence.py), invoked by
 `mise run bench-persistence`. Command batching has a separate
-[runner](../scripts/bench-batching.py), invoked by `mise run bench-batching`.
+[runner](../scripts/bench-batching.py), invoked by `mise run bench-batching`. Raw
+runs — node databases and per-trial samples — live in the gitignored
+`benchmark-results/`, which `mise run bench-collect` turns into the collected
+results above.
 
 ## Research
 
@@ -66,6 +70,7 @@ configuration reference describe what was selected and implemented.
 | [Indexed segment format](research/indexed-segment-file-format.md) | Alternative log format; not the implemented RocksDB backend |
 | [OpenRaft storage](research/openraft-storage.md) | Storage contracts and version-specific integration notes |
 | [OpenRaft 0.10 migration](research/openraft-010-migration.md) | The 0.9.25 → 0.10.0-alpha.36 migration: measured error counts, surface inventory and behaviour changes |
+| [OpenRaft 0.10 handoff](research/openraft-010-handoff.md) | The same migration as a pickup point: what landed and what was reverted, the repo constraints, and the traps it left behind |
 | [Consensus storage performance](research/consensus-storage-performance.md) | Serialized syncs, batching, blocking-pool timing and database closure investigation |
 | [Checkpoint policy](research/checkpoint-policy.md) | Scheduling versus durability and the two recovery modes |
 

@@ -16,6 +16,7 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 | Combined dev gate | `mise run verify` (see `mise.toml`) |
 | Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap; skips `**/*_tests.rs`, `loomery-server`'s `main.rs` (the binary is a single file) and the `JetStream` adapter) |
 | Diagram syntax | `mise run docs-mermaid` (`tools/mermaid-check/`: every ```` ```mermaid ```` block in `docs/` and `README.md` must parse) |
+| Documentation links | `mise run docs-links` (`tools/docs-links/`: relative links resolve, `#anchors` match a heading in the target, every document is reachable from `docs/README.md`, and a benchmark run named in the prose exists in the committed results) |
 
 ## The `cargo deny` policy (`deny.toml`)
 

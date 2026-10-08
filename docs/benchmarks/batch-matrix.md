@@ -1,5 +1,10 @@
 # Configurable command batch matrix
 
+> **Measured before the openraft 0.10 migration.** The numbers below come from 0.9.25, and the
+> migration moved the write path — 2.3–31.8× on the
+> [deployment path](deployment-scale.md#after-openraft-010). Read them as the record of the
+> decision they informed, not as current throughput.
+
 The [matrix runner](../../scripts/bench-batch-matrix.py) compares batch limits
 1, 8, 16, 32, 64 and 128 in checkpoint and snapshot-backed persistence modes.
 Batch limit 1 is always included as the baseline for each mode/concurrency pair.

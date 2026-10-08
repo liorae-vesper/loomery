@@ -1,5 +1,10 @@
 # Services stress profiles
 
+> **Measured before the openraft 0.10 migration.** The numbers below come from 0.9.25, and the
+> migration moved the write path — 2.3–31.8× on the
+> [deployment path](deployment-scale.md#after-openraft-010). Read them as the record of the
+> decision they informed, not as current throughput.
+
 The integration suite ([testing-services.md](../testing-services.md)) proves the
 Keycloak and NATS JetStream adapters work. These profiles push the same adapters
 through the shell's real code paths at a size the suite cannot afford, and they

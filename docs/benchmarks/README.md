@@ -23,6 +23,16 @@ uses the same workload defaults with OpenRaft's normal defaults. An output
 directory must be new; the runner never resets or reuses an existing database.
 Choose an output path on the filesystem/device you intend to measure.
 
+## Which openraft version a note was measured on
+
+These notes record the tree they were measured on, because the numbers moved: the migration to
+openraft **0.10.0-alpha.36** took the deployment path from 365 to 846 writes/s at the default
+config and from 777 to 9,272 unbatched at concurrency 128
+([measured](deployment-scale.md#after-openraft-010)). Notes measured on 0.9.25 now say so at the
+top; they are the record of the decision they informed, not current throughput. The correctness
+notes ([failure injection](failure-injection.md), [persistence hardening](persistence-hardening.md))
+assert invariants that the suite re-checks on the current tree, so they carry no such caveat.
+
 ## Workload and phases
 
 Every trial has fresh databases and unique deterministic causation/entity keys.
@@ -188,3 +198,15 @@ loss and deliberately lost replies during write phases, then verify retries and
 whole-cluster SIGKILL recovery. The [fault experiment guide](failure-injection.md)
 documents configurable batch sizes, exact event checks, storage callback failure
 tests and the limits of process-crash testing.
+
+## Other experiments in this directory
+
+The runners above cover the consensus write path end to end. Three notes record experiments with
+a different harness or a different question:
+
+- [Persistence hardening](persistence-hardening.md) — long-history restart validation in both
+  persistence modes, and the gaps left open.
+- [Multi-group probe](multigroup.md) — co-resident groups in one process, and what mixed
+  read/write load does to their capacity.
+- [Services stress profiles](services-stress.md) — the Keycloak and NATS adapters under load, the
+  invariants asserted and the measured results.

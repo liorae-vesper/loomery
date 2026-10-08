@@ -1,5 +1,10 @@
 # Multi-group mixed read/write probe
 
+> **Measured before the openraft 0.10 migration.** The numbers below come from 0.9.25, and the
+> migration moved the write path — 2.3–31.8× on the
+> [deployment path](deployment-scale.md#after-openraft-010). Read them as the record of the
+> decision they informed, not as current throughput.
+
 A reproducible in-process probe for **co-resident groups**: one process hosts
 several independent Raft groups (one per tenant) and drives mixed reads and
 writes against all of them at once.

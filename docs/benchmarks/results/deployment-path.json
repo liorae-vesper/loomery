@@ -2507,6 +2507,155 @@
           "distinct_log_indices": 20000
         }
       ]
+    },
+    {
+      "directory": "20261008172600-shipped-duration-60s-batch256-c8",
+      "overrides": {
+        "duration_ms": 60000,
+        "concurrency": 8,
+        "group": {
+          "proposals": {
+            "max_batch_commands": 256,
+            "max_batch_bytes": 262144,
+            "max_delay_ms": 1,
+            "queue_capacity": 1024
+          }
+        }
+      },
+      "phase_timeout_ms": 300000,
+      "git_commit": "f1c0b60a8cc10d458d04a5ff0ff6b19eccb69ada",
+      "cpu": "model name\t: AMD Ryzen 9 7900 12-Core Processor",
+      "memory_kb": "MemTotal:       31976308 kB",
+      "build_profile": "release",
+      "points": [
+        {
+          "mode": "checkpoint",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 3,
+          "bytes_on_disk": 1093515593,
+          "seconds": 200.0,
+          "throughput_per_second": 916.1800265754869,
+          "p50_us": 8365,
+          "p95_us": 9569,
+          "p99_us": 11439,
+          "events_verified": 55076,
+          "commands_per_log_index": 8.0,
+          "distinct_log_indices": 6872
+        }
+      ]
+    },
+    {
+      "directory": "20261008172921-shipped-concurrency-not-bytes",
+      "overrides": {
+        "concurrency": 256,
+        "group": {
+          "proposals": {
+            "max_batch_commands": 256,
+            "max_batch_bytes": 262144,
+            "max_delay_ms": 1,
+            "queue_capacity": 2048
+          }
+        }
+      },
+      "phase_timeout_ms": 300000,
+      "git_commit": "f1c0b60a8cc10d458d04a5ff0ff6b19eccb69ada",
+      "cpu": "model name\t: AMD Ryzen 9 7900 12-Core Processor",
+      "memory_kb": "MemTotal:       31976308 kB",
+      "build_profile": "release",
+      "points": [
+        {
+          "mode": "checkpoint",
+          "operations": 20000,
+          "harness_ok": false,
+          "failed_trials": 0,
+          "trials": 0,
+          "bytes_on_disk": null,
+          "seconds": 7.5,
+          "throughput_per_second": null,
+          "p50_us": null,
+          "p95_us": null,
+          "p99_us": null,
+          "events_verified": null,
+          "commands_per_log_index": null,
+          "distinct_log_indices": null
+        }
+      ]
+    },
+    {
+      "directory": "20261008172929-shipped-bytes-binding",
+      "overrides": {
+        "concurrency": 256,
+        "group": {
+          "proposals": {
+            "max_batch_commands": 256,
+            "max_batch_bytes": 65536,
+            "max_delay_ms": 1,
+            "queue_capacity": 2048
+          }
+        }
+      },
+      "phase_timeout_ms": 300000,
+      "git_commit": "f1c0b60a8cc10d458d04a5ff0ff6b19eccb69ada",
+      "cpu": "model name\t: AMD Ryzen 9 7900 12-Core Processor",
+      "memory_kb": "MemTotal:       31976308 kB",
+      "build_profile": "release",
+      "points": [
+        {
+          "mode": "checkpoint",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 3,
+          "bytes_on_disk": 292215295,
+          "seconds": 10.5,
+          "throughput_per_second": 10524.094651602478,
+          "p50_us": 24514,
+          "p95_us": 27092,
+          "p99_us": 35051,
+          "events_verified": 20100,
+          "commands_per_log_index": 87.71929824561404,
+          "distinct_log_indices": 228
+        }
+      ]
+    },
+    {
+      "directory": "20261008173020-shipped-c256-rerun",
+      "overrides": {
+        "concurrency": 256,
+        "group": {
+          "proposals": {
+            "max_batch_commands": 256,
+            "max_batch_bytes": 262144,
+            "max_delay_ms": 1,
+            "queue_capacity": 2048
+          }
+        }
+      },
+      "phase_timeout_ms": 300000,
+      "git_commit": "f1c0b60a8cc10d458d04a5ff0ff6b19eccb69ada",
+      "cpu": "model name\t: AMD Ryzen 9 7900 12-Core Processor",
+      "memory_kb": "MemTotal:       31976308 kB",
+      "build_profile": "release",
+      "points": [
+        {
+          "mode": "checkpoint",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 3,
+          "bytes_on_disk": 291571135,
+          "seconds": 7.8,
+          "throughput_per_second": 21250.03320317688,
+          "p50_us": 11743,
+          "p95_us": 13351,
+          "p99_us": 20876,
+          "events_verified": 20100,
+          "commands_per_log_index": 253.16455696202533,
+          "distinct_log_indices": 79
+        }
+      ]
     }
   ]
 }

@@ -1,10 +1,13 @@
 # Migrating to openraft 0.10
 
+Picking this up rather than reading it through? The
+[handoff note](openraft-010-handoff.md) is the same work condensed to what you need to continue.
+
 Status: **all six legs done — migrated, measured, and the one thing that did not pay was
 removed.** Branch `feat/openraft-010-migration` (renamed from
 `feature/openraft-pipelined-append` once the pipelining was gone).
 
-`cargo check -p loomery-shell --all-features` is clean, `mise run test` (177 shell lib tests,
+`cargo check -p loomery-shell --all-features` is clean, `mise run test` (178 shell lib tests,
 including `testing::log::Suite`, the hardening and interruption suites) and `mise run verify`
 are green, and `main` is untouched.
 
@@ -79,7 +82,7 @@ the things to re-check before the benchmark:
      future, the configured TCP keepalive, and `max_message_bytes` per fragment. A true idle
      policy needs per-fragment progress, which the request side does not expose; the append
      stream has that signal and uses it (see
-     [Pipelined append](#pipelined-append-leg-5)).
+     [Pipelined append](#pipelined-append-leg-5-built-measured-removed)).
 
    **Peak follower memory is unchanged** by all of this: `Raft::install_full_snapshot` takes
    the whole snapshot and `SnapshotData` is in-memory, so streaming removes the round trips and
@@ -220,7 +223,7 @@ requests**. One HTTP/2 stream per follower keeps order without sequence numbers;
 design would have to reorder by sequence number. The trait also asks that the implementation
 use `option.soft_ttl()` for a stream's setup or idle policy rather than `hard_ttl` — that
 guidance was followed first and had to be abandoned, see
-[Pipelined append](#pipelined-append-leg-5).
+[Pipelined append](#pipelined-append-leg-5-built-measured-removed).
 
 ## Surface to migrate
 
