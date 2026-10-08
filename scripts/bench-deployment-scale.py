@@ -38,10 +38,10 @@ BASE_CONFIG = REPO / "docs/benchmarks/consensus.json"
 EXAMPLE = "consensus_bench"
 RESULTS = REPO / "benchmark-results"
 
-# A point is one config: (mode, operations). Checkpoint is the default mode, so it
-# carries the curve; snapshot joins at the largest size to show the comparison.
-DEFAULT_POINTS = [("checkpoint", 2_000), ("checkpoint", 5_000), ("checkpoint", 10_000),
-                  ("checkpoint", 20_000), ("snapshot", 20_000)]
+# A point is one config: (mode, operations). The endpoints carry the curve — the
+# middle sizes told the same story and cost the same machine time — and snapshot
+# joins at the largest size to show the comparison.
+DEFAULT_POINTS = [("checkpoint", 2_000), ("checkpoint", 20_000), ("snapshot", 20_000)]
 
 
 def comma_ints(value):
@@ -161,9 +161,9 @@ def run_point(binary, config_path, output, dry_run):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--points", type=comma_ints, default=None,
-                        help="checkpoint sizes, comma separated (default 2000,5000,10000,20000)")
+                        help="checkpoint sizes, comma separated (default 2000,20000)")
     parser.add_argument("--snapshot-points", type=comma_ints, default=[20_000],
-                        help="snapshot sizes, comma separated (default 20000)")
+                        help="snapshot sizes, comma separated (default 20000; empty for none)")
     parser.add_argument("--trials", type=positive, default=3, help="trials per point (default 3)")
     parser.add_argument("--timeout-ms", type=positive, default=900_000,
                         help="per-phase timeout (default 900000: bounded, but room to finish)")
@@ -187,7 +187,8 @@ def main():
             base[key].update(value)
         else:
             base[key] = value
-    points = [("checkpoint", size) for size in (args.points or [size for _, size in DEFAULT_POINTS[:4]])]
+    default_checkpoint = [size for mode, size in DEFAULT_POINTS if mode == "checkpoint"]
+    points = [("checkpoint", size) for size in (args.points or default_checkpoint)]
     points += [("snapshot", size) for size in args.snapshot_points]
 
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")

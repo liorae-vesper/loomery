@@ -117,7 +117,27 @@ knobs differ:
 |---|---|---|---|---|---|---|
 | baseline (concurrency 8, unbatched) | 365 | 379 | 363 | 367 | 19.6 ms | 559.7 MB |
 | batching 8, concurrency 64 | 1,120 | 1,093 | 1,111 | 1,079 | 57.1 ms | 286.6 MB |
-| batching 8, concurrency 8 | — | — | — | **1,080** | **7.1 ms** (p99 8.8 ms) | 286.5 MB |
+| batching 8, concurrency 8 | — | — | — | 1,080 | 7.1 ms (p99 8.8 ms) | 286.5 MB |
+| **batching 32, concurrency 64** | **4,518** | — | — | **4,335** | 14.7 ms (p99 18.5 ms) | 293.6 MB |
+
+The middle sizes were measured for the baseline and the first batched config and told
+the same story (flat), so the ladder above reports the endpoints — `mise run
+bench-deployment-scale` now sweeps 2,000 and 20,000 by default, with `--points` for
+anything else.
+
+**Throughput scales with the batch, not with concurrency.** Going from 8 commands per
+entry to 32 — same concurrency — took 20,000 events from 1,079 to **4,335 writes/s**,
+a 11.8× improvement on the unbatched baseline and 4× the batch-of-8 config, still
+flat between the endpoints. The harness's own counters confirm the batches really
+filled: **32.0 commands per entry** (20,000 commands in 625 entries), three replicas
+verified at 20,100 events, zero failures. Little's law still holds (64 ÷ 14.7 ms ≈
+4,354/s against 4,335 measured).
+
+That says the unit cost is the **entry**, not the command: four times the commands per
+entry bought four times the throughput. What that per-entry cost *is* — the tonic
+round trip, openraft's replication bookkeeping, or the durable writes an entry
+triggers — is not established here, and it is the measurement that would decide
+whether pipelined replication (which attacks exactly that) is worth its cost.
 
 What this says:
 
