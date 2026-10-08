@@ -1,9 +1,53 @@
 # Migrating to openraft 0.10 for pipelined append
 
-Status: **scoping, not started.** Branch `feature/openraft-pipelined-append`. The dependency
-bump below was applied and then reverted so the branch is only this document; the compile
-state of the migration has **not** been verified, and the error count from the earlier sizing
-(490) is stale and must be re-taken.
+Status: **inventory taken, migration not started.** Branch `feature/openraft-pipelined-append`.
+
+The bump was applied and checked: **511 errors**, which is not as bad as it sounds, because
+they collapse into about ten root causes — the largest three are mechanical. This is the
+measured list, not a guess.
+
+```
+ 174  the trait bound `u64: RaftTypeConfig` is not satisfied        (142 + 32)
+  71  the trait bound `BasicNode: std::error::Error` is not satisfied
+  65  (): RaftStateMachine<TypeConfig> is not satisfied              (50 + 15)
+  60  cannot be sent between threads safely                          (dyn Any, 13 futures, ...)
+  26  the trait bound `u64: RaftLeaderId` is not satisfied
+  27  E0107: generic arity changed (struct/enum takes a different number of arguments)
+  11  E0407: method not a member of trait — `vote` (RaftNetwork),
+      `truncate` / `read_vote` (RaftLogStorage)
+  10  `BasicNode: Hash` / `Ord` not satisfied
+   4  `BasicNode: NodeId` not satisfied
+   3  `raft::AppData` doesn't implement `Display`
+   6  E0308, 6 E0053, 6 E0046, 5 E0271, 1 E0560
+```
+
+By file the errors cluster where expected: `state_machine.rs` 187, `transport.rs` 186,
+`mod.rs` 182, `port.rs` 112, `host.rs` 77, `rocks_log_store.rs` 57, `network.rs` 44,
+`log_store.rs` 42, `group.rs` 40.
+
+## Reading the list
+
+* **`StorageError<u64>` is the single biggest cause.** 0.10 makes `StorageError` a struct, so
+  every `StorageError<u64>` in the log stores and the state machine is now being read as
+  "a `StorageError` parameterised by the config `u64`" — hence "`u64: RaftTypeConfig` is not
+  satisfied". Deleting those generic arguments is mechanical and should clear ~174 errors.
+  The same de-genericizing applies to the 71 `BasicNode: std::error::Error` errors, which are
+  error types still being handed a type parameter they no longer take.
+* **`single-threaded` may be the wrong feature for us.** It sets `OptionalSend = ()`, which
+  makes the boxed futures and streams non-`Send` — and we run a multi-threaded tokio runtime
+  with a tonic transport, which is where the ~60 "cannot be sent between threads safely"
+  errors come from. Worth testing `["serde", "compat"]` without it before chasing those.
+* **The genuine trait work is smaller than the count suggests**: `(): RaftStateMachine` (65),
+  `u64: RaftLeaderId` (26, the `LeaderId` associated type), the E0107 arity changes, and the
+  E0407 trait splits (`vote` off `RaftNetwork`; `truncate`/`read_vote` off `RaftLogStorage`).
+* **`raft::AppData` needs `Display`** — 3 errors, one small impl.
+* Removing `SnapshotData` from `declare_raft_types!` alone changed nothing (511 → 510), which
+  is consistent with the cascade being rooted in the error types rather than in the macro.
+
+## Measured bump recipe (verified)
+
+The dependency bump used to be described here as untested; it is now done and confirmed in
+both `Cargo.toml` and `Cargo.lock`.
 
 ## Why, and what we expect to get
 
