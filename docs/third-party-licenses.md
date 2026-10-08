@@ -46,14 +46,21 @@ new version.
 
 ## Hand-filled entries
 
-Eleven packages declare a license but publish no license file in the crate —
+Thirteen packages declare a license but publish no license file in the crate —
 and `r-efi` publishes none anywhere in its repository. Their texts were taken
 from upstream and filled in by hand; `--previous` preserves them across
 regenerations.
 
+It preserves them **per package name and version**, which matters when a
+dependency moves: bumping one drops its hand-filled text, the regenerated file
+carries `text: NOT FOUND` for it, and the gate fails until the text is filled in
+again at the new version. Filling it is the fix; committing the regenerated file
+as it stands would publish a notice that says nothing, so read the failure rather
+than re-running the regeneration until it goes quiet.
+
 | Packages | License | Text source |
 |---|---|---|
-| `async-nats`, `jni`, `jni-macros`, `jni-sys-macros`, `librocksdb-sys`, `openraft`, `openraft-macros`, `r-efi` (5.3.0, 6.0.0), `rustls-platform-verifier-android` | Apache-2.0 | [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) — identical for every project |
+| `async-nats`, `jni`, `jni-macros`, `jni-sys-macros`, `librocksdb-sys`, `openraft`, `openraft-macros`, `openraft-rt`, `openraft-rt-tokio`, `r-efi` (5.3.0, 6.0.0), `rustls-platform-verifier-android` | Apache-2.0 | [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) — identical for every project |
 | `tonic-prost` | MIT | [`hyperium/tonic` LICENSE](https://github.com/hyperium/tonic/blob/master/LICENSE) |
 
 `librocksdb-sys` declares `MIT/Apache-2.0/BSD-3-Clause`; the choice made by
