@@ -247,6 +247,7 @@ fn configuration_defaults_and_validation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // One listener serves the whole snapshot story: whole, fragmented, truncated, unrouted.
 async fn snapshots_cross_tonic_and_unknown_groups_are_rejected() {
     use openraft::{
         RaftSnapshotBuilder,
@@ -264,6 +265,9 @@ async fn snapshots_cross_tonic_and_unknown_groups_are_rejected() {
         .await
         .unwrap();
     let snapshot = source.state_machine.clone().build_snapshot().await.unwrap();
+    let vote = openraft::Vote::new_committed(10, 1);
+    let meta = snapshot.meta.clone();
+    let bytes = snapshot.snapshot.into_inner();
     let target = RaftGroup::boot_persistent(2, "tenant".into(), root.path(), config())
         .await
         .unwrap();
@@ -288,13 +292,16 @@ async fn snapshots_cross_tonic_and_unknown_groups_are_rejected() {
         config: config().transport,
     };
     let mut client = factory.new_client(2, &BasicNode::new(&address)).await;
-    // `RPCOption::new` carries no fragment-size advice, so the whole snapshot
-    // travels in one fragment here; the fragmenter and the reassembler are unit
-    // tested in `transport`.
+    // `RPCOption::new` carries no fragment-size advice, so the client sends this
+    // snapshot whole; the multi-fragment path is exercised below over the same
+    // stream, because openraft gives a caller no way to force the size.
     client
         .full_snapshot(
-            openraft::Vote::new_committed(10, 1),
-            snapshot,
+            vote,
+            openraft::storage::Snapshot {
+                meta: meta.clone(),
+                snapshot: std::io::Cursor::new(bytes.clone()),
+            },
             std::future::pending::<openraft::error::ReplicationClosed>(),
             RPCOption::new(Duration::from_secs(3)),
         )
@@ -308,9 +315,51 @@ async fn snapshots_cross_tonic_and_unknown_groups_are_rejected() {
             .len(),
         3
     );
-    let mut raw = transport::wire::transport_client::TransportClient::connect(address)
+
+    let mut raw = transport::wire::transport_client::TransportClient::connect(address.clone())
         .await
         .unwrap();
+    // A real multi-fragment transfer: the fragments are framed with the same
+    // helpers the client uses, so the sending side matches and the receiving side
+    // has to reassemble across messages.
+    let ranges = super::transport::fragments(bytes.len(), (bytes.len() / 3).max(1));
+    assert!(
+        ranges.len() > 1,
+        "this test must span several fragments, not one"
+    );
+    let (chunks, received) = tokio::sync::mpsc::channel(2);
+    tokio::spawn(super::transport::pump_fragments(
+        bytes.clone(),
+        ranges,
+        "tenant".to_owned(),
+        super::transport::opening_json(vote, &meta).unwrap(),
+        chunks,
+    ));
+    raw.install_snapshot(tokio_stream::wrappers::ReceiverStream::new(received))
+        .await
+        .unwrap();
+    assert_eq!(
+        target
+            .committed_events(&organization())
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+    // A stream that ends without the final fragment is a truncated transfer: the
+    // follower aborts instead of installing half a snapshot.
+    let truncated = vec![transport::wire::SnapshotChunk {
+        group_id: "tenant".to_owned(),
+        opening: super::transport::opening_json(vote, &meta).unwrap(),
+        data: b"half a snapshot".to_vec(),
+        done: false,
+    }];
+    let error = raw
+        .install_snapshot(tokio_stream::iter(truncated))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Aborted);
+
     let error = raw
         .vote(transport::wire::Envelope {
             group_id: "missing".into(),

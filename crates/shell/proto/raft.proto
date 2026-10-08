@@ -2,8 +2,28 @@ syntax = "proto3";
 package loomery.raft.v1;
 // JSON encodes OpenRaft's version-pinned request and Result response types.
 message Envelope { string group_id = 1; bytes json = 2; }
+// One fragment of a snapshot transfer, sent as a client stream.
+//
+// OpenRaft 0.10 hands `RaftNetworkV2::full_snapshot` the whole snapshot and makes
+// fragmentation the network's job, so this is our own framing. Only the first
+// fragment carries the routing key and the opening metadata; every fragment
+// carries raw snapshot bytes, which is why this message exists rather than an
+// `Envelope` — JSON would inflate binary data several times over.
+message SnapshotChunk {
+  // Routing key; set on the first fragment only.
+  string group_id = 1;
+  // JSON `{vote, meta}`; set on the first fragment only.
+  bytes opening = 2;
+  // Raw snapshot bytes.
+  bytes data = 3;
+  // Whether this fragment completes the snapshot.
+  bool done = 4;
+}
 service Transport {
   rpc AppendEntries(Envelope) returns (Envelope);
   rpc Vote(Envelope) returns (Envelope);
-  rpc InstallSnapshot(Envelope) returns (Envelope);
+  // Client-streamed: the leader sends fragments, the follower installs the
+  // assembled snapshot once and answers with the Result of
+  // `Raft::install_full_snapshot`.
+  rpc InstallSnapshot(stream SnapshotChunk) returns (Envelope);
 }

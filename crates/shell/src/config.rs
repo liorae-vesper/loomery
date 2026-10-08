@@ -225,6 +225,14 @@ impl GroupConfig {
                 || self.proposals.max_batch_bytes <= self.transport.max_message_bytes / 2,
             "proposal byte limit must leave room for transport encoding"
         );
+        // Snapshot fragments are the transport's own framing: a chunk that does
+        // not fit a transport message would turn a lagging follower into a
+        // snapshot transfer that can never complete.
+        anyhow::ensure!(
+            self.raft.snapshot_max_chunk_size.saturating_mul(2)
+                <= u64::try_from(self.transport.max_message_bytes)?,
+            "snapshot chunk size must leave room for transport encoding"
+        );
         anyhow::ensure!(
             self.storage.write_buffer_bytes > 0
                 && self.storage.block_cache_bytes > 0

@@ -22,22 +22,23 @@ use openraft::raft::SnapshotResponse;
 use openraft::raft::VoteRequest;
 use openraft::raft::VoteResponse;
 use openraft::type_config::alias::VoteOf;
-
-use super::alias::SnapshotMetaOf;
-use super::alias::SnapshotOf;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tokio::sync::Mutex;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
+use tonic::Streaming;
 use tonic::transport::Channel;
 use tonic::transport::Endpoint;
 use tonic::transport::Server;
 
 use super::RaftHandle;
 use super::TypeConfig;
+use super::alias::SnapshotMetaOf;
+use super::alias::SnapshotOf;
 use crate::config::TransportConfig;
 
 /// Version-pinned protobuf transport envelope and service definitions.
@@ -46,61 +47,93 @@ pub mod wire {
     tonic::include_proto!("loomery.raft.v1");
 }
 use wire::Envelope;
+use wire::SnapshotChunk;
 use wire::transport_client::TransportClient;
 use wire::transport_server::Transport;
 use wire::transport_server::TransportServer;
 
-/// One fragment of a snapshot transfer, as JSON inside an [`Envelope`].
+/// A snapshot transfer's opening metadata, JSON on the first fragment.
 ///
-/// 0.10 fragments snapshots in the network implementation rather than in the
-/// core (the chunked `InstallSnapshotRequest` moved to `openraft-legacy`), so
-/// this is our own wire shape on the existing `InstallSnapshot` RPC. A
-/// transfer is identified by `vote`: every fragment of one transfer carries the
-/// same leader vote, and `offset` is where its bytes start.
+/// The vote is not part of `SnapshotMeta`, and it must reach the follower to
+/// install the snapshot, so it travels with the metadata.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct SnapshotChunk {
-    /// The leader's vote for the transfer this fragment belongs to.
+struct Opening {
+    /// The leader's vote for the transfer.
     vote: VoteOf<TypeConfig>,
-    /// Snapshot metadata; repeated on every fragment so the receiver needs no
-    /// out-of-band context.
+    /// The snapshot's position and membership.
     meta: SnapshotMetaOf,
-    /// Byte offset of `data` within the snapshot.
-    offset: u64,
-    /// Whether this fragment completes the snapshot.
-    done: bool,
-    /// This fragment's bytes.
-    data: Vec<u8>,
 }
 
-/// What a follower answers each snapshot fragment with.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct SnapshotAck {
-    /// The install response, present only on the fragment that ends the
-    /// transfer.
-    response: Option<SnapshotResponse<TypeConfig>>,
+/// Serializes the opening metadata of a snapshot transfer.
+///
+/// Shared by the client and the transport tests so both frame a transfer the
+/// same way.
+pub(super) fn opening_json(
+    vote: VoteOf<TypeConfig>,
+    meta: &SnapshotMetaOf,
+) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(&Opening {
+        vote,
+        meta: meta.clone(),
+    })
 }
 
-/// Identifies one in-flight snapshot transfer: a group plus the sending leader.
-type TransferKey = (String, u64, u64);
-
-/// A partially received snapshot.
+/// Accumulates the fragments of one snapshot transfer.
+///
+/// The buffer is scoped to a single RPC, which is the point of streaming it: a
+/// transfer that dies mid-way leaves nothing behind, and two transfers cannot
+/// collide. (The unary first cut of this transport kept reassembly in a shared
+/// map keyed by group and leader, which leaked a partial transfer whenever the
+/// sender died.)
 #[derive(Default)]
-struct Transfer {
-    /// Bytes accumulated so far; its length is the next expected offset.
+pub(super) struct SnapshotAssembly {
+    /// The routing key, learned from the first fragment.
+    group: Option<String>,
+    /// The opening metadata, learned from the first fragment.
+    opening: Option<Opening>,
+    /// The bytes received so far.
     data: Vec<u8>,
+}
+
+impl SnapshotAssembly {
+    /// Adds one fragment, answering with the whole snapshot when it completes.
+    fn push(&mut self, chunk: SnapshotChunk) -> Result<Option<(String, Opening, Vec<u8>)>, Status> {
+        if !chunk.group_id.is_empty() && self.group.as_deref() != Some(chunk.group_id.as_str()) {
+            if self.group.is_some() {
+                return Err(Status::invalid_argument(
+                    "snapshot fragments name different groups",
+                ));
+            }
+            self.group = Some(chunk.group_id);
+        }
+        if self.opening.is_none() && !chunk.opening.is_empty() {
+            self.opening = Some(
+                serde_json::from_slice(&chunk.opening)
+                    .map_err(|e| Status::invalid_argument(e.to_string()))?,
+            );
+        }
+        self.data.extend_from_slice(&chunk.data);
+        if !chunk.done {
+            return Ok(None);
+        }
+        let Some(group) = self.group.take() else {
+            return Err(Status::invalid_argument(
+                "snapshot fragments carry no group id",
+            ));
+        };
+        let Some(opening) = self.opening.take() else {
+            return Err(Status::invalid_argument(
+                "snapshot fragments carry no metadata",
+            ));
+        };
+        Ok(Some((group, opening, std::mem::take(&mut self.data))))
+    }
 }
 
 /// A registry shared by the transport server and locally booted groups.
 #[derive(Clone, Default)]
 pub struct TonicTransport {
     groups: Arc<RwLock<BTreeMap<String, RaftHandle>>>,
-    /// Half-received snapshot transfers.
-    ///
-    /// Receiving is stateless in 0.9 because the core owned the reassembly
-    /// buffer; in 0.10 the network owns it, so it lives here, keyed by group and
-    /// leader. A fragment at offset 0 starts a fresh transfer (which is also how
-    /// a retried transfer replaces an aborted one).
-    transfers: Arc<Mutex<BTreeMap<TransferKey, Transfer>>>,
 }
 impl TonicTransport {
     /// Registers a group; rejects accidental replacement of a running group.
@@ -116,54 +149,24 @@ impl TonicTransport {
     pub async fn unregister(&self, group: &str) {
         self.groups.write().await.remove(group);
     }
+    /// Looks up a registered group by routing key.
+    async fn group(&self, group_id: &str) -> Result<RaftHandle, Status> {
+        self.groups
+            .read()
+            .await
+            .get(group_id)
+            .cloned()
+            .ok_or_else(|| Status::not_found("unknown Raft group"))
+    }
     async fn route<T: DeserializeOwned>(
         &self,
         request: Request<Envelope>,
     ) -> Result<(String, RaftHandle, T), Status> {
         let envelope = request.into_inner();
-        let raft = self
-            .groups
-            .read()
-            .await
-            .get(&envelope.group_id)
-            .cloned()
-            .ok_or_else(|| Status::not_found("unknown Raft group"))?;
+        let raft = self.group(&envelope.group_id).await?;
         let rpc = serde_json::from_slice(&envelope.json)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         Ok((envelope.group_id, raft, rpc))
-    }
-    /// Appends one fragment, answering with the whole snapshot once it is
-    /// complete.
-    ///
-    /// An out-of-order or late fragment drops the transfer, so the leader's next
-    /// attempt restarts from offset 0 instead of installing a spliced snapshot.
-    async fn assemble(
-        &self,
-        key: TransferKey,
-        chunk: SnapshotChunk,
-    ) -> Result<Option<(VoteOf<TypeConfig>, SnapshotMetaOf, Vec<u8>)>, Status> {
-        let mut transfers = self.transfers.lock().await;
-        if chunk.offset == 0 {
-            transfers.insert(key.clone(), Transfer::default());
-        }
-        let Some(transfer) = transfers.get_mut(&key) else {
-            return Err(Status::failed_precondition(
-                "snapshot fragment arrived before the first fragment",
-            ));
-        };
-        let expected = u64::try_from(transfer.data.len()).unwrap_or(u64::MAX);
-        if chunk.offset != expected {
-            transfers.remove(&key);
-            return Err(Status::failed_precondition(
-                "snapshot fragment out of order",
-            ));
-        }
-        transfer.data.extend_from_slice(&chunk.data);
-        if !chunk.done {
-            return Ok(None);
-        }
-        let transfer = transfers.remove(&key).unwrap_or_default();
-        Ok(Some((chunk.vote, chunk.meta, transfer.data)))
     }
     /// Serves on a pre-bound listener until shutdown resolves.
     /// # Errors
@@ -218,33 +221,35 @@ impl Transport for TonicTransport {
         let (_, raft, rpc) = self.route::<VoteRequest<TypeConfig>>(request).await?;
         answer(&raft.vote(rpc).await)
     }
+    /// Receives a snapshot stream and installs it once it is complete.
+    ///
+    /// The assembled bytes live in this frame, so a sender that goes away cannot
+    /// leave a half-transfer behind, and a stream that ends without the final
+    /// fragment is reported as aborted rather than installed.
     async fn install_snapshot(
         &self,
-        request: Request<Envelope>,
+        request: Request<Streaming<SnapshotChunk>>,
     ) -> Result<Response<Envelope>, Status> {
-        let (group, raft, chunk) = self.route::<SnapshotChunk>(request).await?;
-        let key = (
-            group,
-            chunk.vote.leader_id.term,
-            chunk.vote.leader_id.node_id,
-        );
-        let Some((vote, meta, data)) = self.assemble(key, chunk).await? else {
-            return answer(&Ok::<SnapshotAck, RaftError<TypeConfig>>(SnapshotAck {
-                response: None,
-            }));
-        };
-        let snapshot = SnapshotOf {
-            meta,
-            snapshot: Cursor::new(data),
-        };
-        let installed: Result<SnapshotAck, RaftError<TypeConfig>> = raft
-            .install_full_snapshot(vote, snapshot)
-            .await
-            .map(|response| SnapshotAck {
-                response: Some(response),
-            })
-            .map_err(RaftError::Fatal);
-        answer(&installed)
+        let mut stream = request.into_inner();
+        let mut assembly = SnapshotAssembly::default();
+        while let Some(chunk) = stream.message().await? {
+            let Some((group, opening, data)) = assembly.push(chunk)? else {
+                continue;
+            };
+            let raft = self.group(&group).await?;
+            let snapshot = SnapshotOf {
+                meta: opening.meta,
+                snapshot: Cursor::new(data),
+            };
+            let installed: Result<SnapshotResponse<TypeConfig>, RaftError<TypeConfig>> = raft
+                .install_full_snapshot(opening.vote, snapshot)
+                .await
+                .map_err(RaftError::Fatal);
+            return answer(&installed);
+        }
+        Err(Status::aborted(
+            "snapshot stream ended before the final fragment",
+        ))
     }
 }
 /// Creates reusable gRPC channels to addresses in Raft membership metadata.
@@ -340,8 +345,9 @@ impl TonicNetwork {
 /// Generates one unary RPC method on [`TonicNetwork`] for a Raft RPC.
 ///
 /// `$name` is our method, `$client` the generated tonic one. The timeout is
-/// 0.9's: the hard TTL capped by the configured request timeout. A stream sets
-/// its own idle policy in leg 5.
+/// 0.9's: the hard TTL capped by the configured request timeout. The snapshot
+/// stream is deliberately not unary and sets no such deadline; see
+/// [`TonicNetwork::call_install_snapshot`].
 macro_rules! unary {
     ($name:ident, $client:ident, $request:ty, $response:ty) => {
         async fn $name(
@@ -382,33 +388,30 @@ impl TonicNetwork {
         VoteResponse<TypeConfig>
     );
 
-    /// Sends one snapshot fragment.
+    /// Sends a snapshot as one client stream and decodes the install result.
     ///
-    /// Separate from [`unary!`] because the answer is a `Result` the streaming
-    /// error family has no remote variant for, so a rejected fragment is
-    /// reported as unreachable: the transfer failed and the leader should back
-    /// off and retry it from the start.
+    /// There is deliberately no whole-RPC deadline. Openraft passes
+    /// `Config::install_snapshot_timeout` — 200 ms by default — as `hard_ttl`,
+    /// and 0.9 applied that to each chunk-sized RPC; applying it to a whole
+    /// stream would abort every transfer that is not tiny, and openraft would
+    /// restart it from the beginning. The bounds here are openraft's `cancel`
+    /// future, the configured TCP keepalive, and `max_message_bytes` per
+    /// fragment. An idle-timeout policy that distinguishes "slow link" from
+    /// "stalled peer" needs a per-fragment progress signal the request stream
+    /// does not expose; it belongs with the `StreamAppend` work, where the
+    /// response side is a stream.
     async fn call_install_snapshot(
         &mut self,
-        rpc: SnapshotChunk,
-        option: &RPCOption,
-    ) -> Result<SnapshotAck, StreamingError<TypeConfig>> {
-        let request = self
-            .request(&rpc, option)
-            .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))?;
+        chunks: mpsc::Receiver<SnapshotChunk>,
+    ) -> Result<SnapshotResponse<TypeConfig>, StreamingError<TypeConfig>> {
         let mut client = self.client().await.map_err(|e| {
             StreamingError::Unreachable(Unreachable::new(&std::io::Error::other(e.to_string())))
         })?;
-        let response = tokio::time::timeout(
-            option.hard_ttl().min(Duration::from_millis(
-                self.factory.config.request_timeout_ms,
-            )),
-            client.install_snapshot(request),
-        )
-        .await
-        .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))?
-        .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))?;
-        let result: Result<SnapshotAck, RaftError<TypeConfig>> =
+        let response = client
+            .install_snapshot(ReceiverStream::new(chunks))
+            .await
+            .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))?;
+        let result: Result<SnapshotResponse<TypeConfig>, RaftError<TypeConfig>> =
             serde_json::from_slice(&response.into_inner().json)
                 .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))?;
         result.map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))
@@ -419,7 +422,7 @@ impl TonicNetwork {
 ///
 /// A zero-length snapshot still needs one fragment, so the result is never
 /// empty and its last range always ends at `total`.
-fn fragments(total: usize, chunk_size: usize) -> Vec<std::ops::Range<usize>> {
+pub(super) fn fragments(total: usize, chunk_size: usize) -> Vec<std::ops::Range<usize>> {
     let chunk = chunk_size.max(1);
     let mut ranges = Vec::new();
     let mut start = 0usize;
@@ -430,6 +433,60 @@ fn fragments(total: usize, chunk_size: usize) -> Vec<std::ops::Range<usize>> {
             return ranges;
         }
         start = end;
+    }
+}
+
+/// One fragment of a snapshot transfer.
+///
+/// The routing key and the opening metadata travel on the first fragment only,
+/// and `first` is what decides that — so the client's pump and the transport
+/// tests frame a snapshot identically.
+fn fragment(
+    bytes: &[u8],
+    range: std::ops::Range<usize>,
+    first: bool,
+    done: bool,
+    group_id: &str,
+    opening: &[u8],
+) -> SnapshotChunk {
+    SnapshotChunk {
+        group_id: if first {
+            group_id.to_owned()
+        } else {
+            String::new()
+        },
+        opening: if first { opening.to_vec() } else { Vec::new() },
+        data: bytes.get(range).unwrap_or_default().to_vec(),
+        done,
+    }
+}
+
+/// Sends a snapshot's fragments into `chunks`.
+///
+/// Fragments are copied one at a time, so a snapshot is never duplicated in
+/// memory on the sender; the bounded channel and HTTP/2 flow control pace the
+/// stream, and returning early when the receiver is gone is what makes
+/// cancelling the RPC stop the copying too.
+pub(super) async fn pump_fragments(
+    bytes: Vec<u8>,
+    ranges: Vec<std::ops::Range<usize>>,
+    group_id: String,
+    opening: Vec<u8>,
+    chunks: mpsc::Sender<SnapshotChunk>,
+) {
+    let last = ranges.len().saturating_sub(1);
+    for (position, range) in ranges.into_iter().enumerate() {
+        let chunk = fragment(
+            &bytes,
+            range,
+            position == 0,
+            position == last,
+            &group_id,
+            &opening,
+        );
+        if chunks.send(chunk).await.is_err() {
+            return;
+        }
     }
 }
 
@@ -452,13 +509,12 @@ impl RaftNetworkV2<TypeConfig> for TonicNetwork {
         self.call_vote(rpc, &option).await
     }
 
-    /// Sends the snapshot to the follower in fragments over the existing
-    /// `InstallSnapshot` RPC.
+    /// Sends the snapshot to the follower as one client stream.
     ///
-    /// 0.10 gives the network the whole snapshot and makes it responsible for
-    /// fragmenting, so the chunking 0.9 did inside the core happens here. The
-    /// fragment size is the core's advised `snapshot_chunk_size`; a transport
-    /// that has no advice sends it whole.
+    /// 0.10 gives the network the whole snapshot and makes fragmentation its job,
+    /// so the chunking 0.9 did inside the core happens here. The fragment size is
+    /// the core's advised `snapshot_chunk_size`; a transport that has no advice
+    /// sends it whole.
     async fn full_snapshot(
         &mut self,
         vote: VoteOf<TypeConfig>,
@@ -473,44 +529,28 @@ impl RaftNetworkV2<TypeConfig> for TonicNetwork {
         let bytes = data.into_inner();
         let total = bytes.len();
         let chunk_size = option.snapshot_chunk_size().unwrap_or(total).max(1);
-        tokio::pin!(cancel);
-
+        let opening = opening_json(vote, &meta)
+            .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))?;
         let ranges = fragments(total, chunk_size);
-        let last = ranges.len().saturating_sub(1);
-        for (position, range) in ranges.into_iter().enumerate() {
-            let done = position == last;
-            let offset = range.start;
-            let fragment = bytes
-                .get(range)
-                .ok_or_else(|| {
-                    StreamingError::Closed(ReplicationClosed::new("snapshot fragment out of range"))
-                })?
-                .to_vec();
-            let chunk = SnapshotChunk {
-                vote,
-                meta: meta.clone(),
-                offset: u64::try_from(offset).unwrap_or(u64::MAX),
-                done,
-                data: fragment,
-            };
-            let ack = tokio::select! {
-                closed = &mut cancel => return Err(StreamingError::Closed(closed)),
-                sent = self.call_install_snapshot(chunk, &option) => sent?,
-            };
-            if done {
-                return ack.response.ok_or_else(|| {
-                    StreamingError::Closed(ReplicationClosed::new(
-                        "follower acknowledged the final snapshot fragment without installing it",
-                    ))
-                });
-            }
-        }
 
-        // `fragments` always marks its last range `done`, so the loop returns;
-        // this keeps the function total without an unreachable panic.
-        Err(StreamingError::Closed(ReplicationClosed::new(
-            "snapshot transfer ended without a final fragment",
-        )))
+        // Two fragments of headroom: enough that the pump is never the
+        // bottleneck, small enough that the snapshot is not duplicated.
+        let (chunks_tx, chunks_rx) = mpsc::channel(2);
+        let pump = tokio::spawn(pump_fragments(
+            bytes,
+            ranges,
+            self.factory.group_id.clone(),
+            opening,
+            chunks_tx,
+        ));
+
+        tokio::pin!(cancel);
+        let result = tokio::select! {
+            closed = &mut cancel => Err(StreamingError::Closed(closed)),
+            sent = self.call_install_snapshot(chunks_rx) => sent,
+        };
+        pump.abort();
+        result
     }
 }
 
@@ -519,22 +559,21 @@ mod tests {
     use super::*;
     use crate::raft::alias::StoredMembershipOf;
 
-    /// One fragment of a transfer led by node 1 in term 1.
-    fn chunk(offset: u64, data: &[u8], done: bool) -> SnapshotChunk {
-        SnapshotChunk {
-            vote: openraft::Vote::new_committed(1, 1),
-            meta: SnapshotMetaOf {
+    /// Opening metadata for a transfer led by node 1 in term 1.
+    fn opening() -> Vec<u8> {
+        opening_json(
+            openraft::Vote::new_committed(1, 1),
+            &SnapshotMetaOf {
                 last_log_id: None,
                 last_membership: StoredMembershipOf::default(),
             },
-            offset,
-            done,
-            data: data.to_vec(),
-        }
+        )
+        .unwrap()
     }
 
-    fn key() -> TransferKey {
-        ("group".to_owned(), 1, 1)
+    /// One fragment carrying exactly `data`.
+    fn chunk(group: &str, data: &[u8], first: bool, done: bool) -> SnapshotChunk {
+        fragment(data, 0..data.len(), first, done, group, &opening())
     }
 
     #[test]
@@ -547,79 +586,91 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fragments_are_reassembled_in_order() {
-        let transport = TonicTransport::default();
-        let key = key();
+    async fn the_pump_frames_a_snapshot_for_one_transfer() {
+        let opening = opening();
+        let (tx, mut rx) = mpsc::channel(8);
+        pump_fragments(
+            b"abcdef".to_vec(),
+            fragments(6, 2),
+            "group".to_owned(),
+            opening.clone(),
+            tx,
+        )
+        .await;
+
+        let mut chunks = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            chunks.push(chunk);
+        }
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].group_id, "group");
+        assert_eq!(chunks[0].opening, opening);
+        assert!(chunks[1].group_id.is_empty() && chunks[1].opening.is_empty());
+        assert_eq!(chunks[0].data, b"ab");
+        assert_eq!(chunks[2].data, b"ef");
+        assert_eq!(
+            chunks.iter().map(|c| c.done).collect::<Vec<_>>(),
+            vec![false, false, true]
+        );
+    }
+
+    #[test]
+    fn an_assembly_joins_fragments_in_order() {
+        let mut assembly = SnapshotAssembly::default();
 
         assert!(
-            transport
-                .assemble(key.clone(), chunk(0, b"abc", false))
-                .await
+            assembly
+                .push(chunk("group", b"abc", true, false))
                 .unwrap()
                 .is_none()
         );
         assert!(
-            transport
-                .assemble(key.clone(), chunk(3, b"de", false))
-                .await
+            assembly
+                .push(chunk("", b"de", false, false))
                 .unwrap()
                 .is_none()
         );
-        let (_, _, data) = transport
-            .assemble(key.clone(), chunk(5, b"f", true))
-            .await
+        let (group, _, data) = assembly
+            .push(chunk("", b"f", false, true))
             .unwrap()
             .expect("the last fragment completes the transfer");
+        assert_eq!(group, "group");
         assert_eq!(data, b"abcdef");
-        assert!(transport.transfers.lock().await.is_empty());
     }
 
-    #[tokio::test]
-    async fn a_fragment_at_zero_starts_a_fresh_transfer() {
-        let transport = TonicTransport::default();
-        let key = key();
-
-        transport
-            .assemble(key.clone(), chunk(0, b"abc", false))
-            .await
-            .unwrap();
-        // A retried transfer replaces the aborted one instead of appending to it.
-        let (_, _, data) = transport
-            .assemble(key.clone(), chunk(0, b"xy", true))
-            .await
-            .unwrap()
-            .expect("the retried transfer completes");
-        assert_eq!(data, b"xy");
+    #[test]
+    fn an_assembly_rejects_a_transfer_with_no_group() {
+        let mut assembly = SnapshotAssembly::default();
+        let error = assembly.push(chunk("", b"abc", true, true)).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
     }
 
-    #[tokio::test]
-    async fn an_out_of_order_fragment_drops_the_transfer() {
-        let transport = TonicTransport::default();
-        let key = key();
-
-        transport
-            .assemble(key.clone(), chunk(0, b"abc", false))
-            .await
-            .unwrap();
-        let error = transport
-            .assemble(key.clone(), chunk(9, b"z", false))
-            .await
-            .unwrap_err();
-        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
-        assert!(
-            transport.transfers.lock().await.is_empty(),
-            "a gap must make the leader restart the transfer"
-        );
+    #[test]
+    fn an_assembly_rejects_a_transfer_with_no_metadata() {
+        let mut assembly = SnapshotAssembly::default();
+        let chunk = SnapshotChunk {
+            group_id: "group".to_owned(),
+            opening: Vec::new(),
+            data: b"abc".to_vec(),
+            done: true,
+        };
+        let error = assembly.push(chunk).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
     }
 
-    #[tokio::test]
-    async fn a_fragment_without_a_first_fragment_is_rejected() {
-        let transport = TonicTransport::default();
-
-        let error = transport
-            .assemble(key(), chunk(3, b"z", false))
-            .await
-            .unwrap_err();
-        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    #[test]
+    fn an_assembly_rejects_fragments_from_two_groups() {
+        let mut assembly = SnapshotAssembly::default();
+        assembly.push(chunk("group", b"abc", true, false)).unwrap();
+        // A later fragment that names a *different* group is not a continuation
+        // of this transfer.
+        let other = SnapshotChunk {
+            group_id: "other".to_owned(),
+            opening: Vec::new(),
+            data: b"def".to_vec(),
+            done: true,
+        };
+        let error = assembly.push(other).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
     }
 }
