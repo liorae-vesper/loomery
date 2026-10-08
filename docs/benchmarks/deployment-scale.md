@@ -105,6 +105,44 @@ deliberately: the curve is about *scale*, and batching has its own
   replication bookkeeping and the two synchronous writes per command is the next
   measurement, and it is open.
 
+## The cheap path, measured: batching and concurrency
+
+Before reaching for a newer consensus library, the two levers already in the tree
+were measured *at scale*. Command batching groups concurrent commands into one Raft
+entry (`group.proposals`), and concurrency decides how many writes are in flight.
+Three trials per point, same harness, same machine as the curve above — only the
+knobs differ:
+
+| Point | 2,000 | 5,000 | 10,000 | 20,000 | p50 at 20,000 | On disk at 20,000 |
+|---|---|---|---|---|---|---|
+| baseline (concurrency 8, unbatched) | 365 | 379 | 363 | 367 | 19.6 ms | 559.7 MB |
+| batching 8, concurrency 64 | 1,120 | 1,093 | 1,111 | 1,079 | 57.1 ms | 286.6 MB |
+| batching 8, concurrency 8 | — | — | — | **1,080** | **7.1 ms** (p99 8.8 ms) | 286.5 MB |
+
+What this says:
+
+- **Batching is worth ~2.9×**, and it holds at every size: 365–379 writes/s becomes
+  1,079–1,120, flat from 2,000 to 20,000 events.
+- **Concurrency adds nothing once batching is on.** Batching 8 with 8 in flight and
+  with 64 in flight both land at ~1,080 writes/s — but at 8 in flight the p50 is
+  **7.1 ms** instead of 57 ms. More concurrency here buys queueing, not throughput.
+- **Latency and throughput trade exactly as queueing predicts.** Every point matches
+  Little's law — 8 ÷ 19.5 ms ≈ 410/s at baseline, 8 ÷ 7.1 ms ≈ 1,127/s batched,
+  64 ÷ 57.1 ms ≈ 1,121/s — so the percentiles are queueing delay, not service time:
+  a command waits behind the batch it belongs to. Read them as such.
+- **Batching also halves the log.** 286.6 MB at 20,000 events against 559.7 MB
+  unbatched, because eight commands share one entry (log entries, snapshots and
+  their replay all shrink with it).
+- One caveat inside the numbers: the 5,000-event batched point showed a p99 of
+  229 ms against a 56 ms p50 — a tail worth watching, and the reason the note reports
+  p99 rather than hiding it behind a mean.
+
+So the bar a consensus upgrade has to clear is **~1,080 writes/s** as measured here,
+and the recorded [batch-size matrix](batch-matrix.md) already reaches ~1,600 at a
+batch limit of 128 — all with code that exists today, before any pipelining. That is
+the comparison this note hands to anyone deciding whether a newer Raft API is worth
+its cost.
+
 ## A finding: the harness could not run at all
 
 The first attempt failed with **100 % rejected commands**:

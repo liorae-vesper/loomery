@@ -45,7 +45,9 @@ DEFAULT_POINTS = [("checkpoint", 2_000), ("checkpoint", 5_000), ("checkpoint", 1
 
 
 def comma_ints(value):
-    """`2000,5000` → `[2000, 5000]`."""
+    """`2000,5000` → `[2000, 5000]`; an empty string asks for no such points."""
+    if value == "":
+        return []
     try:
         values = [int(part) for part in value.split(",") if part]
     except ValueError as error:
