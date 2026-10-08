@@ -91,6 +91,10 @@ run = "cargo run --release -p loomery-shell --example consensus_bench -- --confi
 description = "Measures the deployment path: 3 nodes at 2k/5k/10k/20k events, checkpoint and snapshot"
 run = "python3 scripts/bench-deployment-scale.py"
 
+[tasks.bench-collect]
+description = "Collects the deployment-path runs into docs/benchmarks/results/deployment-path.json"
+run = "python3 scripts/bench-collect-results.py --print"
+
 [tasks.bench-persistence]
 description = "Compares checkpoint and snapshot recovery with controlled crash benchmarks"
 run = "python3 scripts/bench-persistence.py"

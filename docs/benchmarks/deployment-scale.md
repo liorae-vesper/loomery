@@ -8,9 +8,14 @@ production apply path; this note is that harness driven at four growing sizes.
 
 Everything here is measured, and every number is traceable to a named file under
 one output directory — nothing is smoothed, retried away or shrunk. Note that
-`benchmark-results/` is gitignored, so that raw output lives on the machine that ran
+`benchmark-results/` is gitignored, so the raw output lives on the machine that ran
 the sweep: the paths below say exactly what to look for, and `mise run
-bench-deployment-scale` regenerates the whole thing.
+bench-deployment-scale` regenerates the whole thing. The **medians every table here
+quotes are committed** in
+[results/deployment-path.json](results/deployment-path.json), which
+`python3 scripts/bench-collect-results.py` regenerates from the runs — with each run's
+config overrides, trial counts, verification counts and the machine it ran on, so a
+number can be traced without the raw databases.
 
 ## How it was run
 
@@ -71,15 +76,21 @@ The numbers are consistent with throughput = concurrency ÷ latency: 8 ÷ 19.5 m
 each is awaited — so the path is **latency-bound**, and the way to move it is more
 concurrency or fewer round trips, not more machines.
 
-Four probes at 5,000 events, one trial each, changing one knob at a time (output
-directories `benchmark-results/*-probe-*`):
+Four probes at 5,000 events, changing one knob at a time:
 
-| Probe | Writes/s | p50 | vs baseline |
-|---|---|---|---|
-| baseline: concurrency 8, unbatched | 379 | 19.5 ms | — |
-| `group.proposals.max_batch_commands = 8` | 569 | 13.8 ms | 1.50× |
-| concurrency 64 | 734 | 86.4 ms | 1.94× |
-| both | **1,119** | 57.0 ms | 2.95× |
+| Probe | Trials | Writes/s | p50 | vs baseline |
+|---|---|---|---|---|
+| baseline: concurrency 8, unbatched | 3 | 379 | 19.5 ms | — |
+| unbatched, concurrency 64 | 1 | 756 | 84.7 ms | 1.99× |
+| batching 8, `max_delay_ms: 1`, concurrency 8 | 1 | 1,110 | 7.0 ms | 2.93× |
+| batching 8, `max_delay_ms: 1`, concurrency 64 | 1 | **1,129** | 56.8 ms | 2.98× |
+
+One correction worth recording: an earlier version of this table reported 569 writes/s
+for batching 8 at concurrency 8. That run used `max_delay_ms: 0`, which collects only
+commands already queued — at 8 in flight a batch of 8 rarely fills, so it measured a
+batch closer to 4 while claiming 8. The collection delay is load-bearing: the same
+batch with `max_delay_ms: 1` is worth 2.93× rather than 1.50×. The matrix below holds
+it at 1 for every row.
 
 Both levers already exist and are opt-in: command batching groups concurrent
 commands into one Raft entry (fewer entries ⇒ fewer round trips and fewer applies),
