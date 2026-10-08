@@ -23,6 +23,8 @@ use loomery_core::id::Id;
 use loomery_core::key::Key;
 use loomery_core::timestamp::Timestamp;
 use openraft::BasicNode;
+use openraft::RaftSnapshotBuilder;
+use openraft::storage::RaftStateMachine;
 
 use crate::config::GroupConfig;
 use crate::config::StatePersistence;
@@ -169,4 +171,154 @@ async fn history_survives_snapshot_and_restart(mode: StatePersistence, commands:
 async fn a_large_history_survives_snapshot_and_restart_in_both_modes() {
     history_survives_snapshot_and_restart(StatePersistence::Checkpoint, 300).await;
     history_survives_snapshot_and_restart(StatePersistence::Snapshot, 300).await;
+}
+
+/// How many commands the opt-in soak applies, or `None` when it is not enabled.
+///
+/// The soak is minutes of work, so it does not run in the default suite:
+///
+/// ```sh
+/// LOOMERY_TEST_SOAK=1 mise run test                  # 2,000 commands
+/// LOOMERY_TEST_SOAK_COMMANDS=20000 mise run test     # as long as you like
+/// ```
+fn soak_commands() -> Option<u64> {
+    let enabled =
+        std::env::var("LOOMERY_TEST_SOAK").is_ok_and(|value| !value.is_empty() && value != "0");
+    if !enabled {
+        return None;
+    }
+    Some(
+        std::env::var("LOOMERY_TEST_SOAK_COMMANDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(2000),
+    )
+}
+
+/// The modes the soak runs, so a long run can skip the one that cannot afford it.
+///
+/// Checkpoint mode serializes the whole state on every apply, so its cost is
+/// quadratic in the history (measured in `docs/benchmarks/persistence-hardening.md`);
+/// `LOOMERY_TEST_SOAK_MODE=snapshot` runs the mode that scales instead.
+fn soak_modes() -> Vec<StatePersistence> {
+    match std::env::var("LOOMERY_TEST_SOAK_MODE").as_deref() {
+        Ok("checkpoint") => vec![StatePersistence::Checkpoint],
+        Ok("snapshot") => vec![StatePersistence::Snapshot],
+        _ => vec![StatePersistence::Checkpoint, StatePersistence::Snapshot],
+    }
+}
+
+/// The bytes the database occupies on disk.
+fn directory_size(path: &std::path::Path) -> u64 {
+    std::fs::read_dir(path)
+        .expect("the database directory")
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(std::fs::Metadata::is_file)
+        .map(|metadata| metadata.len())
+        .sum()
+}
+
+/// A long history: apply, snapshot mid-way, restart, and measure each phase.
+///
+/// What the short probe cannot answer is *cost*: how apply throughput holds up as
+/// the history grows, what a snapshot of it costs, how long recovery takes, and
+/// how large the database gets. The numbers are recorded in
+/// `docs/benchmarks/persistence-hardening.md`.
+async fn soak(mode: StatePersistence, commands: u64) {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().to_path_buf();
+    let organization_id = Id::from(ORGANIZATION);
+
+    let started = std::time::Instant::now();
+    let mut group = boot(&path, mode).await;
+    let halfway = commands / 2;
+    for index in 0..halfway {
+        group.propose(task_command(index)).await.unwrap();
+    }
+
+    // A snapshot over half the history, then the rest: recovery has a snapshot and
+    // a log tail to combine, which is what a restart in the middle of a run sees.
+    let snapshot_started = std::time::Instant::now();
+    {
+        let mut machine = group.state_machine();
+        let mut builder = machine.get_snapshot_builder().await;
+        builder.build_snapshot().await.unwrap();
+    }
+    let snapshot = snapshot_started.elapsed();
+    for index in halfway..commands {
+        group.propose(task_command(index)).await.unwrap();
+    }
+    let applied = started.elapsed();
+    assert_eq!(
+        group
+            .committed_events(&organization_id)
+            .await
+            .unwrap()
+            .len() as u64,
+        commands,
+        "{mode:?}: every command applied"
+    );
+    let applied_index = group
+        .raft()
+        .metrics()
+        .borrow()
+        .last_applied
+        .map_or(0, |log_id| log_id.index);
+    group.shutdown().await.unwrap();
+    drop(group);
+    let size = directory_size(&path);
+
+    let restart_started = std::time::Instant::now();
+    let mut group = boot(&path, mode).await;
+    let restart = restart_started.elapsed();
+    assert_eq!(
+        group
+            .committed_events(&organization_id)
+            .await
+            .unwrap()
+            .len() as u64,
+        commands,
+        "{mode:?}: the whole history came back"
+    );
+    assert!(
+        group
+            .raft()
+            .metrics()
+            .borrow()
+            .last_applied
+            .map_or(0, |log_id| log_id.index)
+            >= applied_index,
+        "{mode:?}: the applied index did not go backwards"
+    );
+    let outcome = group.propose(task_command(commands - 1)).await.unwrap();
+    assert!(
+        matches!(outcome, ProposeOutcome::Replayed { .. }),
+        "{mode:?}: the dedup window survived the soak"
+    );
+    group.shutdown().await.unwrap();
+
+    // Integer arithmetic: the rate is a report, and a float cast here would need an
+    // allow for precision loss in the middle of a test.
+    let nanos = applied.as_nanos();
+    let per_second = u64::try_from(
+        u128::from(commands)
+            .saturating_mul(1_000_000_000)
+            .checked_div(nanos)
+            .unwrap_or(0),
+    )
+    .unwrap_or(u64::MAX);
+    println!(
+        "soak {mode:?}: {commands} commands | apply {applied:?} (~{per_second}/s) |          snapshot {snapshot:?} | restart {restart:?} | {size} bytes on disk"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_history_soak_is_opt_in() {
+    let Some(commands) = soak_commands() else {
+        return;
+    };
+    for mode in soak_modes() {
+        soak(mode, commands).await;
+    }
 }

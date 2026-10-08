@@ -15,7 +15,10 @@ experiment that supports it, and is explicit about the gaps.
 | **Snapshot transfer** between replicas, and recovery from a purged prefix | `persistent_tests::snapshots_cross_tonic_and_unknown_groups_are_rejected`, `persistent_tests::snapshot_mode_recovers_log_only_and_snapshot_with_purged_prefix` |
 | **Storage failure injection** — a log flush callback that fails must stop Raft without acknowledging or applying | `crates/shell/src/raft/append_tests.rs` |
 | **Mode protection** — a database's persistence mode is pinned; mismatches and invalid markers fail startup | `persistent_tests::persistence_mode_is_fixed_across_restarts_in_both_directions`, `unmarked_nonempty_database_is_pinned_to_legacy_checkpoint_mode`, `invalid_persistence_marker_fails_closed` |
+| **Interrupted snapshot creation** — a build whose persist fails installs nothing, keeps the previous snapshot, and is retryable | `crates/shell/src/raft/interruption_tests.rs` — builds against a read-only database (a real `RocksDB` write rejection, not a mocked seam), then checks the installed snapshot and the stored bytes are unchanged, that recovery still works, and that the next build covers the newer log |
+| **Interrupted purge** — a rejected purge batch moves neither the covered entries nor the purge floor | same file: `purge` against a read-only database, then both invariants, then the positive control (a committed purge moves both, and the floor survives a reopen on its own) |
 | **Restart/failover** in the controlled benchmark harness | `mise run bench-consensus`, `mise run test-consensus-failures` |
+| **A long history** (up to 10,000 commands) with a mid-history snapshot, a restart and an intact dedup window | `crates/shell/src/raft/hardening_tests.rs` — the opt-in soak below |
 
 Run the whole set with:
 
@@ -23,22 +26,63 @@ Run the whole set with:
 mise run test
 ```
 
+The soak is opt-in, because it is minutes of work:
+
+```sh
+mise run soak                                  # 2,000 commands, both modes
+mise run soak-snapshot                         # 10,000 commands, snapshot mode
+LOOMERY_TEST_SOAK=1 LOOMERY_TEST_SOAK_COMMANDS=50000 mise run test
+```
+
+## The soak: what a long history costs
+
+Measured with the opt-in soak on one machine (2026-10-07, `rustc` 1.98.1, release
+of nothing — a `test` profile build), applying `task.create` commands to one
+single-node group:
+
+| Mode | Commands | Apply | Rate | Snapshot build | Restart | On disk |
+|---|---|---|---|---|---|---|
+| checkpoint | 200 | 1.23 s | ~162/s | 5.8 ms | 157 ms | 39.6 MB |
+| checkpoint | 1,000 | 28.9 s | ~34/s | 28.8 ms | 230 ms | 38.0 MB |
+| checkpoint | 2,000 | 115.8 s | ~17/s | 56.3 ms | 335 ms | 41.3 MB |
+| snapshot | 200 | 58 ms | ~3,434/s | 5.8 ms | 30 ms | 0.36 MB |
+| snapshot | 1,000 | 468 ms | ~2,134/s | 29.1 ms | 256 ms | 1.63 MB |
+| snapshot | 2,000 | 1.52 s | ~1,319/s | 55.9 ms | 803 ms | 3.23 MB |
+| snapshot | 10,000 | 18.1 s | ~553/s | 276 ms | 1.53 s | 43.7 MB |
+
+What the numbers say:
+
+- **Checkpoint mode is quadratic in the history.** Each apply serializes the whole
+  state, so throughput halves as the history doubles (162 → 34 → 17 per second at
+  200 → 1,000 → 2,000 commands). At 2,000 commands snapshot mode is ~78× faster
+  end to end.
+- **Snapshot mode degrades gently**: 3,434 → 2,134 → 1,319 → 553 per second over
+  200 → 10,000 commands. It is the mode that scales, and it is still the
+  experimental one.
+- **Recovery is cheap in both modes** and linear in the history: 30 ms at 200
+  commands to 1.53 s at 10,000, from a snapshot plus a log tail.
+- **The on-disk figures are file sizes, not live data**: `RocksDB` compacts in the
+  background, so a directory measured right after a run holds whatever levels
+  existed then. Checkpoint's footprint looks flat because every apply *overwrites*
+  the single state key; snapshot's grows with the history, as its snapshots do.
+
+The default stays checkpoint: it is the mode whose recovery does not depend on a
+snapshot being present, and its cost is acceptable at the history sizes the system
+serves today. Choosing snapshot mode by default needs a decision and a benchmark of
+its own.
+
 ## What is *not* verified
 
-- **Interrupted snapshot creation.** A snapshot build that is abandoned midway
-  (process kill during serialization/persist) is not injected. The suite covers
-  a *completed* build and install; the abandoned-build path relies on the
-  builder being idempotent and keyed by `last_applied_index`, which is the
-  documented contract (`docs/research/checkpoint-policy.md`) but not exercised
-  under injection.
-- **Interrupted purge.** OpenRaft drives `purge`; a crash exactly between the
-  covered-log deletion and the purge-floor write is not injected. The RocksDB
-  store performs both in one synchronous WAL batch, which is the mitigation.
-- **Very large histories.** 300 commands is a correctness probe, not a soak
-  test. Checkpoint cost grows with history size; see the measured tradeoffs in
-  [`checkpoint-spike.md`](checkpoint-spike.md) and the storage investigation in
-  [`../research/consensus-storage-performance.md`](../research/consensus-storage-performance.md).
-- **Capacity**, which is a separate probe:
+- **A crash inside the purge batch.** OpenRaft drives `purge`, and the store
+  performs the covered-log deletion and the purge-floor write in one synchronous
+  WAL batch, so there is no window between them to crash into — which is the
+  mitigation, not a gap. What *is* injected is a rejected batch, where neither
+  side may move; the atomicity claim itself rests on the single batch.
+- **A process kill mid-serialization.** The interruption tests inject a storage
+  write rejection. A `SIGKILL` during serialization would leave the same
+  observable state (nothing persisted, the previous snapshot intact) because the
+  persist is a single key write, but it is not exercised as a kill.
+- **Capacity under deployment load**, which is a separate probe:
   [`multigroup.md`](multigroup.md).
 
 ## Defaults

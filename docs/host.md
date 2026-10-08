@@ -201,7 +201,10 @@ Stated rather than hidden, each with the work that closes it:
   are matched by aggregate. Projections replace both.
 - **No observability stack.** Worker reports, reconciliation and startup go to
   stderr; tracing and OpenTelemetry are Phase 7.
-- **Snapshot-backed recovery is still experimental** (`group.storage.state_persistence`):
-  see [persistence hardening](benchmarks/persistence-hardening.md).
+- **Snapshot-backed recovery is still experimental** (`group.storage.state_persistence`).
+  It is also the mode that scales: checkpoint mode serializes the whole state on
+  every apply, so its cost is quadratic in the history (~17 commands/s at 2,000
+  commands, against ~1,319/s for snapshot). See
+  [persistence hardening](benchmarks/persistence-hardening.md).
 
 [`loomery_shell::host::Host`]: ../crates/shell/src/host.rs

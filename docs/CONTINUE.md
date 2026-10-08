@@ -113,12 +113,14 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
 0. Runtime follow-ups: multi-node control groups and placements (the runbook
    work), and a read model behind the (now scoped) reads — today they filter the
    applied log, which is `O(history)` per read.
-5. Extend persistence validation to large histories, interrupted snapshot
-   creation/installation/purge and storage failures before changing the default.
-   **Partly done:** a 300-command history survives restart in both modes, and a
-   co-resident multi-group capacity probe is recorded. The remaining gaps
-   (interrupted snapshot build/purge injection, large-history soak,
-   deployment-level capacity) are listed in
+5. ~~Extend persistence validation to large histories, interrupted snapshot
+   creation/installation/purge and storage failures before changing the default.~~
+   **Done:** a 300-command history survives restart in both modes; interrupted
+   snapshot builds and purges are injected through real storage rejections
+   (`raft/interruption_tests.rs`); and the opt-in soak measures a long history —
+   which shows checkpoint mode is quadratic in it (17/s at 2,000 commands, ~78×
+   slower than snapshot mode) and leaves snapshot mode the one that scales. The
+   default is unchanged; capacity remains a separate probe. See
    [benchmarks/persistence-hardening.md](benchmarks/persistence-hardening.md).
 
 D1 (OpenRaft/tonic) and D2 (RocksDB) are selected. FTS and vector-store decisions
