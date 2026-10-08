@@ -118,8 +118,10 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
    index beside the database). Steps 1 and 2 have landed: the families and the
    append-only `events` family behind a layout marker that fails closed, and the
    state deltas — an apply now writes only what it changed, which removed the
-   quadratic cost (17 → ~1,190 commands per second at 2,000 commands). Step 3 is
-   open: reads still answer from an in-memory copy of the record rather than from
+   quadratic cost. The path was then measured properly — in a release build, after
+   finding that the fold mirrored the whole dedup window on every command — and it
+   is flat at ~11–15k commands per second per group, linear to 8,000 commands. Step 3
+   is open: reads still answer from an in-memory copy of the record rather than from
    `events`, and neither the projections nor the search index exists yet. Each step's tests are named in [D13](design.md#d13--history-is-append-only-checkpoints-carry-state).
 5. ~~Extend persistence validation to large histories, interrupted snapshot
    creation/installation/purge and storage failures before changing the default.~~

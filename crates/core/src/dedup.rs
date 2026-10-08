@@ -80,6 +80,28 @@ impl Registry {
         self.entries.get(key)
     }
 
+    /// How many keys the window holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.window.len()
+    }
+
+    /// Whether the window holds nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.window.is_empty()
+    }
+
+    /// The key that eviction would remove next, if any.
+    ///
+    /// The window is FIFO, so this is the oldest recorded key — which is what a
+    /// caller needs to keep a durable mirror of the window without cloning the
+    /// whole thing on every insert.
+    #[must_use]
+    pub fn oldest(&self) -> Option<Key> {
+        self.window.front().cloned()
+    }
+
     /// Records `key`, evicting the oldest recorded key once the window is full.
     ///
     /// `fingerprint` is the recorded command's intent fingerprint
@@ -198,6 +220,30 @@ mod tests {
         assert!(reg.lookup(&key(97)).is_none()); // evicted long ago
         assert!(reg.lookup(&key(98)).is_some());
         assert!(reg.lookup(&key(100)).is_some());
+    }
+
+    #[test]
+    fn len_and_oldest_answer_without_reading_the_window() {
+        let mut reg = Registry::new(2);
+
+        assert!(reg.is_empty());
+        assert_eq!(reg.len(), 0);
+        assert!(reg.oldest().is_none());
+
+        reg.insert(key(1), fingerprint(1), 1);
+        reg.insert(key(2), fingerprint(2), 2);
+        assert_eq!(reg.len(), 2);
+        assert_eq!(reg.oldest(), Some(key(1)));
+
+        // Recording again is a no-op, and does not disturb what eviction would take.
+        reg.insert(key(1), fingerprint(1), 1);
+        assert_eq!(reg.len(), 2);
+        assert_eq!(reg.oldest(), Some(key(1)));
+
+        // A third insert evicts the oldest, and the next-oldest becomes the head.
+        reg.insert(key(3), fingerprint(3), 3);
+        assert_eq!(reg.len(), 2);
+        assert_eq!(reg.oldest(), Some(key(2)));
     }
 
     #[test]

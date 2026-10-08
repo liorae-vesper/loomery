@@ -150,8 +150,6 @@ struct GroupState {
     applied: Vec<AppliedEvent>,
     /// The dedup window (not serializable; see [`GroupState::dedup`]).
     registry: Registry,
-    /// The dedup window in insertion order, mirrored for snapshots.
-    dedup: Vec<(Key, Key, usize)>,
     /// Dedup entries this batch added, and keys it evicted. Cleared per apply.
     added_dedup: Vec<(Key, Key, usize)>,
     evicted_dedup: Vec<Key>,
@@ -319,7 +317,6 @@ impl Default for GroupState {
             streams: BTreeMap::new(),
             applied: Vec::new(),
             registry: Registry::new(DEDUP_WINDOW),
-            dedup: Vec::new(),
             added_dedup: Vec::new(),
             evicted_dedup: Vec::new(),
             members: Members::new(),
@@ -500,7 +497,6 @@ impl MemStateMachine {
                     .registry
                     .insert(key.clone(), fingerprint.clone(), *index);
             }
-            state.dedup = loaded.dedup;
         }
 
         if persistence == crate::config::StatePersistence::Checkpoint {
@@ -1090,15 +1086,16 @@ fn position_in(batch: &[AppliedEvent], applied: &AppliedEvent) -> u32 {
 fn record(group: &mut GroupState, key: Key, fingerprint: Key, log_index: u64) {
     let first_log_index = usize::try_from(log_index).unwrap_or(usize::MAX);
     // The window is bounded and FIFO, so the only entry an insert can evict is the
-    // one at the front — which is what keeps this O(1) instead of diffing the whole
-    // window on every command.
-    let full = group.dedup.len() >= DEDUP_WINDOW;
-    let oldest = group.dedup.first().map(|(key, _, _)| key.clone());
+    // one at the front. Asking the registry for it keeps this O(1): reading the
+    // whole window back here (which is what this used to do, to maintain a mirror)
+    // costs the window's size on *every* command, and while the window is filling
+    // that cost grows with the history — quadratic, in both persistence modes.
+    let full = group.registry.len() >= DEDUP_WINDOW;
+    let oldest = group.registry.oldest();
     let known = group.registry.lookup(&key).is_some();
     group
         .registry
         .insert(key.clone(), fingerprint.clone(), first_log_index);
-    group.dedup = group.registry.window_entries();
     if !known {
         group.added_dedup.push((key, fingerprint, first_log_index));
         if let Some(evicted) = full.then_some(oldest).flatten() {
@@ -1139,7 +1136,7 @@ impl RaftSnapshotBuilder<TypeConfig> for Arc<MemStateMachine> {
             last_membership: group.last_membership.clone(),
             streams: group.streams.clone(),
             applied: group.applied.clone(),
-            dedup: group.dedup.clone(),
+            dedup: group.registry.window_entries(),
         };
         let last_applied_log = data.last_applied_log;
         let last_membership = data.last_membership.clone();
@@ -1350,7 +1347,6 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
             registry.insert(key.clone(), fingerprint.clone(), *index);
         }
         group.registry = registry;
-        group.dedup = data.dedup;
         group.rebuild_members();
         if let Some(last_applied) = meta.last_log_id {
             self.applied.send_replace(last_applied.index);
@@ -1399,7 +1395,7 @@ mod tests {
     /// The next index for a test entry — derived from what has been applied.
     async fn command_index(machine: &Arc<MemStateMachine>) -> u64 {
         let group = machine.state.read().await;
-        group.dedup.len() as u64
+        u64::try_from(group.registry.len()).unwrap_or(u64::MAX)
     }
 
     #[tokio::test]

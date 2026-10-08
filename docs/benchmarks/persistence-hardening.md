@@ -20,6 +20,7 @@ experiment that supports it, and is explicit about the gaps.
 | **Restart/failover** in the controlled benchmark harness | `mise run bench-consensus`, `mise run test-consensus-failures` |
 | **A long history** (up to 10,000 commands) with a mid-history snapshot, a restart and an intact dedup window | `crates/shell/src/raft/hardening_tests.rs` — the opt-in soak below |
 | **State-only recovery** — the fold and the dedup window answer with the Raft log purged away entirely | `hardening_tests::checkpoint_state_answers_without_its_log` |
+| The **dedup window** answers "how big" and "who is next" without reading itself back | `loomery_core::dedup` — `len_and_oldest_answer_without_reading_the_window` |
 
 Run the whole set with:
 
@@ -27,10 +28,12 @@ Run the whole set with:
 mise run test
 ```
 
-The soak is opt-in, because it is minutes of work:
+The soak is opt-in, and runs a release build (see above) because it is a
+performance probe:
 
 ```sh
 mise run soak                                  # 2,000 commands, both modes
+mise run soak-checkpoint                       # 8,000 commands, checkpoint mode
 mise run soak-snapshot                         # 10,000 commands, snapshot mode
 LOOMERY_TEST_SOAK=1 LOOMERY_TEST_SOAK_COMMANDS=50000 mise run test
 ```
@@ -100,6 +103,52 @@ What this says:
   account for them: an unexplained 25× in file size is exactly the kind of thing
   that should not be inherited by the next step.
 
+## Why the soak read slow, and what it actually costs
+
+The first version of the numbers below was measured in an **unoptimised test
+build** and with a cost I had not looked for. Both are corrected here, because the
+difference matters: it is the difference between "the storage is a bottleneck" and
+"the storage is not".
+
+**1. The soak measured a debug build.** `cargo test` compiles without
+optimisation, and a durable write path spends its time in code the optimiser
+matters for. The same 2,000-command soak:
+
+| Build | Checkpoint | Snapshot |
+|---|---|---|
+| `cargo test` (debug) | ~2,760/s | — |
+| `cargo test --release` | **~13,134/s** | **~15,258/s** |
+
+`mise run soak` and its variants therefore run `--release`: a performance probe in
+an unoptimised build measures the compiler.
+
+**2. The apply path cloned the whole dedup window on every command.** The window is
+FIFO and bounded (4,096 entries), and the state machine used to mirror it after
+every insert by asking the registry for *all* of its entries — 4,096 tuples per
+command once the window was full, and a window that *grows* with the history while
+it fills, which made the cost grow with the history too. It is the same fold code
+in both persistence modes, which is exactly why the slope was identical in both:
+the problem was never the storage engine. `Registry::len()`/`Registry::oldest()`
+answer the two questions the mirror actually needed, and the mirror is gone.
+
+With that fixed, the curve is **flat** — the per-command cost no longer depends on
+the history at all:
+
+| Commands | Checkpoint (release) | Snapshot (release) | Restart | On disk |
+|---|---|---|---|---|
+| 2,000 | ~13,134/s (152 ms) | ~15,258/s (131 ms) | 35 ms | 5.0 MB |
+| 8,000 | ~11,381/s (703 ms) | — | 128 ms | 29.7 MB |
+
+**What this does and does not say.** It says the persistence path is not the
+bottleneck: ~11–15k commands per second per group, linear to 8,000 commands, with a
+synchronous WAL write for every append and every apply. It does **not** say what a
+deployment does — these are single-node, in-process measurements with no network
+between replicas and no fsync pressure from a shared disk; the controlled
+multi-process harness ([consensus benchmarks](README.md)) is where end-to-end
+numbers with batching and tonics belong. It also does not say a relational database
+would be slower or faster: it says the storage layer is not what was limiting this,
+and that the two things that were limiting it are now named.
+
 ## After step 2: the deltas
 
 Step 2 ([storage-layout.md](../storage-layout.md)) makes an apply persist **only
@@ -126,13 +175,11 @@ The curve for checkpoint mode after the change, and the same shape in snapshot m
 | 2,000 | 1.68 s | ~1,190/s | 200 ms | 5.03 MB | ~1,255/s |
 | 4,000 | 4.85 s | ~824/s | 387 ms | 9.99 MB | ~849/s |
 
-**What is no longer the bottleneck, and what still is.** The mode-dependent part is
-gone: checkpoint and snapshot now measure the same (824/s and 849/s at 4,000
-commands), so whatever slope remains is *not* in persistence. The rate still falls as
-the history grows, identically in both modes — it is in the write path above storage
-(proposal, consensus bookkeeping or the in-memory history), and it is **open**:
-finding it is a Phase-7 performance question, not a persistence one. Step 2 changed
-what storage costs; this note does not claim it made the whole command path linear.
+**That table was measured in a debug build, before the dedup-window cost was
+found.** Both are corrected above: the slope was the per-command mirror of the dedup
+window (a fold cost, shared by both modes), and the absolute numbers were a debug
+build. Read the section above for what the path actually costs; the table here is
+kept as the before-and-after of step 2 alone, in the same build.
 
 ## What is *not* verified
 

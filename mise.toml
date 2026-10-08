@@ -68,13 +68,20 @@ run = "sh tools/mermaid-check/check.sh docs README.md"
 description = "Renders the docs' Mermaid diagrams to tools/mermaid-check/out for review"
 run = "sh tools/mermaid-check/check.sh --render docs"
 
+# The soak is a *performance* probe, so it runs a release build: an unoptimised
+# test build measures the compiler, not the storage (it is ~5x slower per command,
+# which reads as a bottleneck that is not there).
 [tasks.soak]
-description = "Soaks the persistence path with 2,000 commands in both modes"
-run = "LOOMERY_TEST_SOAK=1 LOOMERY_TEST_SOAK_COMMANDS=2000 cargo test -p loomery-shell --lib a_long_history_soak -- --nocapture"
+description = "Soaks the persistence path with 2,000 commands in both modes (release)"
+run = "LOOMERY_TEST_SOAK=1 LOOMERY_TEST_SOAK_COMMANDS=2000 cargo test --release -p loomery-shell --lib a_long_history_soak -- --nocapture"
+
+[tasks.soak-checkpoint]
+description = "Soaks checkpoint-mode persistence with 8,000 commands (release)"
+run = "LOOMERY_TEST_SOAK=1 LOOMERY_TEST_SOAK_MODE=checkpoint LOOMERY_TEST_SOAK_COMMANDS=8000 cargo test --release -p loomery-shell --lib a_long_history_soak -- --nocapture"
 
 [tasks.soak-snapshot]
-description = "Soaks snapshot-mode persistence with 10,000 commands"
-run = "LOOMERY_TEST_SOAK=1 LOOMERY_TEST_SOAK_MODE=snapshot LOOMERY_TEST_SOAK_COMMANDS=10000 cargo test -p loomery-shell --lib a_long_history_soak -- --nocapture"
+description = "Soaks snapshot-mode persistence with 10,000 commands (release)"
+run = "LOOMERY_TEST_SOAK=1 LOOMERY_TEST_SOAK_MODE=snapshot LOOMERY_TEST_SOAK_COMMANDS=10000 cargo test --release -p loomery-shell --lib a_long_history_soak -- --nocapture"
 
 [tasks.bench-consensus]
 description = "Runs the controlled multi-process tonic/RocksDB benchmark in release mode"
