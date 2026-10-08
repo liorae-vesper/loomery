@@ -26,9 +26,4 @@ service Transport {
   // assembled snapshot once and answers with the Result of
   // `Raft::install_full_snapshot`.
   rpc InstallSnapshot(stream SnapshotChunk) returns (Envelope);
-  // Bidirectional: the leader streams AppendEntries requests and the follower
-  // streams their results back. One HTTP/2 stream preserves order in both
-  // directions, so responses need no sequence numbers and none of the framing
-  // `SnapshotChunk` needs.
-  rpc StreamAppend(stream Envelope) returns (stream Envelope);
 }
