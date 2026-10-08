@@ -152,6 +152,9 @@ struct GroupState {
     registry: Registry,
     /// The dedup window in insertion order, mirrored for snapshots.
     dedup: Vec<(Key, Key, usize)>,
+    /// Dedup entries this batch added, and keys it evicted. Cleared per apply.
+    added_dedup: Vec<(Key, Key, usize)>,
+    evicted_dedup: Vec<Key>,
     /// Who belongs to which organization, and with which workspace roles.
     ///
     /// Derived from the applied log — never serialized, rebuilt from it after a
@@ -204,6 +207,12 @@ impl GroupState {
         }
         self.members = members;
     }
+
+    /// Forgets what the last batch touched, so the next one's deltas stand alone.
+    fn begin_batch(&mut self) {
+        self.added_dedup.clear();
+        self.evicted_dedup.clear();
+    }
 }
 
 /// Folds one event into the membership index.
@@ -216,62 +225,73 @@ fn note_membership(members: &mut Members, event: &Event) {
 
     match event.event_type.as_str() {
         membership::MEMBER_ASSIGNED => {
-            if let Ok(assigned) =
+            let Ok(assigned) =
                 serde_json::from_str::<membership::MemberAssigned>(&event.payload.data)
-            {
-                update(members, &organization_id, &assigned.user_id, |record| {
-                    record.assigned = true;
-                });
-            }
+            else {
+                return;
+            };
+            update(members, &organization_id, &assigned.user_id, |record| {
+                record.assigned = true;
+            });
         }
         membership::ORG_MEMBER_REMOVED => {
-            if let Ok(removed) =
+            let Ok(removed) =
                 serde_json::from_str::<membership::OrgMemberRemoved>(&event.payload.data)
-            {
-                update(members, &organization_id, &removed.user_id, |record| {
-                    record.assigned = false;
-                });
-            }
+            else {
+                return;
+            };
+            update(members, &organization_id, &removed.user_id, |record| {
+                record.assigned = false;
+            });
         }
         membership::OWNER_ADDED => {
-            if let (Some(workspace_id), Ok(added)) = (
-                workspace_id,
-                serde_json::from_str::<membership::OwnerAdded>(&event.payload.data),
-            ) {
-                update(members, &organization_id, &added.user_id, |record| {
-                    record.roles.insert(workspace_id, Role::Owner);
-                });
-            }
+            let Ok(added) = serde_json::from_str::<membership::OwnerAdded>(&event.payload.data)
+            else {
+                return;
+            };
+            let Some(workspace_id) = workspace_id else {
+                return;
+            };
+            update(members, &organization_id, &added.user_id, |record| {
+                record.roles.insert(workspace_id, Role::Owner);
+            });
         }
         membership::MEMBER_ADDED => {
-            if let (Some(workspace_id), Ok(added)) = (
-                workspace_id,
-                serde_json::from_str::<membership::MemberAdded>(&event.payload.data),
-            ) {
-                update(members, &organization_id, &added.user_id, |record| {
-                    record.roles.insert(workspace_id, added.role);
-                });
-            }
+            let Ok(added) = serde_json::from_str::<membership::MemberAdded>(&event.payload.data)
+            else {
+                return;
+            };
+            let Some(workspace_id) = workspace_id else {
+                return;
+            };
+            update(members, &organization_id, &added.user_id, |record| {
+                record.roles.insert(workspace_id, added.role);
+            });
         }
         membership::ROLE_CHANGED => {
-            if let (Some(workspace_id), Ok(changed)) = (
-                workspace_id,
-                serde_json::from_str::<membership::RoleChanged>(&event.payload.data),
-            ) {
-                update(members, &organization_id, &changed.user_id, |record| {
-                    record.roles.insert(workspace_id, changed.role);
-                });
-            }
+            let Ok(changed) = serde_json::from_str::<membership::RoleChanged>(&event.payload.data)
+            else {
+                return;
+            };
+            let Some(workspace_id) = workspace_id else {
+                return;
+            };
+            update(members, &organization_id, &changed.user_id, |record| {
+                record.roles.insert(workspace_id, changed.role);
+            });
         }
         membership::MEMBER_REMOVED => {
-            if let (Some(workspace_id), Ok(removed)) = (
-                workspace_id,
-                serde_json::from_str::<membership::MemberRemoved>(&event.payload.data),
-            ) {
-                update(members, &organization_id, &removed.user_id, |record| {
-                    record.roles.remove(&workspace_id);
-                });
-            }
+            let Ok(removed) =
+                serde_json::from_str::<membership::MemberRemoved>(&event.payload.data)
+            else {
+                return;
+            };
+            let Some(workspace_id) = workspace_id else {
+                return;
+            };
+            update(members, &organization_id, &removed.user_id, |record| {
+                record.roles.remove(&workspace_id);
+            });
         }
         _ => {}
     }
@@ -300,6 +320,8 @@ impl Default for GroupState {
             applied: Vec::new(),
             registry: Registry::new(DEDUP_WINDOW),
             dedup: Vec::new(),
+            added_dedup: Vec::new(),
+            evicted_dedup: Vec::new(),
             members: Members::new(),
         }
     }
@@ -370,6 +392,60 @@ struct StoredSnapshot {
     data: Vec<u8>,
 }
 
+/// The state a checkpoint-mode database holds, read back key by key.
+struct LoadedState {
+    streams: BTreeMap<Id, AggregateState>,
+    applied_log: Option<LogId<u64>>,
+    membership: Option<StoredMembership<u64, BasicNode>>,
+    /// The dedup window, ordered by the log index each entry was recorded at.
+    dedup: Vec<(Key, Key, usize)>,
+}
+
+/// Reads the per-aggregate state a checkpoint-mode apply wrote.
+fn load_state(db: &rocksdb::DB) -> anyhow::Result<LoadedState> {
+    let family = Family::State.handle(db)?;
+    let mut loaded = LoadedState {
+        streams: BTreeMap::new(),
+        applied_log: None,
+        membership: None,
+        dedup: Vec::new(),
+    };
+    for item in db.iterator_cf(family, rocksdb::IteratorMode::Start) {
+        let (key, value) = item?;
+        if key.starts_with(b"agg:") {
+            let (aggregate_id, state): (Id, AggregateState) = serde_json::from_slice(&value)?;
+            loaded.streams.insert(aggregate_id, state);
+        } else if key.as_ref() == APPLIED_LOG_KEY {
+            loaded.applied_log = serde_json::from_slice(&value)?;
+        } else if key.as_ref() == MEMBERSHIP_KEY {
+            loaded.membership = Some(serde_json::from_slice(&value)?);
+        } else if key.starts_with(b"dedup:") {
+            loaded.dedup.push(serde_json::from_slice(&value)?);
+        }
+    }
+    // The window is FIFO and bounded, and an entry's log index is its position in
+    // it: the order an apply recorded them in is the order they are evicted in.
+    loaded.dedup.sort_by_key(|(_, _, index)| *index);
+    Ok(loaded)
+}
+
+/// Reads the append-only record back as the applied history, in log order.
+fn load_record(db: &rocksdb::DB) -> anyhow::Result<Vec<AppliedEvent>> {
+    let family = Family::Events.handle(db)?;
+    let mut applied = Vec::new();
+    for item in db.iterator_cf(family, rocksdb::IteratorMode::Start) {
+        let (key, value) = item?;
+        let Some(index) = key.strip_prefix(b"e").and_then(|key| key.get(..16)) else {
+            break;
+        };
+        applied.push(AppliedEvent {
+            log_index: u64::from_str_radix(std::str::from_utf8(index)?, 16)?,
+            event: serde_json::from_slice(&value)?,
+        });
+    }
+    Ok(applied)
+}
+
 impl MemStateMachine {
     pub(crate) async fn open(
         disk: super::disk::Disk,
@@ -394,22 +470,58 @@ impl MemStateMachine {
             .await?;
         }
         let mut machine = Arc::new(Self::default());
-        let recovery_key: &'static [u8] = match persistence {
-            crate::config::StatePersistence::Checkpoint => b"state",
-            crate::config::StatePersistence::Snapshot => b"snapshot",
-        };
-        if let Some(bytes) = disk.get(Family::State, recovery_key).await? {
-            let stored: StoredSnapshot = serde_json::from_slice(&bytes)?;
-            machine
-                .clone()
-                .install_snapshot(&stored.meta, Box::new(Cursor::new(stored.data)))
-                .await?;
-        }
-        *machine.current_snapshot.write().await = disk
+        let snapshot = disk
             .get(Family::State, b"snapshot")
             .await?
-            .map(|bytes| serde_json::from_slice(&bytes))
+            .map(|bytes| serde_json::from_slice::<StoredSnapshot>(&bytes))
             .transpose()?;
+
+        if persistence == crate::config::StatePersistence::Snapshot {
+            // The snapshot is this mode's state: it carries the fold, the dedup
+            // window and the events up to its index, and the log tail after it is
+            // replayed by Raft once this returns.
+            if let Some(stored) = &snapshot {
+                machine
+                    .clone()
+                    .install_snapshot(&stored.meta, Box::new(Cursor::new(stored.data.clone())))
+                    .await?;
+            }
+        } else {
+            // Every aggregate the state holds, keyed as the applies wrote them. No
+            // whole-state record exists to read: an apply persists only its deltas.
+            let loaded = disk.run(load_state).await?;
+            let mut state = machine.state.write().await;
+            state.streams = loaded.streams;
+            state.last_applied_log = loaded.applied_log;
+            state.last_membership = loaded.membership.unwrap_or_default();
+            state.registry = Registry::new(DEDUP_WINDOW);
+            for (key, fingerprint, index) in &loaded.dedup {
+                state
+                    .registry
+                    .insert(key.clone(), fingerprint.clone(), *index);
+            }
+            state.dedup = loaded.dedup;
+        }
+
+        if persistence == crate::config::StatePersistence::Checkpoint {
+            // Checkpoint mode has no record of *state*: the fold is the per-aggregate
+            // keys read above, and the history is the append-only record. Loading the
+            // record here is what lets reads answer from it — and Raft replays only
+            // the entries after `meta:applied`, so nothing is counted twice.
+            //
+            // Snapshot mode is different: its fold comes from a snapshot that can
+            // lag the record, and Raft advances that fold by replaying the log tail,
+            // appending the events it produces. Pre-loading the record there would
+            // double-count exactly those events, so this mode restores the
+            // snapshot's own history and lets the replay extend it.
+            let recorded = disk.run(load_record).await?;
+            let mut state = machine.state.write().await;
+            if !recorded.is_empty() {
+                state.applied = recorded;
+                state.rebuild_members();
+            }
+        }
+        *machine.current_snapshot.write().await = snapshot;
         let recovered = Arc::get_mut(&mut machine)
             .ok_or_else(|| anyhow::anyhow!("state machine unexpectedly shared during recovery"))?;
         recovered.disk = Some(disk);
@@ -418,66 +530,93 @@ impl MemStateMachine {
     }
     /// Writes what this apply must make durable, as one synchronous batch.
     ///
-    /// The record is written in *both* persistence modes: it is the history, not
-    /// the state, and `OpenRaft` may purge the entries that carried these events as
-    /// soon as a snapshot covers them. In checkpoint mode the same batch also
-    /// carries the fold, so a crash cannot separate the state from the events that
-    /// produced it (D2). `recorded_from` is where this batch's events start in the
-    /// in-memory history.
+    /// The record is written in *both* persistence modes: it is the history, not the
+    /// state, and `OpenRaft` may purge the entries that carried these events as soon
+    /// as a snapshot covers them.
+    ///
+    /// In checkpoint mode the same batch carries **only what this batch changed** —
+    /// the aggregate states it touched, the dedup entries it added and evicted, and
+    /// the applied index — instead of the whole state. That is what makes an apply
+    /// cost the size of the batch rather than the size of the history (D13 step 2).
+    /// Snapshot mode persists no state per apply: recovery replays the log into the
+    /// state a snapshot carried.
     #[allow(clippy::result_large_err)] // OpenRaft fixes the storage error type.
-    async fn write_applied(&self, recorded_from: usize) -> Result<(), StorageError<u64>> {
+    async fn write_applied(&self, batch: Vec<AppliedEvent>) -> Result<(), StorageError<u64>> {
         let Some(disk) = &self.disk else {
             return Ok(());
         };
-        let events = {
+        let checkpoint = self.persistence == crate::config::StatePersistence::Checkpoint;
+
+        let mut events = Vec::with_capacity(batch.len());
+        for applied in &batch {
+            events.push((
+                event_key(applied.log_index, position_in(&batch, applied)),
+                serde_json::to_vec(&applied.event)
+                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+            ));
+        }
+
+        let delta = if checkpoint {
             let group = self.state.read().await;
-            let mut events = Vec::new();
-            let mut last_index = None;
-            let mut position = 0u32;
-            for applied in group.applied.get(recorded_from..).unwrap_or_default() {
-                // `pos` is the event's ordinal within its log entry, which is what
-                // distinguishes the several events of one batched entry.
-                position = if last_index == Some(applied.log_index) {
-                    position.saturating_add(1)
-                } else {
-                    0
-                };
-                last_index = Some(applied.log_index);
-                events.push((
-                    event_key(applied.log_index, position),
-                    serde_json::to_vec(&applied.event)
+            // Only the aggregates this batch's events *are about*: a stream changes
+            // only by an event, so the events name exactly what to write.
+            let mut touched = std::collections::BTreeSet::new();
+            for applied in &batch {
+                touched.insert(applied.event.aggregate_id.clone());
+            }
+            let mut writes = Vec::with_capacity(touched.len().saturating_add(4));
+            for aggregate_id in touched {
+                if let Some(state) = group.streams.get(&aggregate_id) {
+                    // The id travels in the value, not in the key: deriving an id
+                    // back out of a key would mean parsing it, and ids are not all
+                    // canonical UUIDs (a test, or an imported aggregate, can carry
+                    // any string). The key is only there to place it in the family.
+                    writes.push((
+                        aggregate_key(&aggregate_id),
+                        serde_json::to_vec(&(&aggregate_id, state))
+                            .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                    ));
+                }
+            }
+            writes.push((
+                APPLIED_LOG_KEY.to_vec(),
+                serde_json::to_vec(&group.last_applied_log)
+                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+            ));
+            writes.push((
+                MEMBERSHIP_KEY.to_vec(),
+                serde_json::to_vec(&group.last_membership)
+                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+            ));
+            for (key, fingerprint, first_log_index) in &group.added_dedup {
+                // The same triple the window reports, so a reader can rebuild it
+                // (key, fingerprint, first log index) without parsing the key back.
+                writes.push((
+                    dedup_key(key),
+                    serde_json::to_vec(&(key.clone(), fingerprint.clone(), *first_log_index))
                         .map_err(|e| StorageIOError::write_state_machine(&e))?,
                 ));
             }
-            events
-        };
-        let checkpoint = if self.persistence == crate::config::StatePersistence::Checkpoint {
-            let group = self.state.read().await;
-            let data = SnapshotData {
-                version: snapshot_version(),
-                last_applied_log: group.last_applied_log,
-                last_membership: group.last_membership.clone(),
-                streams: group.streams.clone(),
-                applied: group.applied.clone(),
-                dedup: group.dedup.clone(),
-            };
-            let stored = StoredSnapshot {
-                meta: SnapshotMeta {
-                    last_log_id: data.last_applied_log,
-                    last_membership: data.last_membership.clone(),
-                    snapshot_id: "checkpoint".into(),
-                },
-                data: serde_json::to_vec(&data)
-                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
-            };
-            Some(serde_json::to_vec(&stored).map_err(|e| StorageIOError::write_state_machine(&e))?)
+            let deletes = group
+                .evicted_dedup
+                .iter()
+                .map(dedup_key)
+                .collect::<Vec<_>>();
+            Some((writes, deletes))
         } else {
             None
         };
+
         disk.run(move |db| {
             let mut batch = WriteBatch::default();
-            if let Some(bytes) = checkpoint {
-                batch.put_cf(Family::State.handle(db)?, b"state", bytes);
+            if let Some((writes, deletes)) = delta {
+                let family = Family::State.handle(db)?;
+                for (key, value) in writes {
+                    batch.put_cf(family, key, value);
+                }
+                for key in deletes {
+                    batch.delete_cf(family, key);
+                }
             }
             if !events.is_empty() {
                 let family = Family::Events.handle(db)?;
@@ -912,6 +1051,22 @@ fn recorded_fingerprint(group: &GroupState, key: &Key, fallback: Key) -> Key {
         .map_or(fallback, |entry| entry.fingerprint().clone())
 }
 
+/// The keys one apply writes besides the aggregates.
+///
+/// The aggregate states are keyed per aggregate — `agg:{aggregate_id}` — which is
+/// what makes an apply write only what it changed instead of the whole state
+/// (D13 step 2). The tenant is the database, so nothing here names the tenant.
+const APPLIED_LOG_KEY: &[u8] = b"meta:applied";
+const MEMBERSHIP_KEY: &[u8] = b"meta:membership";
+
+fn aggregate_key(aggregate_id: &Id) -> Vec<u8> {
+    format!("agg:{aggregate_id}").into_bytes()
+}
+
+fn dedup_key(causation_key: &Key) -> Vec<u8> {
+    format!("dedup:{causation_key}").into_bytes()
+}
+
 /// The key an event occupies in the append-only record: `e{log_index}:{position}`.
 ///
 /// Big-endian, so a range scan over the family is history in log order, and
@@ -920,14 +1075,36 @@ fn event_key(log_index: u64, position: u32) -> Vec<u8> {
     format!("e{log_index:016x}:{position:02x}").into_bytes()
 }
 
+/// Where one event sits among the events of its own log entry.
+///
+/// A batched entry produces several events, and the key has to tell them apart.
+fn position_in(batch: &[AppliedEvent], applied: &AppliedEvent) -> u32 {
+    batch
+        .iter()
+        .filter(|other| other.log_index == applied.log_index)
+        .position(|other| std::ptr::eq(other, applied))
+        .map_or(0, |position| u32::try_from(position).unwrap_or(u32::MAX))
+}
+
 /// Records a committed command in the dedup window and mirrors it for snapshots.
 fn record(group: &mut GroupState, key: Key, fingerprint: Key, log_index: u64) {
-    group.registry.insert(
-        key,
-        fingerprint,
-        usize::try_from(log_index).unwrap_or(usize::MAX),
-    );
+    let first_log_index = usize::try_from(log_index).unwrap_or(usize::MAX);
+    // The window is bounded and FIFO, so the only entry an insert can evict is the
+    // one at the front — which is what keeps this O(1) instead of diffing the whole
+    // window on every command.
+    let full = group.dedup.len() >= DEDUP_WINDOW;
+    let oldest = group.dedup.first().map(|(key, _, _)| key.clone());
+    let known = group.registry.lookup(&key).is_some();
+    group
+        .registry
+        .insert(key.clone(), fingerprint.clone(), first_log_index);
     group.dedup = group.registry.window_entries();
+    if !known {
+        group.added_dedup.push((key, fingerprint, first_log_index));
+        if let Some(evicted) = full.then_some(oldest).flatten() {
+            group.evicted_dedup.push(evicted);
+        }
+    }
 }
 
 /// A rejection carrying an aggregate's code enum.
@@ -1022,6 +1199,7 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
         // Everything appended to the in-memory history while applying this batch is
         // this batch's share of the record.
         let recorded_from = group.applied.len();
+        group.begin_batch();
 
         for entry in entries {
             let log_index = entry.log_id.index;
@@ -1056,8 +1234,13 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
         if let Some(last_applied) = group.last_applied_log {
             self.applied.send_replace(last_applied.index);
         }
+        let batch = group
+            .applied
+            .get(recorded_from..)
+            .unwrap_or_default()
+            .to_vec();
         drop(group);
-        self.write_applied(recorded_from).await?;
+        self.write_applied(batch).await?;
         Ok(responses)
     }
 
@@ -1095,11 +1278,56 @@ impl RaftStateMachine<TypeConfig> for Arc<MemStateMachine> {
         if let Some(disk) = &self.disk {
             let bytes =
                 serde_json::to_vec(&stored).map_err(|e| StorageIOError::write_state_machine(&e))?;
+            // The received snapshot is written the way an apply writes: one key per
+            // aggregate, plus the markers the dedup window. Its events go into the
+            // record too — a replica that installs a snapshot never applies the
+            // entries it covered, so the snapshot is the only copy of them it sees.
+            let mut writes = Vec::new();
+            for (aggregate_id, state) in &data.streams {
+                writes.push((
+                    aggregate_key(aggregate_id),
+                    serde_json::to_vec(&(aggregate_id, state))
+                        .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                ));
+            }
+            writes.push((
+                APPLIED_LOG_KEY.to_vec(),
+                serde_json::to_vec(&data.last_applied_log)
+                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+            ));
+            writes.push((
+                MEMBERSHIP_KEY.to_vec(),
+                serde_json::to_vec(&data.last_membership)
+                    .map_err(|e| StorageIOError::write_state_machine(&e))?,
+            ));
+            for (key, fingerprint, index) in &data.dedup {
+                writes.push((
+                    dedup_key(key),
+                    serde_json::to_vec(&(key.clone(), fingerprint.clone(), *index))
+                        .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                ));
+            }
+            let mut events = Vec::with_capacity(data.applied.len());
+            for applied in &data.applied {
+                events.push((
+                    event_key(applied.log_index, position_in(&data.applied, applied)),
+                    serde_json::to_vec(&applied.event)
+                        .map_err(|e| StorageIOError::write_state_machine(&e))?,
+                ));
+            }
             disk.run(move |db| {
-                let family = Family::State.handle(db)?;
                 let mut batch = WriteBatch::default();
-                batch.put_cf(family, b"state", &bytes);
+                let family = Family::State.handle(db)?;
+                for (key, value) in writes {
+                    batch.put_cf(family, key, value);
+                }
                 batch.put_cf(family, b"snapshot", &bytes);
+                if !events.is_empty() {
+                    let family = Family::Events.handle(db)?;
+                    for (key, value) in events {
+                        batch.put_cf(family, key, value);
+                    }
+                }
                 let mut options = WriteOptions::default();
                 options.set_sync(true);
                 db.write_opt(batch, &options)?;

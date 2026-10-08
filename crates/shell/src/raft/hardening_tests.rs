@@ -431,6 +431,72 @@ async fn read_record(disk: &super::disk::Disk) -> Vec<loomery_core::envelope::Ev
     .unwrap()
 }
 
+/// The fold is recovered from its own per-aggregate state, not by replaying the log.
+///
+/// The proof is a database whose log is *gone*: a snapshot covers it, so `OpenRaft`
+/// can purge every entry away. Reopening then finds the record still answering
+/// history, and the dedup window — which lives in the state, not in the log — still
+/// turning a re-proposed command into a replay. Nothing else could have supplied
+/// either: there is no log left to replay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_state_answers_without_its_log() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().to_path_buf();
+    let commands = 5u64;
+    let mut group = boot(&path, StatePersistence::Checkpoint).await;
+    for index in 0..commands {
+        group.propose(task_command(index)).await.unwrap();
+    }
+    {
+        let machine = group.state_machine();
+        let mut builder = machine.clone();
+        builder.build_snapshot().await.unwrap();
+    }
+    group.shutdown().await.unwrap();
+    drop(group);
+
+    // Purge every entry the snapshot covers: the log is now empty.
+    let mut log = RocksLogStore::open(
+        super::test_disk::open(&path, &crate::config::StorageConfig::default())
+            .await
+            .unwrap(),
+    );
+    let last = log
+        .get_log_state()
+        .await
+        .unwrap()
+        .last_log_id
+        .expect("the log has entries");
+    log.purge(last).await.unwrap();
+    drop(log);
+    assert!(
+        log_entries(&path).await.is_empty(),
+        "the purge emptied the Raft log"
+    );
+
+    let mut group = boot(&path, StatePersistence::Checkpoint).await;
+    assert_eq!(
+        group
+            .committed_events(&Id::from(ORGANIZATION))
+            .await
+            .unwrap()
+            .len(),
+        usize::try_from(commands).unwrap(),
+        "the record answers history with the log gone"
+    );
+    let outcome = group.propose(task_command(commands - 1)).await.unwrap();
+    assert!(
+        matches!(outcome, ProposeOutcome::Replayed { .. }),
+        "the dedup window came from the state, not from a log that no longer exists"
+    );
+    assert_eq!(
+        group.state_machine().event_record().await.unwrap().len(),
+        usize::try_from(commands).unwrap(),
+        "a replay adds nothing to the record"
+    );
+    group.shutdown().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_long_history_soak_is_opt_in() {
     let Some(commands) = soak_commands() else {

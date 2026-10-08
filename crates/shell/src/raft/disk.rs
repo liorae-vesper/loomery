@@ -21,7 +21,7 @@ use std::{path::Path, sync::Arc};
 ///
 /// Bump it whenever the family set or a family's key shape changes; every opener
 /// refuses a database that carries a different one.
-pub(crate) const FORMAT: u32 = 1;
+pub(crate) const FORMAT: u32 = 2;
 
 /// The key the layout version is stored under, in [`Family::Default`].
 const FORMAT_KEY: &[u8] = b"format";

@@ -19,6 +19,7 @@ experiment that supports it, and is explicit about the gaps.
 | **Interrupted purge** — a rejected purge batch moves neither the covered entries nor the purge floor | same file: `purge` against a read-only database, then both invariants, then the positive control (a committed purge moves both, and the floor survives a reopen on its own) |
 | **Restart/failover** in the controlled benchmark harness | `mise run bench-consensus`, `mise run test-consensus-failures` |
 | **A long history** (up to 10,000 commands) with a mid-history snapshot, a restart and an intact dedup window | `crates/shell/src/raft/hardening_tests.rs` — the opt-in soak below |
+| **State-only recovery** — the fold and the dedup window answer with the Raft log purged away entirely | `hardening_tests::checkpoint_state_answers_without_its_log` |
 
 Run the whole set with:
 
@@ -98,6 +99,40 @@ What this says:
   [D2](../design.md#d2--storage-engine) requires before a contract change) have to
   account for them: an unexplained 25× in file size is exactly the kind of thing
   that should not be inherited by the next step.
+
+## After step 2: the deltas
+
+Step 2 ([storage-layout.md](../storage-layout.md)) makes an apply persist **only
+what it changed** — the aggregate states its events touch, the dedup entries the
+window added or evicted, and the applied index — in the same synchronous batch as
+its events, and makes recovery read that state back per aggregate instead of from a
+whole-state record. The same soak, one machine, before and after, at 2,000 commands:
+
+| Mode | Apply, before | Apply, after | Restart, before | Restart, after | On disk, before | On disk, after |
+|---|---|---|---|---|---|---|
+| checkpoint | 113.2 s (**~17/s**) | 1.68 s (**~1,190/s**) | 393 ms | 200 ms | 33.7 MB | 5.0 MB |
+| snapshot | 1.34 s (~1,497/s) | 1.59 s (~1,255/s) | 365 ms | 805 ms | 5.83 MB | 4.22 MB |
+
+That is a **67× improvement** in the mode that had the quadratic cost, and it also
+accounts for the unexplained checkpoint figures recorded after step 1 (981 MB on
+disk, 2.50 s restart): they were the whole-state rewrite's churn, and the rewrite is
+gone.
+
+The curve for checkpoint mode after the change, and the same shape in snapshot mode:
+
+| Commands | Apply (checkpoint) | Rate | Restart | On disk | Rate (snapshot) |
+|---|---|---|---|---|---|
+| 1,000 | 578 ms | ~1,730/s | 105 ms | 2.57 MB | — |
+| 2,000 | 1.68 s | ~1,190/s | 200 ms | 5.03 MB | ~1,255/s |
+| 4,000 | 4.85 s | ~824/s | 387 ms | 9.99 MB | ~849/s |
+
+**What is no longer the bottleneck, and what still is.** The mode-dependent part is
+gone: checkpoint and snapshot now measure the same (824/s and 849/s at 4,000
+commands), so whatever slope remains is *not* in persistence. The rate still falls as
+the history grows, identically in both modes — it is in the write path above storage
+(proposal, consensus bookkeeping or the in-memory history), and it is **open**:
+finding it is a Phase-7 performance question, not a persistence one. Step 2 changed
+what storage costs; this note does not claim it made the whole command path linear.
 
 ## What is *not* verified
 

@@ -115,10 +115,12 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
    applied log, which is `O(history)` per read. The decided shape of that work is
    recorded: [storage-layout.md](storage-layout.md) (column families, the `events`
    family, deltas and state-only recovery) and [search.md](search.md) (the tantivy
-   index beside the database). Step 1 — the families and the append-only `events`
-   family, with a layout marker that fails closed — has landed; step 2 (state
-   deltas and state-only recovery, the step that removes the quadratic apply cost)
-   and step 3 (projections and the search index) have not. Each step's tests are named in [D13](design.md#d13--history-is-append-only-checkpoints-carry-state).
+   index beside the database). Steps 1 and 2 have landed: the families and the
+   append-only `events` family behind a layout marker that fails closed, and the
+   state deltas — an apply now writes only what it changed, which removed the
+   quadratic cost (17 → ~1,190 commands per second at 2,000 commands). Step 3 is
+   open: reads still answer from an in-memory copy of the record rather than from
+   `events`, and neither the projections nor the search index exists yet. Each step's tests are named in [D13](design.md#d13--history-is-append-only-checkpoints-carry-state).
 5. ~~Extend persistence validation to large histories, interrupted snapshot
    creation/installation/purge and storage failures before changing the default.~~
    **Done:** a 300-command history survives restart in both modes; interrupted

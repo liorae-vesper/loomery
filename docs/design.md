@@ -775,12 +775,12 @@ recorded in [`domain-model.md`](domain-model.md).
       additive, so the checkpoint keeps carrying what it does today (`Disk` opens
       the layout, the record is written in the same batch as the checkpoint, and
       the layout marker refuses anything else)
-- [ ] Deltas and state-only recovery (D13 step 2): `state` keyed per aggregate so an
-      apply writes only what it changed, the checkpoint drops the event list, and
-      nothing keeps a second copy of the record in RAM — this changes the D2
-      contract, so it lands with its crash/purge/replay tests and latency/recovery
-      benchmarks, and with the soak showing the apply rate no longer halving as the
-      history doubles
+- [x] Deltas and state-only recovery (D13 step 2): `state` keyed per aggregate so
+      an apply writes only what it changed, and the checkpoint no longer carries the
+      event list — landed with its tests and the soak, which went from 17 to ~1,190
+      commands per second at 2,000 commands. The rate still falls with history,
+      identically in both modes: that residue is above storage and is open. The
+      in-memory copy of the record is what step 3 removes
 - [ ] Projections and the search index (D9, D6): the `projections` family for
       boards and lookups, a tantivy directory per group for "find anything", both
       rebuilt from `events`
