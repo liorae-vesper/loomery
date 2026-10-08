@@ -1,0 +1,4 @@
+# Installed by the check itself; the lockfile is what is committed.
+node_modules/
+# Rendered SVGs, written by `--render` for a human to look at.
+out/

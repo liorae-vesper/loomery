@@ -179,6 +179,22 @@ steps:
           volumes: *cargo-cache-volumes
           chown: true
 
+  - label: ":scroll: Docs (Mermaid diagrams)"
+    key: "docs"
+    depends_on: "build-ci-image"
+    command: "mise run docs-mermaid"
+    plugins:
+      - artifacts#v1.9.4:
+          download: "loomery-ci.tar.gz"
+          step: "build-ci-image"
+      - docker#v5.14.0:
+          image: "${LOOMERY_CI_IMAGE}"
+          load: "loomery-ci.tar.gz"
+          # No cargo cache: this step only parses the docs. `npm ci` installs the
+          # two checker packages into the checkout (gitignored), which is why the
+          # files have to be handed back to the agent user.
+          chown: true
+
   - label: ":bar_chart: Quality (coverage + CRAP)"
     key: "quality"
     depends_on: "build-ci-image"

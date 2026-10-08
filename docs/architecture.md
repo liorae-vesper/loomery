@@ -4,6 +4,10 @@ How the pieces built so far fit together, in diagrams. Everything here is
 implemented and covered by the gates; the [design tracker](design.md) says what is
 planned, and [host.md](host.md) documents the runtime gaps that remain.
 
+Every diagram here is parsed by `mise run docs-mermaid` (the same parser a
+renderer uses), so a broken one fails CI instead of a reader. To look at them,
+`mise run docs-mermaid-render` writes SVGs to `tools/mermaid-check/out/`.
+
 - [Crates and dependencies](#crates-and-dependencies)
 - [The write path](#the-write-path)
 - [The read path](#the-read-path)

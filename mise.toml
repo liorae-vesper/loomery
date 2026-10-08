@@ -11,6 +11,9 @@ locked = true
 "cargo:cargo-llvm-cov" = "0.9.1"
 cocogitto = "7.0.0"
 hk = "1.57.0"
+# The documentation check (`mise run docs-mermaid`) parses the Mermaid diagrams
+# with the same parser a renderer uses, which is a Node tool.
+node = "24.19.0"
 rust = "1.98.1"
 
 
@@ -56,6 +59,14 @@ run = """
 cargo llvm-cov --workspace --lcov --output-path lcov.info
 cargo crap --workspace --lcov lcov.info --fail-above --exclude '**/*_tests.rs' --exclude '**/main.rs' --exclude '**/outbox/nats.rs'
 """
+
+[tasks.docs-mermaid]
+description = "Parses every Mermaid diagram in the docs (a broken diagram fails)"
+run = "sh tools/mermaid-check/check.sh docs README.md"
+
+[tasks.docs-mermaid-render]
+description = "Renders the docs' Mermaid diagrams to tools/mermaid-check/out for review"
+run = "sh tools/mermaid-check/check.sh --render docs"
 
 [tasks.bench-consensus]
 description = "Runs the controlled multi-process tonic/RocksDB benchmark in release mode"

@@ -15,6 +15,7 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 | Commit message lint | `cog verify` (conventional commits, cocogitto) |
 | Combined dev gate | `mise run verify` (see `mise.toml`) |
 | Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap; skips `**/*_tests.rs`, `loomery-server`'s `main.rs` (the binary is a single file) and the `JetStream` adapter) |
+| Diagram syntax | `mise run docs-mermaid` (`tools/mermaid-check/`: every ```` ```mermaid ```` block in `docs/` and `README.md` must parse) |
 
 ## The `cargo deny` policy (`deny.toml`)
 
@@ -42,8 +43,8 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
    `cargo deny check`.
 3. **`hk fix`** runs `cargo fmt` to auto-format.
 4. **CI** — [`.buildkite/pipeline.yml`](../.buildkite/pipeline.yml) runs verify,
-   tests, licenses, quality (`mise run crap`), audit and the service integration
-   tests as separate steps. Every step runs inside the image built from
+   tests, licenses, docs, quality (`mise run crap`), audit and the service
+   integration tests as separate steps. Every step runs inside the image built from
    [`.buildkite/Dockerfile`](../.buildkite/Dockerfile), which carries the
    toolchain `mise.lock` pins, `protobuf-compiler` for `tonic-prost-build` (the
    shell's `build.rs` compiles `proto/raft.proto`), `libclang-dev` for the
@@ -59,7 +60,8 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
    ```
 
    Swap the task for any one the pipeline calls (`mise run test`,
-   `mise run licenses-check`, `mise run crap`, `mise run audit`). The container
+   `mise run licenses-check`, `mise run docs-mermaid`, `mise run crap`,
+   `mise run audit`). The container
    runs as root, exactly as the pipeline's steps do, so `CARGO_TARGET_DIR` points
    at a named volume: build artifacts stay out of the working tree instead of
    appearing in `target/` owned by root. To iterate on the pipeline itself,
