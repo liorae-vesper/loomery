@@ -52,6 +52,28 @@ fn commands() -> [loomery_core::envelope::Command; 3] {
     loomery_genesis::Step::ALL.map(|step| bootstrap_value().command(step).unwrap())
 }
 
+/// `AppData` implements `Display` because `OpenRaft` 0.10 requires it of
+/// `RaftTypeConfig::D`, and `OpenRaft` interpolates that value into consensus logs.
+/// Rendering is therefore a promise about what reaches those logs — the command
+/// types, never the caller's payload — so both arms and the batch loop are pinned.
+#[test]
+fn app_data_renders_command_types_and_never_payloads() {
+    let [first, second, ..] = commands();
+    assert_eq!(
+        AppData::Command(first.clone()).to_string(),
+        first.command_type
+    );
+    assert_eq!(
+        AppData::Batch(vec![first.clone(), second.clone()]).to_string(),
+        format!("batch[{},{}]", first.command_type, second.command_type)
+    );
+    // One command is the loop's first-iteration case: no separator, then the close.
+    assert_eq!(
+        AppData::Batch(vec![first.clone()]).to_string(),
+        format!("batch[{}]", first.command_type)
+    );
+}
+
 #[tokio::test]
 async fn concurrent_writers_share_an_entry_and_recover_each_command_in_both_modes() {
     for mode in [StatePersistence::Checkpoint, StatePersistence::Snapshot] {

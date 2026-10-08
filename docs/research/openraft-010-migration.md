@@ -4,7 +4,7 @@ Status: **all six legs done — migrated, measured, and the one thing that did n
 removed.** Branch `feat/openraft-010-migration` (renamed from
 `feature/openraft-pipelined-append` once the pipelining was gone).
 
-`cargo check -p loomery-shell --all-features` is clean, `mise run test` (178 shell lib tests,
+`cargo check -p loomery-shell --all-features` is clean, `mise run test` (179 shell lib tests,
 including `testing::log::Suite`, the hardening and interruption suites) and `mise run verify`
 are green, and `main` is untouched.
 
