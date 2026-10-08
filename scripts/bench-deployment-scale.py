@@ -122,6 +122,7 @@ def summarize_point(directory, trials):
             "successes": writes.get("successes"),
             "failures": writes.get("failures"),
             "distinct_log_indices": writes.get("distinct_log_indices"),
+            "commands_per_log_index": writes.get("commands_per_log_index"),
             "p50_us": writes.get("p50_us"),
             "p95_us": writes.get("p95_us"),
             "p99_us": writes.get("p99_us"),
@@ -134,7 +135,8 @@ def summarize_point(directory, trials):
 
     good = [row for row in rows if not row["failed"]]
     median = {}
-    for key in ("throughput_per_second", "p50_us", "p95_us", "p99_us", "events_verified"):
+    for key in ("throughput_per_second", "p50_us", "p95_us", "p99_us", "events_verified",
+                "commands_per_log_index", "distinct_log_indices"):
         values = [row[key] for row in good if row.get(key) is not None]
         median[key] = statistics.median(values) if values else None
     return {

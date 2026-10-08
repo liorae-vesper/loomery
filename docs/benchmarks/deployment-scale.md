@@ -163,6 +163,56 @@ batch limit of 128 — all with code that exists today, before any pipelining. T
 the comparison this note hands to anyone deciding whether a newer Raft API is worth
 its cost.
 
+## Batch-size matrix (endpoints, concurrency held at 128)
+
+A point of "20,000" is 20,000 *measured commands*, each producing exactly one event,
+plus 100 warmup commands — verified as 20,100 events on every replica. Batching
+changes how many **entries** those commands occupy, never how many events they
+produce.
+
+Eight batches, three trials per size, checkpoint mode, concurrency fixed at 128 so
+that every batch up to 128 can fill, endpoints only. "Observed" is the harness's own
+`commands_per_log_index`: the batch size that actually happened.
+
+| Batch | Observed | Commands/s @2k | @20k | p50 @20k | p99 @20k | Entries @20k | Entries/s @20k | On disk |
+|---|---|---|---|---|---|---|---|---|
+| 1 (unbatched) | 1.00 | 823 | 777 | 156.7 ms | 355.6 ms | 20,000 | **777** | 471.1 MB |
+| 2 | 2.00 | 278 | 270 | 455.7 ms | 1004.7 ms | 10,000 | 135 | 451.0 MB |
+| 4 | 4.00 | 559 | 528 | 230.6 ms | 545.2 ms | 5,000 | 132 | 456.2 MB |
+| 8 | 8.00 | 1,129 | 1,067 | 114.4 ms | 263.4 ms | 2,500 | 133 | 286.7 MB |
+| 16 | 16.00 | 2,197 | 2,043 | 59.1 ms | 78.0 ms | 1,250 | 128 | 291.6 MB |
+| 32 | 32.00 | 4,520 | 4,262 | 29.9 ms | 44.3 ms | 625 | 133 | 293.6 MB |
+| 64 | 63.90 | 8,372 | 8,045 | 15.4 ms | 26.2 ms | 313 | 126 | 292.5 MB |
+| **128** | 127.39 | **14,226** | **13,781** | 9.2 ms | 11.0 ms | 157 | 108 | 291.9 MB |
+
+Every point verified 20,100 events on all three replicas with zero failures.
+
+What the matrix says:
+
+- **Commands per second is proportional to the batch**: doubling the batch doubles
+  the throughput, because the *entry* rate is flat at ~110–135 entries/s across every
+  batched row. Throughput here is bought with entry size, not with parallelism.
+- **The unbatched row is the odd one, and it matters**: 777 entries/s, because
+  `max_batch_commands = 1` bypasses the collection queue and lets the harness's
+  concurrency drive entries directly. So batches of 2 and 4 are *worse than no
+  batching* — the batched path's entry ceiling sits below what the unbatched path
+  already does per command — and batching only pays from about 8 commands per entry.
+- **p50 falls as the batch grows** (156 ms → 9.2 ms) because the same 128 in-flight
+  writes are spread over fewer, larger units: queueing again, and Little's law holds
+  (128 ÷ 9.2 ms ≈ 13,900/s against 13,781 measured).
+- **The log consolidates**: ~450–470 MB at batches 1–4 against ~290 MB from 8 upward.
+- **Observed batch sizes match the configured ones**, the last two marginally under
+  (63.9 and 127.4) because the tail of a run cannot fill a batch.
+
+**Where that leaves the consensus question.** The bar is now 13,781 writes/s at batch
+128 — and more usefully, the batched path's flat ~130 entries/s is *below* the 777
+entries/s the unbatched path manages, so what we are hitting is something the batched
+path adds per entry, not Raft's ability to accept entries. Whether the ~7.7 ms per
+batch is the tonic round trip, replication acknowledgement, the durable writes, or our
+writer awaiting one batch before collecting the next is **not established** — and that
+split is what decides whether pipelined replication would help, or whether letting the
+writer keep more than one batch in flight would help more.
+
 ## A finding: the harness could not run at all
 
 The first attempt failed with **100 % rejected commands**:
