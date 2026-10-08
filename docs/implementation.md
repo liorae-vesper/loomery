@@ -352,10 +352,12 @@ sequenceDiagram
 ```
 
 This is OpenRaft 0.10 `RaftNetworkV2`. `full_snapshot` fragments the snapshot
-itself: each fragment is a `SnapshotChunk` JSON body on the existing
-`InstallSnapshot` RPC, and the server reassembles it per `(group, leader)` before
-calling `install_full_snapshot`. 0.9 fragmented in the core instead, so the
-protobuf file is unchanged but the snapshot JSON payload is not. The protobuf
+itself and sends it as one **client-streamed** `InstallSnapshot` RPC: each
+`SnapshotChunk` carries raw bytes, the first also carries the group id and the
+JSON opening metadata, and the follower reassembles in the handler frame before
+calling `install_full_snapshot`. A stream that ends without the final fragment is
+aborted, never installed. 0.9 fragmented in the core instead, and the `Envelope`
+RPCs still carry JSON request/Result types for appends and votes. The protobuf
 package is versioned, but its JSON payload still couples peers to the pinned
 OpenRaft types. Wire upgrades need compatibility review.
 

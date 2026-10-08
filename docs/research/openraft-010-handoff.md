@@ -55,8 +55,10 @@ What landed:
   `state_machine::apply_batch`, which the tests drive directly.
 * **Network:** `NoopNetwork` and `TonicNetwork` implement `RaftNetworkV2` (the `Net*`
   sub-traits come from openraft's blanket impls), so `stream_append` uses the default
-  sequential implementation. `full_snapshot` fragments the snapshot itself over the existing
-  `InstallSnapshot` RPC and `TonicTransport` reassembles it.
+  sequential implementation. `full_snapshot` is a client-streamed `InstallSnapshot` RPC:
+  the sender fragments (`SnapshotChunk`, raw bytes, routing key and JSON `{vote, meta}` on the
+  first fragment) and the follower reassembles inside the handler frame, aborting a stream
+  that ends early.
 * **Tests:** the whole suite is green, including `openraft::testing::log::Suite` (note the new
   path), the hardening and interruption suites. Two tests changed for 0.10 semantics rather
   than because of a bug; both are documented in the migration doc: the append-serialization
@@ -64,13 +66,14 @@ What landed:
 
 ## Next actions, in order
 
-1. **The bidirectional `StreamAppend` RPC — leg 5.** A bidirectional streaming RPC in
-   `crates/shell/proto/raft.proto`, the receiving side calling `Raft::stream_append`, responses
-   yielded in input order (one ordered HTTP/2 stream per follower avoids needing sequence
-   numbers), honouring `option.soft_ttl()` for idle policy rather than `hard_ttl`. Override
-   `RaftNetworkV2::stream_append` on `TonicNetwork` for it. Test ordering and TTL. This is also
-   the moment to consider a streaming snapshot transfer, which would replace the JSON-fragment
-   reassembly leg 2 built.
+1. **The bidirectional `StreamAppend` RPC — the rest of leg 5.** The snapshot half is done:
+   `InstallSnapshot` is client-streamed and the follower reassembles in the handler frame. What
+   remains is the bidirectional `StreamAppend` in `crates/shell/proto/raft.proto`, the receiving
+   side calling `Raft::stream_append`, responses yielded in input order (one ordered HTTP/2
+   stream per follower avoids needing sequence numbers), honouring `option.soft_ttl()` for idle
+   policy rather than `hard_ttl`. Override `RaftNetworkV2::stream_append` on `TonicNetwork` for
+   it. Test ordering and TTL. The response stream is also where a real idle-timeout policy
+   becomes implementable, which is the open item the snapshot stream could not answer.
 2. **Measure — leg 6.** `mise run bench-deployment-scale` on the unbatched *and* batched paths,
    one node and three, against the recorded 0.9 numbers in
    `docs/benchmarks/results/deployment-path.json`. This decides whether leg 5 was worth it.
@@ -132,8 +135,13 @@ Both are for the next session; nothing in leg 2 depends on them.
 * **`futures_util` is not a direct dependency.** `tokio_stream::{Stream, StreamExt}` is, and
   `tokio_stream::Stream` *is* `futures_core::Stream`, so the trait bounds line up.
 * **`RPCOption::snapshot_chunk_size` is `pub(crate)`**, so a test cannot force a multi-fragment
-  transfer through `full_snapshot`. Test the fragmenter and the reassembler as units, and use a
-  real (single-fragment) transfer over tonic for the end-to-end path.
+  transfer through `full_snapshot` itself. The transport tests therefore drive the framed
+  stream through the raw tonic client with the same helpers the client uses
+  (`fragments`/`opening_json`/`pump_fragments` in `transport.rs`), which covers reassembly over
+  a real stream.
+* **Do not put openraft's `hard_ttl` on a stream.** For snapshots it is
+  `install_snapshot_timeout`, 200 ms by default, which 0.9 applied per chunk; a whole-stream
+  deadline aborts every non-trivial transfer and openraft restarts it.
 * **`openraft::testing::{StoreBuilder, Suite}` moved** to `openraft::testing::log`, and
   `Suite::test_all` is now `async`.
 * **Metrics moved to the runtime-agnostic watch channel:** `metrics().borrow_watched()` (bring

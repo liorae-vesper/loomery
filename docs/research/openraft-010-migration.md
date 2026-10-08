@@ -50,14 +50,33 @@ the things to re-check before the benchmark:
    a flush covering its entry has completed — instead of the 0.9 serialization.
 2. **Snapshots are fragmented by the network, not the core.** 0.10 removed the chunked
    `InstallSnapshotRequest` from the crate (`openraft-legacy` keeps it) and hands
-   `RaftNetworkV2::full_snapshot` the whole snapshot. Our transport therefore owns both
-   fragmentation (`option.snapshot_chunk_size()`, 3 MiB by default) and reassembly: the
-   `InstallSnapshot` RPC now carries a `SnapshotChunk` JSON body, and `TonicTransport` keeps a
-   per-`(group, leader)` buffer that a fragment at offset 0 resets. **The protobuf file is
-   unchanged** — this is a JSON-payload change inside the existing RPC, not a new RPC. The
-   fragmenter and the reassembler are unit-tested in `transport.rs`, and a real transfer over
-   tonic is covered by `snapshots_cross_tonic_and_unknown_groups_are_rejected`. A streaming
-   snapshot RPC would be the natural replacement once leg 5 opens the proto file.
+   `RaftNetworkV2::full_snapshot` the whole snapshot, so the transport owns fragmentation
+   (`option.snapshot_chunk_size()`, 3 MiB by default) *and* reassembly. The migration landed
+   this as a unary JSON fragment per RPC; leg 5 replaced it with **one client-streamed
+   `InstallSnapshot` RPC** (proto change), which is the version to reason about:
+
+   * `SnapshotChunk { group_id, opening, data, done }` — routing key and JSON `{vote, meta}`
+     only on the first fragment, raw `bytes` for the payload. Raw bytes matter: the unary cut
+     put frames inside an `Envelope`'s JSON, which inflates binary data ~4x and so needed
+     `snapshot_max_chunk_size * 4 <= max_message_bytes` to hold (now validated in
+     `GroupConfig::validate` as `chunk * 2 <= max_message_bytes`).
+   * The follower's reassembly buffer is a local in `install_snapshot`, so a sender that dies
+     mid-transfer leaves nothing behind and two transfers cannot collide. The unary cut kept
+     that state in a shared map keyed by `(group, leader)`, with no eviction — the single
+     piece of state that was not scoped to a call.
+   * **No whole-RPC deadline.** Openraft passes `Config::install_snapshot_timeout` (200 ms by
+     default) as `hard_ttl`, which 0.9 applied *per chunk*; on one stream it would abort every
+     non-trivial transfer and openraft would restart it. The bounds are openraft's `cancel`
+     future, the configured TCP keepalive, and `max_message_bytes` per fragment. A true idle
+     policy needs per-fragment progress, which the request side does not expose — that belongs
+     with `StreamAppend`, where the response side is a stream.
+
+   **Peak follower memory is unchanged** by all of this: `Raft::install_full_snapshot` takes
+   the whole snapshot and `SnapshotData` is in-memory, so streaming removes the round trips and
+   the leaked shared buffer, not the peak. The fragmenter, the framing helper and the
+   reassembler are unit-tested in `transport.rs`, and
+   `snapshots_cross_tonic_and_unknown_groups_are_rejected` now covers a real multi-fragment
+   transfer and a truncated stream over tonic.
 3. **`SnapshotMeta` lost `snapshot_id`.** A snapshot is identified by the position it covers,
    and the transfer id lives on the wire (in `openraft-legacy`'s v1 metadata). The stored
    snapshot format still round-trips 0.9 data — the third field is written empty and ignored on
@@ -218,6 +237,9 @@ without sequence numbers; a multiplexed design would have to reorder by sequence
    and `mise run verify`, and **commit that** — a working 0.10 migration with no behaviour
    change.~~ **Done, with the three documented behaviour changes above.**
 5. Only then the bidi RPC and true pipelining, with tests for ordering and for `soft_ttl`.
+   **The snapshot half of leg 5 is done** (client-streaming `InstallSnapshot`, above); the
+   bidirectional `StreamAppend` is next. An idle-timeout policy for the streams is the open
+   item there, because the append response stream is where per-response progress is visible.
 6. Measure: deployment harness unbatched and batched, single node and three, against the
    recorded 0.9 numbers in `docs/benchmarks/results/deployment-path.json`.
 
