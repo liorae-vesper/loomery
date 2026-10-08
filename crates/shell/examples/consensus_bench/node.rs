@@ -190,11 +190,24 @@ async fn handle(group: &RaftGroup, request: Request, config: &Config) -> anyhow:
                     .ok_or_else(|| anyhow::anyhow!("membership not applied"))?,
             })
         }
-        Request::Batch { phase, count } => Ok(Reply::Batch(
-            batch(group.writer(), &phase, count, config, false, false).await?,
+        Request::Batch {
+            phase,
+            count,
+            duration_ms,
+        } => Ok(Reply::Batch(
+            batch(
+                group.writer(),
+                &phase,
+                count,
+                duration_ms,
+                config,
+                false,
+                false,
+            )
+            .await?,
         )),
         Request::StreamBatch { phase, count } => Ok(Reply::Batch(
-            batch(group.writer(), &phase, count, config, true, false).await?,
+            batch(group.writer(), &phase, count, None, config, true, false).await?,
         )),
         Request::RetryBatch {
             phase,
@@ -208,7 +221,7 @@ async fn handle(group: &RaftGroup, request: Request, config: &Config) -> anyhow:
             let mut config = config.clone();
             config.operation_timeout_ms = timeout_ms;
             Ok(Reply::Batch(
-                batch(group.writer(), &phase, count, &config, false, true).await?,
+                batch(group.writer(), &phase, count, None, &config, false, true).await?,
             ))
         }
         Request::Audit { index, phases } => audit(group, index, phases, config).await,
@@ -310,29 +323,65 @@ async fn sample(
         replayed,
     }
 }
+/// One command with its sequence number and encoded size.
+fn prepared_command(
+    phase: &str,
+    sequence: usize,
+    config: &Config,
+) -> anyhow::Result<(usize, usize, Command)> {
+    let command = command(phase, sequence, config.name_bytes, config.payload_pattern)?;
+    let bytes = serde_json::to_vec(&command)?.len();
+    Ok((sequence, bytes, command))
+}
 async fn batch(
     writer: ProposalWriter,
     phase: &str,
     count: usize,
+    duration_ms: Option<u64>,
     config: &Config,
     streaming: bool,
     allow_replay: bool,
 ) -> anyhow::Result<Batch> {
-    // Prepare outside the measured interval. Keep exactly concurrency requests in flight.
-    let mut commands = (0..count)
-        .map(|i| {
-            command(phase, i, config.name_bytes, config.payload_pattern)
-                .and_then(|c| Ok((i, serde_json::to_vec(&c)?.len(), c)))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter();
+    // Count mode prepares every command outside the measured interval. A
+    // time-boxed run cannot: its length is the deadline, so commands are prepared
+    // as they are needed, which puts that preparation inside the window and makes
+    // this mode read a little lower for the same work. Keep exactly concurrency
+    // requests in flight either way.
+    let mut prepared = match duration_ms {
+        None => Some(
+            (0..count)
+                .map(|i| prepared_command(phase, i, config))
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter(),
+        ),
+        Some(_) => None,
+    };
+    let mut next_sequence = 0usize;
     let timeout = Duration::from_millis(config.operation_timeout_ms);
     let mut pending = JoinSet::new();
     let mut samples = Vec::with_capacity(count);
     let started = Instant::now();
+    let stop_at = match duration_ms {
+        Some(ms) => Some(
+            started
+                .checked_add(Duration::from_millis(ms))
+                .ok_or_else(|| anyhow::anyhow!("write deadline overflows the clock"))?,
+        ),
+        None => None,
+    };
     loop {
         while pending.len() < config.concurrency {
-            let Some((sequence, bytes, command)) = commands.next() else {
+            // Feed from the prepared run, or prepare on demand until the deadline.
+            let next = match (&mut prepared, stop_at) {
+                (Some(commands), _) => commands.next(),
+                (None, Some(stop_at)) if Instant::now() < stop_at => {
+                    let sequence = next_sequence;
+                    next_sequence = next_sequence.saturating_add(1);
+                    Some(prepared_command(phase, sequence, config)?)
+                }
+                (None, _) => None,
+            };
+            let Some((sequence, bytes, command)) = next else {
                 break;
             };
             pending.spawn(sample(

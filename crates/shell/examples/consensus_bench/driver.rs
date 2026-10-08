@@ -182,11 +182,17 @@ struct Trial {
     restart_us: u64,
     recovered: Vec<Check>,
 }
-async fn batch(process: &mut Process, phase: &str, count: usize) -> anyhow::Result<Measurement> {
+async fn batch(
+    process: &mut Process,
+    phase: &str,
+    count: usize,
+    duration_ms: Option<u64>,
+) -> anyhow::Result<Measurement> {
     match process
         .request(&Request::Batch {
             phase: phase.into(),
             count,
+            duration_ms,
         })
         .await?
     {
@@ -256,7 +262,7 @@ async fn failover(processes: &mut [Process], timeout_ms: u64) -> anyhow::Result<
     process.alive = false;
     let elected = elect(processes, timeout_ms).await?;
     let election_us = micros(started.elapsed());
-    let probe = batch(leader(processes, elected)?, "post-failover", 1).await?;
+    let probe = batch(leader(processes, elected)?, "post-failover", 1, None).await?;
     anyhow::ensure!(probe.summary.failures == 0, "post-failover probe failed");
     Ok(Failover {
         crashed_node: id,
@@ -309,6 +315,32 @@ async fn snapshot(
         other => anyhow::bail!("expected snapshot, got {other:?}"),
     }
 }
+/// The measured write phase, and how many events every replica must show for it.
+///
+/// A time-boxed run's command count is only known once it has stopped, so the count
+/// comes back from the run and the caller verifies zero failures before trusting it.
+async fn measure_writes(
+    processes: &mut [Process],
+    leader_id: u64,
+    config: &Config,
+) -> anyhow::Result<(Measurement, usize)> {
+    let writes = batch(
+        leader(processes, leader_id)?,
+        "measured",
+        config.operations,
+        config.duration_ms,
+    )
+    .await?;
+    let commands = match config.duration_ms {
+        Some(_) => writes.summary.successes,
+        None => config.operations,
+    };
+    let events = config
+        .warmup
+        .checked_add(commands)
+        .context("event count overflow")?;
+    Ok((writes, events))
+}
 async fn trial(config: &Config, root: &Path, number: usize) -> anyhow::Result<Trial> {
     let mut processes = Vec::new();
     for id in 1..=config.nodes {
@@ -347,28 +379,25 @@ async fn trial(config: &Config, root: &Path, number: usize) -> anyhow::Result<Tr
     };
     check(&mut processes, membership_index, 0).await?;
     let leader_id = elect(&mut processes, config.phase_timeout_ms).await?;
-    let warmup = batch(leader(&mut processes, leader_id)?, "warmup", config.warmup).await?;
+    let warmup = batch(
+        leader(&mut processes, leader_id)?,
+        "warmup",
+        config.warmup,
+        None,
+    )
+    .await?;
     save(&root.join("warmup-samples.json"), &warmup).await?;
     anyhow::ensure!(warmup.summary.failures == 0, "warmup failed");
     if config.warmup > 0 {
         check(&mut processes, last_index(&warmup)?, config.warmup).await?;
     }
-    let writes = batch(
-        leader(&mut processes, leader_id)?,
-        "measured",
-        config.operations,
-    )
-    .await?;
+    let (writes, mut events) = measure_writes(&mut processes, leader_id, config).await?;
     save(&root.join("write-samples.json"), &writes).await?;
     anyhow::ensure!(
         writes.summary.failures == 0,
         "measured writes failed; raw samples retained"
     );
     let mut index = last_index(&writes)?;
-    let mut events = config
-        .warmup
-        .checked_add(config.operations)
-        .context("event count overflow")?;
     let checks = check(&mut processes, index, events).await?;
     let (snapshot_us, snapshot_already_current) =
         snapshot(leader(&mut processes, leader_id)?, index).await?;

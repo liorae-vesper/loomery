@@ -18,6 +18,11 @@ pub struct Config {
     pub trials: usize,
     pub warmup: usize,
     pub operations: usize,
+    /// Run the measured write phase for this long instead of for a fixed
+    /// `operations` count. Count mode prepares every command before the clock
+    /// starts, which a time-boxed run cannot do, so this mode prepares commands
+    /// inside the window and reads slightly lower for the same work.
+    pub duration_ms: Option<u64>,
     pub concurrency: usize,
     pub name_bytes: usize,
     pub payload_pattern: PayloadPattern,
@@ -36,6 +41,7 @@ impl Default for Config {
             trials: 3,
             warmup: 100,
             operations: 1000,
+            duration_ms: None,
             concurrency: 8,
             name_bytes: loomery_core::workspace::MAX_NAME_BYTES,
             payload_pattern: PayloadPattern::Pseudorandom,
@@ -71,6 +77,12 @@ impl Config {
             self.operation_timeout_ms > 0 && self.phase_timeout_ms >= self.operation_timeout_ms,
             "phase timeout must cover a positive operation timeout"
         );
+        if let Some(duration_ms) = self.duration_ms {
+            anyhow::ensure!(
+                duration_ms > 0 && duration_ms < self.phase_timeout_ms,
+                "a time-boxed run needs a positive duration below the phase timeout"
+            );
+        }
         anyhow::ensure!(
             self.name_bytes > 0 && self.name_bytes <= loomery_core::workspace::MAX_NAME_BYTES,
             "name_bytes must be between 1 and the domain's workspace-name bound ({}): a longer \
@@ -114,6 +126,10 @@ pub enum Request {
     Batch {
         phase: String,
         count: usize,
+        /// When set, the measured phase runs for this long and `count` is a cap
+        /// the run is not expected to reach.
+        #[serde(default)]
+        duration_ms: Option<u64>,
     },
     StreamBatch {
         phase: String,
