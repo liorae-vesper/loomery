@@ -20,7 +20,12 @@ mr-boxington = "1.21.0"
 # The documentation check (`mise run docs-mermaid`) parses the Mermaid diagrams
 # with the same parser a renderer uses, which is a Node tool.
 node = "24.19.0"
-rust = { version = "1.98.1", mr_boxington = true }
+# GitHub's runner configures rustup with the minimal profile, which carries no
+# clippy and no rustfmt, so the components have to be asked for here or
+# `mise run verify` (and the clippy step of `mise run test-services`) fails with
+# "'cargo-clippy' is not installed for the toolchain". mise adds missing
+# components even to an already-installed toolchain, so this also repairs one.
+rust = { version = "1.98.1", components = ["clippy", "rustfmt"], mr_boxington = true }
 
 
 # `cargo check` builds the workspace, and in a workspace the server's
