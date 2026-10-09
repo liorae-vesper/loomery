@@ -20,7 +20,8 @@ Start with [design.md](design.md) for the architecture and decisions, or
 | [Search](search.md) | "Find anything" within a tenant: the index beside the database, scoping, rebuild, staleness |
 | [Test services](testing-services.md) | Keycloak and NATS JetStream for the opt-in integration suite |
 | [Third-party licenses](third-party-licenses.md) | The bundled dependency license texts, how they are generated and checked |
-| [Raft configuration](raft-configuration.md) | Persistent replica startup, tuning, TLS/mTLS and immutable persistence modes |
+| [Configuration](configuration.md) | **Every knob, its default, and how the parts constrain each other**: host, gateway, identity, broker, and the group's raft/transport/storage/proposals |
+| [Raft configuration](raft-configuration.md) | Group operation: startup and membership, batching semantics, TLS/mTLS setup, and the immutable persistence modes |
 | [Development guardrails](guardrails.md) | Toolchain, verification tasks, hooks and CI |
 | [Continuation](CONTINUE.md) | Concise handoff; consult the design tracker for the full backlog |
 

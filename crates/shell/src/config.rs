@@ -124,13 +124,17 @@ impl TransportConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StatePersistence {
-    /// Synchronize the complete applied state before each apply batch returns.
+    /// Write what each apply changed before it returns — the touched aggregate
+    /// states, the dedup window and the applied marker — so recovery reads it and
+    /// replays only the log tail. The Raft log stays the durability boundary: this
+    /// batch is not synchronized (see `state_machine::write_applied`).
     #[default]
     Checkpoint,
     /// Apply in memory; recover from durable snapshots and the committed log.
     Snapshot,
 }
-/// `RocksDB` resource tuning. WAL synchronization is always enabled for Raft safety.
+/// `RocksDB` resource tuning. The Raft log's WAL write stays synchronized, because it
+/// is the durability boundary; the apply batch does not (`state_machine::write_applied`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StorageConfig {

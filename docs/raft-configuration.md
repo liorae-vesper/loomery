@@ -9,33 +9,12 @@ commit pointer, applied aggregate state, dedup window and snapshots.
 The shell remains a library: the embedding application loads configuration,
 binds listeners, registers groups and owns shutdown. `GroupConfig` derives
 serde serialization/deserialization; omitted fields use defaults and unknown
-shell settings fail validation. JSON example:
-
-```json
-{
-  "transport": {
-    "connect_timeout_ms": 1000,
-    "request_timeout_ms": 5000,
-    "max_message_bytes": 16777216,
-    "tcp_keepalive_ms": 30000,
-    "stream_window_bytes": 1048576,
-    "connection_window_bytes": 4194304
-  },
-  "storage": {
-    "state_persistence": "checkpoint",
-    "write_buffer_bytes": 67108864,
-    "max_write_buffers": 2,
-    "max_background_jobs": 2,
-    "max_open_files": 512,
-    "block_cache_bytes": 67108864
-  }
-}
-```
+shell settings fail validation. Every field, its default and what it does is in
+[configuration.md](configuration.md#the-shape) — this document is about behaviour.
 
 `GroupConfig::raft` exposes OpenRaft's configuration directly: heartbeat and
 election intervals, maximum replication payload, snapshot policy/chunk size,
-retained logs and purge batch sizing. Change these using Rust or serde fields
-from the pinned OpenRaft version. `GroupConfig::validate` validates consensus
+retained logs and purge batch sizing. `GroupConfig::validate` validates consensus
 and resource settings before opening storage. Apply changed settings on restart.
 
 ## Startup and membership
@@ -152,28 +131,12 @@ sequential `stream_append` — one request, one response — because a bidirecti
 record is in
 [the migration note](research/openraft-010-migration.md#pipelined-append-leg-5-built-measured-removed).
 
-**Batch limits.** `proposals.max_batch_commands` and `proposals.max_batch_bytes`
-are ceilings, not promises, and the batch a writer actually forms is
-`min(commands in flight, max_batch_commands, max_batch_bytes / frame size)`. Only
-the first term reflects the deployment; the others are policy. Two consequences
-worth knowing before tuning:
+The limits themselves are ceilings rather than promises, and how they combine with
+concurrency — including what an inert limit looks like in `batch_stats()` — is in
+[configuration.md](configuration.md#group-proposals).
 
-* A count limit above the writes a group receives concurrently is dead
-  configuration: eight concurrent callers produce batches of eight whatever the
-  limit says. `GroupConfig::validate` rejects the one case that is decidable up
-  front (a byte budget below the count limit, which makes that count unreachable at
-  any concurrency), and `ProposalWriter::batch_stats()` publishes what the writer
-  actually did — entries, commands, the mean and largest batch, which limit bound
-  each batch, and how many of the largest command the byte budget holds. The host
-  prints that line per group at shutdown, which is where an inert limit becomes
-  visible.
-* Batching lowers the entry rate as it raises commands per entry, so commands per
-  second is roughly `batch depth × entries per second`. At concurrency 8 the depth
-  cannot exceed 8, and batching is then a wash: 918 writes/s against 924–983
-  unbatched, measured.
- Its versioned protobuf envelope carries the pinned
-OpenRaft JSON request/Result types; rolling wire upgrades need compatibility
-review.
+The transport's versioned protobuf envelope carries the pinned OpenRaft JSON
+request/Result types; rolling wire upgrades need compatibility review.
 
 RocksDB options are per database, so memory and background jobs multiply by
 the number of resident groups. Larger write buffers and block caches consume
@@ -184,7 +147,9 @@ Log entries use ordered binary index keys. Purge deletion and its floor marker
 are committed atomically. Blocking database operations run on Tokio's blocking
 pool. Raft stops on storage failure.
 
-**What is synchronised, and what that buys.** The *Raft log* retains the WAL and
+### What is synchronised, and what that buys
+
+The *Raft log* retains the WAL and
 synchronizes it before acknowledgment: an entry is durable before it is committed
 and applied, and that is the durability boundary in both persistence modes. The
 apply batch that follows — the append-only record, the touched aggregate state and

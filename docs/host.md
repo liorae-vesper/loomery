@@ -77,48 +77,18 @@ curl -s "http://127.0.0.1:8080/organizations/$ORG/events" -H "Authorization: Bea
 
 ## Configuration reference
 
-### `http`
-
-| Field | Default | Meaning |
-|---|---|---|
-| `bind` | `127.0.0.1:8080` | `host:port`; port `0` asks the OS for a free port |
-| `ryw_hold_ms` | `50` | how long a read waits for the caller's own write (`X-Min-Index`) |
+Every field and default — `http`, `nats`, `oidc`, `group` — is in
+[configuration.md](configuration.md), which is the single place the knobs are listed.
+What follows is the behaviour behind the two optional ones.
 
 ### `nats` (optional)
 
 Absent means no broker: the gateway still serves, no outbox or saga workers run.
 
-| Field | Default | Meaning |
-|---|---|---|
-| `url` | `nats://127.0.0.1:4222` | broker URL |
-| `stream` | `LOOMERY_OUTBOX` | the stream the outbox publishes into (D11) |
-| `subjects` | `loomery.>` | the subjects that stream captures |
-| `filter_subject` | `subjects` | the narrower set the saga consumer pulls |
-| `durable` | `loomery-sagas` | the durable consumer name |
-| `ack_wait_ms` | `30000` | redelivery delay for an unacked message |
-| `duplicate_window_secs` | `120` | the broker's dedup window (only for a new stream) |
-| `deliver_all` | `true` | replay the stream's backlog through the sagas |
-| `connect_timeout_ms` / `publish_timeout_ms` | `5000` | connection and publish deadlines |
-
 ### `oidc` (optional; required to serve)
 
 Nothing here is provider-specific: Keycloak, Entra ID, Auth0, Okta and a
 self-hosted provider all work through the same adapter.
-
-| Field | Default | Meaning |
-|---|---|---|
-| `issuer` | — | drives discovery at `{issuer}/.well-known/openid-configuration` |
-| `jwks_uri` | discovered | set it directly for a provider without discovery |
-| `audience` | unset | the `aud` a token must carry; unset skips the check |
-| `subject_claim` | `sub` | the claim carrying the user id |
-| `email_claim` | `email` | the claim carrying the caller's address |
-| `require_verified_email` | `true` | trust an address only when the provider marks it verified |
-| `groups_claim` | `groups` | dot path to group/role membership (`realm_access.roles`, …) |
-| `admin_group` | `admins` | the value in that claim that grants `is_admin` |
-| `subject_namespace` | unset | derive a `UUIDv5` id from a non-UUID subject |
-| `leeway_seconds` | `30` | clock skew allowed on `exp`/`nbf` |
-| `jwks_ttl_seconds` | `600` | how long a fetched key set is trusted |
-| `timeout_ms` | `5000` | discovery/JWKS deadline |
 
 Tokens are validated **locally**: the signature is checked against the JWKS entry
 whose `kid` the token names, the algorithm comes from the *key* (never from the
