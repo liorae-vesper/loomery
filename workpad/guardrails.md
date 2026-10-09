@@ -14,7 +14,7 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 | Pre-commit hooks | `hk` (commit-msg + check/fix hooks) |
 | Commit message lint | `cog verify` (conventional commits, cocogitto) |
 | Combined dev gate | `mise run verify` (see `mise.toml`) |
-| Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap; skips `**/*_tests.rs`, `loomery-server`'s `main.rs` (the binary is a single file) and the `JetStream` adapter) |
+| Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap; skips `**/*_tests.rs`, `**/build.rs`, `loomery-server`'s `main.rs` (the binary is a single file) and the `JetStream` adapter) |
 | Diagram syntax | `mise run docs-mermaid` (`tools/mermaid-check/`: every ```` ```mermaid ```` block in `docs/`, `README.md` and `workpad/` must parse) |
 | Documentation links | `mise run docs-links` (`tools/docs-links/`): links, anchors, run citations and site reachability. A broken link or a page missing from the site's navigation fails in `docs/`; in `workpad/` it is reported as a warning, because the staging tree is allowed to be mid-edit |
 | Documentation site | `mise run docs-site` (VitePress in `docs/`, navigation in `docs/.vitepress/config.mts`): a dead link or a missing page fails the build |
@@ -132,6 +132,12 @@ Not enforced by a hook, so they are stated once, here rather than in a note:
   `crates/shell/src/outbox/nats.rs` (the `JetStream` client; the subject and
   message-id parsing it relies on, the cursor and the worker are scored and
   tested). Both run in `mise run test-services`.
+- `**/build.rs` is excluded for a third reason: `cargo llvm-cov` does not
+  instrument build scripts, so a function in one is permanently 0% covered and a
+  coverage-derived score can only flag it however simple it is.
+  `crates/shell/build.rs` links the C++ runtime when the build is handed a
+  prebuilt `RocksDB`; it runs during the build of every job, it is just never
+  measured. Without the exclusion its match on the target OS scores CRAP 42.
 
 ---
 
