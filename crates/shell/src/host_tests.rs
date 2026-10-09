@@ -437,6 +437,16 @@ async fn a_boot_reconciles_a_provisioning_a_crash_interrupted() {
         control.shutdown().await.unwrap();
     }
 
+    // The control group is shut down but its store may not be released yet, and this
+    // boot is product code that a test cannot route through `test_disk::boot`. A fresh
+    // process never races the release, so wait for it.
+    crate::raft::test_disk::wait_for_release(
+        &root.path().join(&config.control_group),
+        &config.group.storage,
+    )
+    .await
+    .unwrap();
+
     // The boot resumes it from state alone: no operator, no caller memory.
     let host = Arc::new(
         Host::boot(

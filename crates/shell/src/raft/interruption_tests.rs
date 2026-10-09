@@ -234,15 +234,11 @@ async fn an_abandoned_snapshot_build_keeps_the_previous_one_and_stays_retryable(
         "the abandoned build did not overwrite the stored snapshot"
     );
 
-    // Recovery after the abandoned build: the group still comes back whole.
-    let mut group = RaftGroup::boot_persistent(
-        1,
-        "tenant".to_owned(),
-        &path,
-        config(StatePersistence::Snapshot),
-    )
-    .await
-    .unwrap();
+    // Recovery after the abandoned build: the group still comes back whole. The build's
+    // task was aborted, so its handle may still be holding the store.
+    let mut group = test_disk::boot(1, "tenant", &path, config(StatePersistence::Snapshot))
+        .await
+        .unwrap();
     group
         .raft()
         .wait(Some(Duration::from_secs(5)))
@@ -403,14 +399,9 @@ async fn a_failed_purge_moves_neither_the_entries_nor_the_floor() {
 /// `initialize` is only for a database that has never held a cluster: a reopened one
 /// recovers its membership from its own log, and asking again is an error.
 async fn boot_checkpoint(path: &std::path::Path, initialize: bool) -> RaftGroup {
-    let group = RaftGroup::boot_persistent(
-        1,
-        "tenant".to_owned(),
-        path,
-        config(StatePersistence::Checkpoint),
-    )
-    .await
-    .unwrap();
+    let group = test_disk::boot(1, "tenant", path, config(StatePersistence::Checkpoint))
+        .await
+        .unwrap();
     if initialize {
         group
             .raft()
@@ -536,15 +527,12 @@ async fn a_record_without_its_marker_is_refused_rather_than_guessed() {
     let _applied = apply_and_stop(path).await;
     drop_applied_writes(path, false).await;
 
-    let error = RaftGroup::boot_persistent(
-        1,
-        "tenant".to_owned(),
-        path,
-        config(StatePersistence::Checkpoint),
-    )
-    .await
-    .err()
-    .expect("an inconsistent store must not be opened");
+    // Through the waiting boot, so the refusal this asserts is the *store's*, not a
+    // lock the previous handle has yet to release.
+    let error = test_disk::boot(1, "tenant", path, config(StatePersistence::Checkpoint))
+        .await
+        .err()
+        .expect("an inconsistent store must not be opened");
     assert!(
         error.to_string().contains("no applied marker"),
         "unexpected error: {error}"

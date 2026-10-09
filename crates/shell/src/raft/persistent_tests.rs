@@ -64,32 +64,6 @@ fn leader_id(term: u64, node: u64) -> <TypeConfig as openraft::RaftTypeConfig>::
     use openraft::vote::leader_id_adv::LeaderId;
     LeaderId::new(term, node)
 }
-/// Reopens a persistent group, waiting out the release of the previous handle.
-///
-/// The rule and the deadline are in [`super::test_disk`]: a store is released when
-/// the last handle to it goes away, and `Raft::shutdown` only *aborts* the tasks
-/// holding others, so a reopen can race that release (this flaked in CI, not
-/// locally). A store still locked after the deadline is a real leak, and its error
-/// surfaces.
-async fn reopen(
-    node_id: u64,
-    directory: &std::path::Path,
-    config: GroupConfig,
-) -> anyhow::Result<RaftGroup> {
-    let deadline = tokio::time::Instant::now() + test_disk::RELEASE_TIMEOUT;
-    loop {
-        match RaftGroup::boot_persistent(node_id, "tenant".into(), directory, config.clone()).await
-        {
-            Ok(group) => return Ok(group),
-            Err(error) if tokio::time::Instant::now() < deadline => {
-                eprintln!("reopen attempt failed, retrying: {error}");
-                tokio::time::sleep(test_disk::RELEASE_POLL).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
 /// Waits until the leader has applied everything it has appended.
 ///
 /// This is the precondition for a membership change: `OpenRaft` refuses one while an
@@ -227,7 +201,7 @@ async fn three_replicas_commit_and_recover_genesis() {
         server.await.unwrap();
     }
     drop(groups);
-    let recovered = reopen(1, &root.path().join("1"), group_config)
+    let recovered = test_disk::boot(1, "tenant", &root.path().join("1"), group_config)
         .await
         .unwrap();
     assert_eq!(
@@ -505,10 +479,10 @@ async fn snapshot_mode_recovers_log_only_and_snapshot_with_purged_prefix() {
             .index;
         group.shutdown().await.unwrap();
         drop(group);
-        let mut restored =
-            RaftGroup::boot_persistent(1, "tenant".into(), root.path(), settings.clone())
-                .await
-                .unwrap();
+        // The reopen CI lost at line 511 of build #23, and at line 444 of build #12.
+        let mut restored = test_disk::boot(1, "tenant", root.path(), settings.clone())
+            .await
+            .unwrap();
         restored
             .raft()
             .wait(Some(Duration::from_secs(5)))
@@ -544,7 +518,7 @@ async fn snapshot_mode_recovers_log_only_and_snapshot_with_purged_prefix() {
         );
         restored.shutdown().await.unwrap();
         drop(restored);
-        let disk = super::disk::Disk::open(root.path(), &settings.storage)
+        let disk = test_disk::open(root.path(), &settings.storage)
             .await
             .unwrap();
         assert!(
@@ -689,6 +663,31 @@ async fn invalid_persistence_marker_fails_closed() {
     }
 }
 
+/// The boot waits out a store that is still held, rather than failing on its lock.
+///
+/// This is the mechanism every reopen above relies on, proven here instead of inferred
+/// from a green suite: the race is rare enough locally that a passing run says nothing
+/// about it. A store still held after [`test_disk::RELEASE_TIMEOUT`] is a real leak, and
+/// the boot returns that error rather than retrying it away.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_boot_waits_for_a_store_that_is_still_held() {
+    let root = tempfile::tempdir().unwrap();
+    let settings = config();
+    let held = super::disk::Disk::open(root.path(), &settings.storage)
+        .await
+        .unwrap();
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(held);
+    });
+
+    let group = test_disk::boot(1, "tenant", root.path(), settings.clone())
+        .await
+        .expect("the boot waited for the store");
+    group.shutdown().await.unwrap();
+    release.await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutdown_releases_database_only_after_state_handles_are_dropped() {
     use crate::config::StatePersistence;
@@ -733,7 +732,7 @@ async fn shutdown_releases_database_only_after_state_handles_are_dropped() {
             3
         );
         drop(retained_state);
-        let mut recovered = RaftGroup::boot_persistent(1, "tenant".into(), root.path(), settings)
+        let mut recovered = test_disk::boot(1, "tenant", root.path(), settings)
             .await
             .unwrap();
         recovered

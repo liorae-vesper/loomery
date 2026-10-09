@@ -53,7 +53,7 @@ mod proposal_tests;
 #[cfg(test)]
 mod suite;
 #[cfg(test)]
-mod test_disk;
+pub(crate) mod test_disk;
 
 pub use log_store::MemLogStore;
 pub use network::NoopNetworkFactory;

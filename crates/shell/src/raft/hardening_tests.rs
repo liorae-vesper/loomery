@@ -12,6 +12,8 @@
 //! Findings and the gaps left open are recorded in
 //! `docs/benchmarks/persistence-hardening.md`.
 
+use super::test_disk;
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -68,7 +70,7 @@ fn task_command(index: u64) -> Command {
 
 /// Boots (or reopens) the replica and waits for a leader.
 async fn boot(path: &std::path::Path, mode: StatePersistence) -> RaftGroup {
-    let group = RaftGroup::boot_persistent(1, "tenant".to_owned(), path, config(mode))
+    let group = test_disk::boot(1, "tenant", path, config(mode))
         .await
         .unwrap();
 

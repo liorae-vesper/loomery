@@ -21,7 +21,7 @@ fn config(mode: StatePersistence) -> GroupConfig {
     config
 }
 async fn boot(path: &std::path::Path, config: GroupConfig) -> RaftGroup {
-    let group = RaftGroup::boot_persistent(1, "batch-test".into(), path, config)
+    let group = test_disk::boot(1, "batch-test", path, config)
         .await
         .unwrap();
     if !group.raft().is_initialized().await.unwrap() {
