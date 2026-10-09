@@ -61,6 +61,7 @@ RUN apt-get update \
         libclang-dev \
         pkg-config \
         protobuf-compiler \
+        python3 \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
