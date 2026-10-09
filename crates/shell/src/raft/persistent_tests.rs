@@ -90,6 +90,26 @@ async fn reopen(
     }
 }
 
+/// Waits until the leader has applied everything it has appended.
+///
+/// This is the precondition for a membership change: `OpenRaft` refuses one while an
+/// earlier membership entry is uncommitted (`ChangeMembershipError::InProgress`), and a
+/// leader can exist — and even serve learner additions — before its first entry has
+/// committed. CI caught exactly that in the test below, on a loaded agent: a
+/// `change_membership` arrived while the `initialize` entry at index 0 was still
+/// uncommitted.
+async fn wait_applied(group: &RaftGroup) {
+    group
+        .raft()
+        .wait(Some(Duration::from_secs(5)))
+        .metrics(
+            |m| m.last_applied.map(|id| id.index) == m.last_log_index,
+            "applied",
+        )
+        .await
+        .unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
 async fn three_replicas_commit_and_recover_genesis() {
@@ -145,6 +165,9 @@ async fn three_replicas_commit_and_recover_genesis() {
         .current_leader(1, "leader")
         .await
         .unwrap();
+    // `initialize` writes the first membership entry; every membership change below
+    // needs it committed first, which is what `wait_applied` is for.
+    wait_applied(&groups[0]).await;
     for node in 2..=3 {
         groups[0]
             .raft()
@@ -152,6 +175,9 @@ async fn three_replicas_commit_and_recover_genesis() {
             .await
             .unwrap();
     }
+    // The learner additions are membership changes too, so the same precondition
+    // applies to the change that follows them.
+    wait_applied(&groups[0]).await;
     groups[0]
         .raft()
         .change_membership(BTreeSet::from([1, 2, 3]), false)

@@ -1,10 +1,36 @@
 # Buildkite CI health
 
-Status: **the three known failures are fixed in the repository; a pipeline run is the
-last check.** Verified locally where the fix allows it, listed below. The diagnosis that
-found them is in the commit messages (`fix(ci): …`) and the behaviour is documented in
-`docs/guardrails.md` and `docs/testing-services.md`, which is where it belongs now — so
-this note is down to what is *not* yet proven.
+Status: **build #22 ran the fixes and confirmed two of them on the agent; it also
+surfaced two failures nobody had seen.** Everything below is recorded, and the fixes for
+the new two are in the tree.
+
+What build #22 (`a524413`, the run after the CI commit) showed:
+
+| step | result |
+|---|---|
+| Build CI image | **passed** — including the advisory-database clone the audit fix depends on |
+| **Audit** | **passed** — the fix works on the agent (it failed every build before) |
+| Verify, Licenses | passed |
+| **Test services** | **the wait passed**: `nats is ready` → `keycloak is ready` → `the loomery realm is ready`. That is the point 11 of 11 builds failed at; the job then went on to compile and run the suite |
+| Docs (Mermaid + links) | **failed** — my own regression: the step gained `docs-links`, which is Python, and the image had no `python3` (`sh: 1: python3: not found`, status 127). Fixed by installing it |
+| Test | **failed** — a real latent race, not a regression: see below |
+| Quality (CRAP) | was still running when the run was read |
+
+## The race CI found in the Test step
+
+`three_replicas_commit_and_recover_genesis` panicked on `change_membership` with
+
+```
+ChangeMembershipError(InProgress { committed: None,
+  membership_log_id: Some(LogId { leader_id: LeaderId { term: 0, node_id: 1 }, index: 0 }) })
+```
+
+— a membership change asked for while the `initialize` entry at index 0 was still
+uncommitted. The test waited for a leader, which can exist before its first entry
+commits. It now waits for `last_applied == last_log_index` first, the same precondition
+`proposal_tests::boot` already used. **No product code calls `add_learner` or
+`change_membership`** — membership is set by the control plane — so this was test-only,
+and it is the kind of thing a local machine's timing hides.
 
 ## What was wrong, and what changed
 
@@ -28,10 +54,9 @@ this note is down to what is *not* yet proven.
 
 ## What is left
 
-1. **Run the pipeline** and read the result. Everything above is a local reproduction of
-   a CI-only failure; only a run on the agent proves the agent was the problem.
-2. If `test services` still fails, the job log will now name the half — Keycloak not up,
-   or up without the realm — and carry the container logs, which is the difference
-   between this and the 11 failures before it.
-3. `crap` was flaky in CI before this work (same commit, pass and fail, most likely the
+1. **A run on the next commit**: the two fixes above (python3, the membership wait) have
+   not been through the agent yet. The fixes they follow have.
+2. `crap` was flaky in CI before this work (same commit, pass and fail, most likely the
    coverage cache). Untouched, and worth watching in the same run.
+3. `branch_configuration` is `*` now, but no branch other than `main` has been pushed
+   since, so the change is read back from the API rather than observed in a build.
