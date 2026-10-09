@@ -181,9 +181,21 @@ more memory; background jobs trade CPU/I/O for compaction throughput.
 `max_open_files = -1` removes the file limit. LZ4 compression is enabled.
 
 Log entries use ordered binary index keys. Purge deletion and its floor marker
-are committed atomically. All writes retain the WAL and synchronize it before
-acknowledgment; these correctness guarantees are fixed. Blocking database
-operations run on Tokio's blocking pool. Raft stops on storage failure.
+are committed atomically. Blocking database operations run on Tokio's blocking
+pool. Raft stops on storage failure.
+
+**What is synchronised, and what that buys.** The *Raft log* retains the WAL and
+synchronizes it before acknowledgment: an entry is durable before it is committed
+and applied, and that is the durability boundary in both persistence modes. The
+apply batch that follows — the append-only record, the touched aggregate state and
+the applied marker, one atomic `WriteBatch` — is written *without* an explicit
+sync. A power cut can therefore lose the last window of applies, and the replica
+comes back behind its log and replays the difference; it cannot come back torn,
+because the marker is written in the same batch as the record it describes. The
+trade is one fsync per apply instead of two: 9.5% of throughput on the batched
+path ([measured](benchmarks/deployment-scale.md#the-per-command-cost-two-fsyncs-per-batch)).
+Snapshot mode has always worked this way, persisting no per-apply state at all.
+Snapshot persistence and purge stay synchronised.
 
 The initial durable state machine awaits a complete applied-state checkpoint
 (including applied events and dedup) after each apply batch. Raft snapshots are separate and follow

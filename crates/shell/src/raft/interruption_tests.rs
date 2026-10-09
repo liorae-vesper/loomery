@@ -25,6 +25,7 @@ use std::time::Duration;
 use loomery_core::Uuid;
 use loomery_core::actor::Actor;
 use loomery_core::envelope::Command;
+use loomery_core::envelope::Event;
 use loomery_core::envelope::Payload;
 use loomery_core::id::Id;
 use loomery_core::key::Key;
@@ -37,6 +38,9 @@ use openraft::RaftSnapshotBuilder;
 use openraft::storage::RaftLogReader;
 use openraft::storage::RaftLogStorage;
 use openraft::storage::RaftStateMachine;
+use rocksdb::IteratorMode;
+use rocksdb::WriteBatch;
+use rocksdb::WriteOptions;
 
 use crate::config::GroupConfig;
 use crate::config::StatePersistence;
@@ -391,5 +395,158 @@ async fn a_failed_purge_moves_neither_the_entries_nor_the_floor() {
         store.get_log_state().await.unwrap().last_purged_log_id,
         Some(floor),
         "the purge floor is durable on its own"
+    );
+}
+
+/// Boots a single-replica checkpoint group and waits for it to lead.
+///
+/// `initialize` is only for a database that has never held a cluster: a reopened one
+/// recovers its membership from its own log, and asking again is an error.
+async fn boot_checkpoint(path: &std::path::Path, initialize: bool) -> RaftGroup {
+    let group = RaftGroup::boot_persistent(
+        1,
+        "tenant".to_owned(),
+        path,
+        config(StatePersistence::Checkpoint),
+    )
+    .await
+    .unwrap();
+    if initialize {
+        group
+            .raft()
+            .initialize(BTreeMap::from([(1u64, BasicNode::default())]))
+            .await
+            .unwrap();
+    }
+    group
+        .raft()
+        .wait(Some(Duration::from_secs(5)))
+        .current_leader(1, "leader")
+        .await
+        .unwrap();
+    group
+}
+
+/// Applies [`COMMANDS`] commands and stops the replica, freeing the database.
+async fn apply_and_stop(path: &std::path::Path) -> Vec<Event> {
+    let mut group = boot_checkpoint(path, true).await;
+    for index in 0..COMMANDS {
+        group.propose(task_command(index)).await.unwrap();
+    }
+    let record = group
+        .committed_events(&Id::from(ORGANIZATION))
+        .await
+        .unwrap();
+    assert_eq!(record.len() as u64, COMMANDS);
+    group.shutdown().await.unwrap();
+    drop(group);
+    record
+}
+
+/// Deletes what an apply wrote, so the replica comes back behind its log.
+///
+/// The state family's aggregates, dedup entries and markers go — and, when `record`
+/// is set, the append-only record they were written *with*, which is the same
+/// `WriteBatch`. `state_persistence` and `snapshot` survive: their own synced paths
+/// wrote them, and they are not what a lost apply takes with it.
+async fn drop_applied_writes(path: &std::path::Path, record: bool) {
+    let disk = test_disk::open(path, &StorageConfig::default())
+        .await
+        .unwrap();
+    disk.run(move |db| {
+        let mut batch = WriteBatch::default();
+        let state = Family::State.handle(db)?;
+        for item in db.iterator_cf(state, IteratorMode::Start) {
+            let (key, _) = item?;
+            if key.as_ref() != b"state_persistence" && key.as_ref() != b"snapshot" {
+                batch.delete_cf(state, key);
+            }
+        }
+        if record {
+            let events = Family::Events.handle(db)?;
+            for item in db.iterator_cf(events, IteratorMode::Start) {
+                let (key, _) = item?;
+                batch.delete_cf(events, key);
+            }
+        }
+        db.write_opt(batch, &WriteOptions::default())?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    drop(disk);
+}
+
+/// Reopens the replica and requires the record to come back exactly once.
+async fn reopen_and_expect(path: &std::path::Path, expected: &[Event]) {
+    let group = boot_checkpoint(path, false).await;
+    group
+        .raft()
+        .wait(Some(Duration::from_secs(10)))
+        .metrics(
+            |m| m.last_applied.map(|id| id.index) == m.last_log_index,
+            "replayed",
+        )
+        .await
+        .unwrap();
+    let recovered = group
+        .committed_events(&Id::from(ORGANIZATION))
+        .await
+        .unwrap();
+    assert_eq!(
+        recovered.len(),
+        expected.len(),
+        "recovery produced a different number of events than were applied"
+    );
+    assert_eq!(
+        recovered, expected,
+        "recovery rebuilt the record, once, from the log"
+    );
+    group.shutdown().await.unwrap();
+}
+
+/// A lost apply is repaired by replaying the log.
+///
+/// The checkpoint write is not the durability boundary — the Raft log is, and it is
+/// synced before a command is committed. A lost unsynced batch therefore leaves the
+/// replica behind its log but still *consistent*, because an apply writes its state,
+/// its record and its marker in one `WriteBatch`: the marker moves exactly as far as
+/// the record does. `OpenRaft` then replays from the marker it finds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lost_state_write_is_repaired_by_replaying_the_log() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+
+    let expected = apply_and_stop(path).await;
+    drop_applied_writes(path, true).await;
+    reopen_and_expect(path, &expected).await;
+}
+
+/// A store whose record has no marker is refused rather than guessed at.
+///
+/// An apply writes the record and its marker in one `WriteBatch`, so this is not a
+/// store a crash can produce. Both available guesses corrupt the record — keeping it
+/// duplicates every event on replay, dropping it loses events no log may still hold —
+/// so opening fails closed, the same choice the database's layout marker makes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_record_without_its_marker_is_refused_rather_than_guessed() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+
+    let _applied = apply_and_stop(path).await;
+    drop_applied_writes(path, false).await;
+
+    let error = RaftGroup::boot_persistent(
+        1,
+        "tenant".to_owned(),
+        path,
+        config(StatePersistence::Checkpoint),
+    )
+    .await
+    .err()
+    .expect("an inconsistent store must not be opened");
+    assert!(
+        error.to_string().contains("no applied marker"),
+        "unexpected error: {error}"
     );
 }

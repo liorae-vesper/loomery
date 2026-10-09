@@ -506,8 +506,30 @@ impl MemStateMachine {
             // appending the events it produces. Pre-loading the record there would
             // double-count exactly those events, so this mode restores the
             // snapshot's own history and lets the replay extend it.
-            let recorded = disk.run(load_record).await?;
+            let mut recorded = disk.run(load_record).await?;
             let mut state = machine.state.write().await;
+            // The marker says how much of the record is already folded, and Raft
+            // resumes after it, so anything past it is re-derived. An apply writes its
+            // events and its marker in one atomic `WriteBatch`, so a crash cannot
+            // leave the record ahead of the marker — but if one ever did, the replay
+            // would append those events a second time, and a duplicated D13 record is
+            // silent corruption. Keeping only what the marker covers makes the replay
+            // idempotent by construction.
+            if let Some(through) = state.last_applied_log.map(|id| id.index) {
+                // The marker says how much of the record is already folded, and Raft
+                // resumes after it, so anything past it is re-derived: keeping it
+                // would append those events a second time.
+                recorded.retain(|applied| applied.log_index <= through);
+            } else if !recorded.is_empty() {
+                // An apply writes the record and its marker in one `WriteBatch`, so a
+                // record with no marker is not a store a crash can produce — and both
+                // guesses corrupt it: keeping the record duplicates every event on
+                // replay, dropping it loses events no log may still hold. Fail closed,
+                // as the layout marker does.
+                anyhow::bail!(
+                    "the applied record has events but no applied marker: refusing to guess"
+                );
+            }
             if !recorded.is_empty() {
                 state.applied = recorded;
                 state.rebuild_members();
@@ -532,6 +554,18 @@ impl MemStateMachine {
     /// cost the size of the batch rather than the size of the history (D13 step 2).
     /// Snapshot mode persists no state per apply: recovery replays the log into the
     /// state a snapshot carried.
+    ///
+    /// **This batch is not synced, and does not need to be.** The Raft log is, and it
+    /// is durable before the entry it carries is committed and applied, so the log —
+    /// with the snapshots behind it — is the durability boundary in *both* modes.
+    /// Losing this batch to a power cut therefore leaves the replica behind its log
+    /// but consistent with itself, because everything below is one `WriteBatch`: the
+    /// record, the state and the applied marker move together or not at all. Recovery
+    /// replays the difference, which trades an fsync per apply for one fsync-window
+    /// of replay — 9.5% of throughput on the batched path, measured in
+    /// `docs/benchmarks/deployment-scale.md`. Restoring `set_sync(true)` here buys
+    /// back the shorter replay and nothing else; the tests that pin the recovery
+    /// repair are `raft/interruption_tests.rs`.
     async fn write_applied(&self, batch: Vec<AppliedEvent>) -> Result<(), io::Error> {
         let Some(disk) = &self.disk else {
             return Ok(());
@@ -616,8 +650,10 @@ impl MemStateMachine {
                     batch.put_cf(family, key, value);
                 }
             }
+            // Deliberately unsynced: the Raft log is the durability boundary, and it
+            // is durable before this entry was committed. See the doc comment.
             let mut options = WriteOptions::default();
-            options.set_sync(true);
+            options.set_sync(false);
             db.write_opt(batch, &options)?;
             Ok(())
         })
@@ -1228,6 +1264,34 @@ pub mod timings {
         ] {
             counter.store(0, Ordering::Relaxed);
         }
+    }
+}
+
+#[cfg(test)]
+mod timings_tests {
+    use super::timings;
+    use std::time::Instant;
+
+    /// The report is per command, and a report ends the phase it describes.
+    ///
+    /// The harness is the only other caller, so without this the arithmetic and the
+    /// reset would be exercised only by a benchmark run — and the counters are
+    /// process-wide, which is exactly the kind of state a test should pin.
+    #[test]
+    fn the_report_is_per_command_and_resets() {
+        timings::reset();
+        timings::add_count(&timings::ENTRIES, 1);
+        timings::add_count(&timings::COMMANDS, 4);
+        timings::add(&timings::APPLY_NS, Instant::now());
+        let report = timings::report();
+        assert!(report.starts_with("1 entries, 4 commands"), "{report}");
+        assert!(report.contains("us/command: parse"), "{report}");
+        assert!(report.contains("| total "), "{report}");
+
+        timings::reset();
+        let cleared = timings::report();
+        assert!(cleared.starts_with("0 entries, 0 commands"), "{cleared}");
+        assert!(cleared.contains("| total 0.00"), "{cleared}");
     }
 }
 

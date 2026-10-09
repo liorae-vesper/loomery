@@ -495,7 +495,70 @@ pipelined replication, which attacks the *per-entry round trip* — and that is 
 the cost batching has already amortized: at 256 commands per entry the path is
 spending ~0.048 ms per command on work, not waiting on replication. So pipelining has
 little left to win here, and the next lever is the per-command work itself (apply and
-the durable write), not the network.
+the durable write), not the network — which is what the next section measures.
+
+## The per-command cost: two fsyncs per batch
+
+The lever above is per-command work, so the apply path was **instrumented** rather
+than profiled: `perf` is absent in these environments and `perf_event_paranoid` would
+refuse it. `LOOMERY_APPLY_TIMINGS=1` times four phases — the log store's JSON parse,
+the core apply loop, the durable write's serialisation, and each of the two synced
+`RocksDB` writes — and the harness reads them back at each phase boundary
+(`Request::Timings`; the node answers and resets, so a report covers exactly the phase
+that ended). Count mode or `--extra '{"duration_ms":60000}'`, 3 trials, this machine.
+
+Per command at 3 nodes, concurrency 256, 253 commands per entry, 20,000 events
+(`20261008210912-per-command-full-split`):
+
+| phase | µs/command | what it is |
+|---|---|---|
+| **state write** | **13.5** | the apply batch's `WriteBatch` + **fsync** |
+| **log write** | **6.5** | the Raft log's `WriteBatch` + **fsync** |
+| apply | 4.5 | decode, validate, transition, build the event |
+| parse | 4.3 leader, 1.3 follower | JSON of the log entry |
+| state serialise | 2.4 | events, touched aggregate state, dedup |
+| log encode | 0.8 | `serde_json::to_vec` of the entry |
+| **attributed** | **32** | of a 51 µs/command wall |
+
+The two writes are the bulk of it, and they go to the **same `RocksDB` instance**:
+two fsyncs per apply batch. Batching hides that — 253 commands share them — but the
+default deployment path does not batch, and there they were paid **per command**.
+
+Dropping the sync on the apply batch (the Raft log keeps its own) is worth:
+
+| configuration | sync on | dropped | |
+|---|---|---|---|
+| 3 nodes, concurrency 8, unbatched — the default path | 913 w/s | **1,225 w/s** | **+34%** |
+| 3 nodes, concurrency 8, unbatched, snapshot mode | 888 w/s | 1,212 w/s | +36% |
+| 3 nodes, concurrency 256, batch 253 | 21,250 w/s | 21,638 w/s | +1.8% |
+
+The default-path pair is `20261008214117-drop-default-c8` against
+`20261008214337-control-default-c8` — the same code minutes later with one line set
+back to `set_sync(true)`, so this is not a faster machine. The batched row compares
+`20261008212433-per-command-drop` with the recorded `20261008173020-shipped-c256-rerun`,
+and its difference sits inside the ±4% trial spread. That is the same finding twice: at
+253 commands per entry the fsyncs are amortised, so there was nothing left to win; at
+one command per entry each fsync is the whole cost.
+
+A single-trial version of this comparison read +9.5% at the batched configuration and
+was wrong — the per-trial spread there is ±4%, and 3 trials put it at +1.8%. The
+default-path arms are 3 trials with a control, and the effect is 20× the spread.
+
+**Why dropping it is safe, and what it costs.** The Raft log is synced before the entry
+it carries is committed and applied, so the log — with the snapshots behind it — is the
+durability boundary in *both* persistence modes. Losing the apply batch to a power cut
+leaves the replica behind its log and consistent with itself, because the record, the
+state and the applied marker are one `WriteBatch`; recovery replays the difference.
+What it costs is that replay: one fsync-window of applies instead of the shorter
+catch-up a synced checkpoint bought. [raft-configuration.md](../raft-configuration.md)
+states the model, and `raft/interruption_tests.rs` pins it: a lost apply is repaired by
+replay, and a store whose record has no marker is refused rather than guessed at.
+
+**What these tests are not.** `SIGKILL` leaves the page cache intact, so neither the
+failure-injection suite nor the interruption tests exercise the *loss* — only a power
+cut does. The argument for safety is the ordering (log durable before commit, one
+atomic batch after it) and the tests are what would catch a recovery that cannot
+repair. That is worth knowing before anyone claims the trade is "tested".
 
 ## The single node that was slower than three
 

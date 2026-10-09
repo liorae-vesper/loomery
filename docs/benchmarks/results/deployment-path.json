@@ -2656,6 +2656,304 @@
           "distinct_log_indices": 79
         }
       ]
+    },
+    {
+      "directory": "20261008210711-per-command-split",
+      "overrides": {
+        "concurrency": 256,
+        "group": {
+          "proposals": {
+            "max_batch_commands": 256,
+            "max_batch_bytes": 262144,
+            "max_delay_ms": 1,
+            "queue_capacity": 2048
+          }
+        }
+      },
+      "phase_timeout_ms": 900000,
+      "git_commit": "d7a4719b56357e26d60a4bab3f7be64df89df461",
+      "cpu": "model name\t: AMD Ryzen 9 7900 12-Core Processor",
+      "memory_kb": "MemTotal:       31976308 kB",
+      "build_profile": "release",
+      "points": [
+        {
+          "mode": "checkpoint",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 1,
+          "bytes_on_disk": 97256049,
+          "seconds": 2.8,
+          "throughput_per_second": 20407.205376074184,
+          "p50_us": 12121,
+          "p95_us": 14299,
+          "p99_us": 21655,
+          "events_verified": 20100,
+          "commands_per_log_index": 253.16455696202533,
+          "distinct_log_indices": 79
+        },
+        {
+          "mode": "snapshot",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 1,
+          "bytes_on_disk": 107910396,
+          "seconds": 2.7,
+          "throughput_per_second": 23613.113306343545,
+          "p50_us": 10736,
+          "p95_us": 11961,
+          "p99_us": 12414,
+          "events_verified": 20100,
+          "commands_per_log_index": 253.16455696202533,
+          "distinct_log_indices": 79
+        }
+      ]
+    },
+    {
+      "directory": "20261008210818-per-command-nosync",
+      "overrides": {
+        "concurrency": 256,
+        "group": {
+          "proposals": {
+            "max_batch_commands": 256,
+            "max_batch_bytes": 262144,
+            "max_delay_ms": 1,
+            "queue_capacity": 2048
+          }
+        }
+      },
+      "phase_timeout_ms": 900000,
+      "git_commit": "d7a4719b56357e26d60a4bab3f7be64df89df461",
+      "cpu": "model name\t: AMD Ryzen 9 7900 12-Core Processor",
+      "memory_kb": "MemTotal:       31976308 kB",
+      "build_profile": "release",
+      "points": [
+        {
+          "mode": "checkpoint",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 1,
+          "bytes_on_disk": 97250275,
+          "seconds": 2.7,
+          "throughput_per_second": 22350.4142649284,
+          "p50_us": 11250,
+          "p95_us": 12653,
+          "p99_us": 13962,
+          "events_verified": 20100,
+          "commands_per_log_index": 253.16455696202533,
+          "distinct_log_indices": 79
+        },
+        {
+          "mode": "snapshot",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 1,
+          "bytes_on_disk": 107906860,
+          "seconds": 2.6,
+          "throughput_per_second": 24436.04658976643,
+          "p50_us": 10171,
+          "p95_us": 11095,
+          "p99_us": 17871,
+          "events_verified": 20100,
+          "commands_per_log_index": 253.16455696202533,
+          "distinct_log_indices": 79
+        }
+      ]
+    },
+    {
+      "directory": "20261008210912-per-command-full-split",
+      "overrides": {
+        "concurrency": 256,
+        "group": {
+          "proposals": {
+            "max_batch_commands": 256,
+            "max_batch_bytes": 262144,
+            "max_delay_ms": 1,
+            "queue_capacity": 2048
+          }
+        }
+      },
+      "phase_timeout_ms": 900000,
+      "git_commit": "d7a4719b56357e26d60a4bab3f7be64df89df461",
+      "cpu": "model name\t: AMD Ryzen 9 7900 12-Core Processor",
+      "memory_kb": "MemTotal:       31976308 kB",
+      "build_profile": "release",
+      "points": [
+        {
+          "mode": "checkpoint",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 1,
+          "bytes_on_disk": 97255487,
+          "seconds": 2.8,
+          "throughput_per_second": 19555.80934650352,
+          "p50_us": 12844,
+          "p95_us": 14460,
+          "p99_us": 14909,
+          "events_verified": 20100,
+          "commands_per_log_index": 253.16455696202533,
+          "distinct_log_indices": 79
+        },
+        {
+          "mode": "snapshot",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 1,
+          "bytes_on_disk": 107908585,
+          "seconds": 2.7,
+          "throughput_per_second": 21942.72072182774,
+          "p50_us": 11461,
+          "p95_us": 13116,
+          "p99_us": 13972,
+          "events_verified": 20100,
+          "commands_per_log_index": 253.16455696202533,
+          "distinct_log_indices": 79
+        }
+      ]
+    },
+    {
+      "directory": "20261008212433-per-command-drop",
+      "overrides": {
+        "concurrency": 256,
+        "group": {
+          "proposals": {
+            "max_batch_commands": 256,
+            "max_batch_bytes": 262144,
+            "max_delay_ms": 1,
+            "queue_capacity": 2048
+          }
+        }
+      },
+      "phase_timeout_ms": 900000,
+      "git_commit": "046942379c88e4ace7cd631967750b9f676b2b3d",
+      "cpu": "model name\t: AMD Ryzen 9 7900 12-Core Processor",
+      "memory_kb": "MemTotal:       31976308 kB",
+      "build_profile": "release",
+      "points": [
+        {
+          "mode": "checkpoint",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 3,
+          "bytes_on_disk": 291563406,
+          "seconds": 8.0,
+          "throughput_per_second": 21638.417712343202,
+          "p50_us": 11635,
+          "p95_us": 12824,
+          "p99_us": 15060,
+          "events_verified": 20100,
+          "commands_per_log_index": 253.16455696202533,
+          "distinct_log_indices": 79
+        },
+        {
+          "mode": "snapshot",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 3,
+          "bytes_on_disk": 323486658,
+          "seconds": 7.6,
+          "throughput_per_second": 25637.837345868527,
+          "p50_us": 9689,
+          "p95_us": 10614,
+          "p99_us": 12250,
+          "events_verified": 20100,
+          "commands_per_log_index": 253.16455696202533,
+          "distinct_log_indices": 79
+        }
+      ]
+    },
+    {
+      "directory": "20261008214117-drop-default-c8",
+      "overrides": {},
+      "phase_timeout_ms": 900000,
+      "git_commit": "046942379c88e4ace7cd631967750b9f676b2b3d",
+      "cpu": "model name\t: AMD Ryzen 9 7900 12-Core Processor",
+      "memory_kb": "MemTotal:       31976308 kB",
+      "build_profile": "release",
+      "points": [
+        {
+          "mode": "checkpoint",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 3,
+          "bytes_on_disk": 610854003,
+          "seconds": 57.7,
+          "throughput_per_second": 1224.7347928661159,
+          "p50_us": 6048,
+          "p95_us": 7184,
+          "p99_us": 8711,
+          "events_verified": 20100,
+          "commands_per_log_index": 1.0,
+          "distinct_log_indices": 20000
+        },
+        {
+          "mode": "snapshot",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 3,
+          "bytes_on_disk": 547074436,
+          "seconds": 57.1,
+          "throughput_per_second": 1212.3919061686258,
+          "p50_us": 6063,
+          "p95_us": 7193,
+          "p99_us": 17244,
+          "events_verified": 20100,
+          "commands_per_log_index": 1.0,
+          "distinct_log_indices": 20000
+        }
+      ]
+    },
+    {
+      "directory": "20261008214337-control-default-c8",
+      "overrides": {},
+      "phase_timeout_ms": 900000,
+      "git_commit": "046942379c88e4ace7cd631967750b9f676b2b3d",
+      "cpu": "model name\t: AMD Ryzen 9 7900 12-Core Processor",
+      "memory_kb": "MemTotal:       31976308 kB",
+      "build_profile": "release",
+      "points": [
+        {
+          "mode": "checkpoint",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 3,
+          "bytes_on_disk": 610843640,
+          "seconds": 74.1,
+          "throughput_per_second": 913.1178834731005,
+          "p50_us": 8084,
+          "p95_us": 9306,
+          "p99_us": 22049,
+          "events_verified": 20100,
+          "commands_per_log_index": 1.0,
+          "distinct_log_indices": 20000
+        },
+        {
+          "mode": "snapshot",
+          "operations": 20000,
+          "harness_ok": true,
+          "failed_trials": 0,
+          "trials": 3,
+          "bytes_on_disk": 547086796,
+          "seconds": 75.1,
+          "throughput_per_second": 888.4554016267085,
+          "p50_us": 8134,
+          "p95_us": 9637,
+          "p99_us": 26573,
+          "events_verified": 20100,
+          "commands_per_log_index": 1.0,
+          "distinct_log_indices": 20000
+        }
+      ]
     }
   ]
 }
