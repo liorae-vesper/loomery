@@ -160,6 +160,7 @@ fn status(raft: &Consensus) -> Status {
         purged: metrics.purged.map(|id| id.index),
     }
 }
+#[allow(clippy::too_many_lines)] // One arm per control request; the sequence is the protocol.
 async fn handle(group: &RaftGroup, request: Request, config: &Config) -> anyhow::Result<Reply> {
     let raft = group.raft();
     let timeout = Duration::from_millis(config.phase_timeout_ms);
@@ -226,6 +227,11 @@ async fn handle(group: &RaftGroup, request: Request, config: &Config) -> anyhow:
         }
         Request::Audit { index, phases } => audit(group, index, phases, config).await,
         Request::Status => Ok(Reply::Status(status(&raft))),
+        Request::Timings => {
+            let report = loomery_shell::raft::timings::report();
+            loomery_shell::raft::timings::reset();
+            Ok(Reply::Timings { report })
+        }
         Request::Check { index, events } => {
             let started = Instant::now();
             raft.wait(Some(timeout))

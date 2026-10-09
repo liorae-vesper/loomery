@@ -62,6 +62,7 @@ pub use proposal::ProposalWriter;
 pub use rocks_log_store::RocksLogStore;
 pub use state_machine::AppliedEvent;
 pub use state_machine::MemStateMachine;
+pub use state_machine::timings;
 
 /// `OpenRaft` 0.10 type aliases bound to [`TypeConfig`].
 ///

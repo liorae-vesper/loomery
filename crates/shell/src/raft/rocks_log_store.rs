@@ -33,9 +33,13 @@ fn key(index: u64) -> Vec<u8> {
     key
 }
 fn write(db: &rocksdb::DB, batch: WriteBatch) -> anyhow::Result<()> {
+    let started = super::state_machine::timings::enabled().then(std::time::Instant::now);
     let mut options = WriteOptions::default();
     options.set_sync(true);
     db.write_opt(batch, &options)?;
+    if let Some(started) = started {
+        super::state_machine::timings::add(&super::state_machine::timings::LOG_WRITE_NS, started);
+    }
     Ok(())
 }
 fn meta<T: DeserializeOwned>(
@@ -99,6 +103,7 @@ impl RaftLogReader<TypeConfig> for RocksLogStore {
                     Bound::Unbounded => 0,
                 };
                 let mut entries = Vec::new();
+                let timed = super::state_machine::timings::enabled();
                 for item in db.iterator_cf(
                     family,
                     IteratorMode::From(&key(first), rocksdb::Direction::Forward),
@@ -107,7 +112,14 @@ impl RaftLogReader<TypeConfig> for RocksLogStore {
                     if !key.starts_with(b"l") {
                         break;
                     }
+                    let parse_started = timed.then(std::time::Instant::now);
                     let entry: EntryOf = serde_json::from_slice(&value)?;
+                    if let Some(started) = parse_started {
+                        super::state_machine::timings::add(
+                            &super::state_machine::timings::PARSE_NS,
+                            started,
+                        );
+                    }
                     let index = entry.log_id.index;
                     if match end {
                         Bound::Included(n) => index > n,
@@ -196,8 +208,23 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
             .run(move |db| {
                 let family = Family::RaftLog.handle(db)?;
                 let mut batch = WriteBatch::default();
+                let timed = super::state_machine::timings::enabled();
+                let encode_started = timed.then(std::time::Instant::now);
                 for entry in entries {
-                    batch.put_cf(family, key(entry.log_id.index), serde_json::to_vec(&entry)?);
+                    let value = serde_json::to_vec(&entry)?;
+                    if timed {
+                        super::state_machine::timings::add_count(
+                            &super::state_machine::timings::LOG_BYTES,
+                            value.len() as u64,
+                        );
+                    }
+                    batch.put_cf(family, key(entry.log_id.index), value);
+                }
+                if let Some(started) = encode_started {
+                    super::state_machine::timings::add(
+                        &super::state_machine::timings::LOG_SERIALIZE_NS,
+                        started,
+                    );
                 }
                 write(db, batch)
             })

@@ -149,6 +149,9 @@ pub enum Request {
         index: u64,
         phases: BTreeMap<String, usize>,
     },
+    /// The replica's apply-phase breakdown. The node zeroes its counters when it
+    /// answers, so asking at each phase boundary scopes a report to that phase.
+    Timings,
     Snapshot {
         index: u64,
     },
@@ -200,6 +203,9 @@ pub enum Reply {
         status: Status,
     },
     Status(Status),
+    Timings {
+        report: String,
+    },
     Checked {
         elapsed_us: u64,
         events: usize,

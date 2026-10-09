@@ -537,6 +537,7 @@ impl MemStateMachine {
             return Ok(());
         };
         let checkpoint = self.persistence == crate::config::StatePersistence::Checkpoint;
+        let serialize_started = timings::enabled().then(std::time::Instant::now);
 
         let mut events = Vec::with_capacity(batch.len());
         for applied in &batch {
@@ -594,6 +595,10 @@ impl MemStateMachine {
             None
         };
 
+        if let Some(started) = serialize_started {
+            timings::add(&timings::SERIALIZE_NS, started);
+        }
+        let write_started = timings::enabled().then(std::time::Instant::now);
         disk.run(move |db| {
             let mut batch = WriteBatch::default();
             if let Some((writes, deletes)) = delta {
@@ -618,6 +623,9 @@ impl MemStateMachine {
         })
         .await
         .map_err(|error| io::Error::other(error.to_string()))?;
+        if let Some(started) = write_started {
+            timings::add(&timings::WRITE_NS, started);
+        }
         Ok(())
     }
 
@@ -1113,18 +1121,142 @@ fn to_u64(index: usize) -> u64 {
 /// Keeping the batch logic out of the [`RaftStateMachine`] impl is what lets the
 /// batching, dedup and persistence behaviour be tested without an `OpenRaft`
 /// responder: 0.10 only hands responders to the trait method.
+/// Where the apply path spends its time, for the benchmark harness.
+///
+/// There is no profiler in these environments (`perf` is absent, and
+/// `perf_event_paranoid` would refuse it), so the phases are timed directly: one
+/// `Instant::now()` on each side of a batch, collected in process-wide counters and
+/// read back through [`report`]. Collection is off unless `LOOMERY_APPLY_TIMINGS` is
+/// set, and the calls are skipped entirely when it is off, so an unmeasured run
+/// executes the production path unchanged.
+///
+/// The split is deliberately coarse — parse, apply, serialise, write — because those
+/// are the four things a fix can change independently: the JSON the log store reads,
+/// the core's work per command, the JSON the state machine writes, and `RocksDB`'s
+/// write including its fsync.
+pub mod timings {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Instant;
+
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+
+    /// Parsing log entries out of JSON, on the log store's read path.
+    pub static PARSE_NS: AtomicU64 = AtomicU64::new(0);
+    /// The core apply for a batch: decode a command, validate, transition, build the
+    /// event; includes copying the batch's own events out of the history.
+    pub static APPLY_NS: AtomicU64 = AtomicU64::new(0);
+    /// Building the durable write's payloads: the events, the touched aggregates'
+    /// state, the dedup triples.
+    pub static SERIALIZE_NS: AtomicU64 = AtomicU64::new(0);
+    /// The `RocksDB` write itself, which is synchronous — one fsync per batch.
+    pub static WRITE_NS: AtomicU64 = AtomicU64::new(0);
+    /// Encoding the log entry for the Raft log, on the way in.
+    pub static LOG_SERIALIZE_NS: AtomicU64 = AtomicU64::new(0);
+    /// The Raft log's own synchronous write — the second fsync per batch.
+    pub static LOG_WRITE_NS: AtomicU64 = AtomicU64::new(0);
+    /// Bytes of encoded log entries, against their commands.
+    pub static LOG_BYTES: AtomicU64 = AtomicU64::new(0);
+    /// What the per-command rates are divided by.
+    pub static ENTRIES: AtomicU64 = AtomicU64::new(0);
+    /// How many commands the timed entries carried.
+    pub static COMMANDS: AtomicU64 = AtomicU64::new(0);
+
+    /// Whether the counters are being collected.
+    pub fn enabled() -> bool {
+        *ENABLED.get_or_init(|| std::env::var_os("LOOMERY_APPLY_TIMINGS").is_some())
+    }
+
+    /// Adds the time since `start` to `counter`.
+    #[inline]
+    pub fn add(counter: &AtomicU64, start: Instant) {
+        let nanos = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        counter.fetch_add(nanos, Ordering::Relaxed);
+    }
+
+    /// Adds to a counter.
+    #[inline]
+    pub fn add_count(counter: &AtomicU64, count: u64) {
+        counter.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// The totals as microseconds per command — the unit the benchmark reports in —
+    /// with the counts they were divided by.
+    ///
+    /// `cast_precision_loss` is allowed because this is a diagnostic: at millisecond
+    /// totals the mantissa's width is irrelevant, and reporting in `f64` is the point.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn report() -> String {
+        let commands = COMMANDS.load(Ordering::Relaxed).max(1);
+        let per_command =
+            |counter: &AtomicU64| counter.load(Ordering::Relaxed) as f64 / 1000.0 / commands as f64;
+        let (parse, apply, serialize, write) = (
+            per_command(&PARSE_NS),
+            per_command(&APPLY_NS),
+            per_command(&SERIALIZE_NS),
+            per_command(&WRITE_NS),
+        );
+        let (log_serialize, log_write) =
+            (per_command(&LOG_SERIALIZE_NS), per_command(&LOG_WRITE_NS));
+        let commands = COMMANDS.load(Ordering::Relaxed).max(1);
+        format!(
+            "{} entries, {} commands, {} B/command in the log | us/command: parse {parse:.2} \
+             apply {apply:.2} serialize {serialize:.2} write {write:.2} | log: encode \
+             {log_serialize:.2} write {log_write:.2} | total {:.2}",
+            ENTRIES.load(Ordering::Relaxed),
+            COMMANDS.load(Ordering::Relaxed),
+            LOG_BYTES
+                .load(Ordering::Relaxed)
+                .checked_div(commands)
+                .unwrap_or(0),
+            parse + apply + serialize + write + log_serialize + log_write,
+        )
+    }
+
+    /// Zeroes every counter, so the next report covers only what follows.
+    pub fn reset() {
+        for counter in [
+            &PARSE_NS,
+            &APPLY_NS,
+            &SERIALIZE_NS,
+            &WRITE_NS,
+            &LOG_SERIALIZE_NS,
+            &LOG_WRITE_NS,
+            &LOG_BYTES,
+            &ENTRIES,
+            &COMMANDS,
+        ] {
+            counter.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
 pub(super) async fn apply_batch(
     machine: &MemStateMachine,
     entries: Vec<EntryOf>,
 ) -> Result<Vec<Applied>, io::Error> {
+    let timed = timings::enabled();
     let mut responses = Vec::new();
     let mut group = machine.state.write().await;
     // Everything appended to the in-memory history while applying this batch is
     // this batch's share of the record.
     let recorded_from = group.applied.len();
     group.begin_batch();
+    let started = timed.then(std::time::Instant::now);
+    let (mut entries_seen, mut commands_seen) = (0_u64, 0_u64);
 
     for entry in entries {
+        entries_seen = entries_seen.saturating_add(1);
+        match &entry.payload {
+            EntryPayload::Normal(AppData::Command(_)) => {
+                commands_seen = commands_seen.saturating_add(1);
+            }
+            EntryPayload::Normal(AppData::Batch(commands)) => {
+                let count = u64::try_from(commands.len()).unwrap_or(u64::MAX);
+                commands_seen = commands_seen.saturating_add(count);
+            }
+            EntryPayload::Blank | EntryPayload::Membership(_) => {}
+        }
         let log_index = entry.log_id.index;
         group.last_applied_log = Some(entry.log_id);
 
@@ -1163,6 +1295,11 @@ pub(super) async fn apply_batch(
         .unwrap_or_default()
         .to_vec();
     drop(group);
+    if let Some(started) = started {
+        timings::add(&timings::APPLY_NS, started);
+        timings::add_count(&timings::ENTRIES, entries_seen);
+        timings::add_count(&timings::COMMANDS, commands_seen);
+    }
     machine.write_applied(batch).await?;
     Ok(responses)
 }

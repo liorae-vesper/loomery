@@ -203,6 +203,26 @@ async fn batch(
         other => anyhow::bail!("expected batch, got {other:?}"),
     }
 }
+/// Prints each replica's apply-phase breakdown, and zeroes its counters.
+///
+/// Silent — and free — unless `LOOMERY_APPLY_TIMINGS` is set, because collection is
+/// off without it. The node resets when it answers, so each call reports exactly the
+/// phase that just ended.
+async fn report_timings(processes: &mut [Process], phase: &str) -> anyhow::Result<()> {
+    if !loomery_shell::raft::timings::enabled() {
+        return Ok(());
+    }
+    for process in processes.iter_mut().filter(|p| p.alive) {
+        match process.request(&Request::Timings).await? {
+            Reply::Timings { report } => {
+                println!("timings {phase} node {}: {report}", process.spec.id);
+            }
+            other => anyhow::bail!("expected timings, got {other:?}"),
+        }
+    }
+    Ok(())
+}
+
 async fn check(processes: &mut [Process], index: u64, events: usize) -> anyhow::Result<Vec<Check>> {
     let mut result = Vec::new();
     for process in processes.iter_mut().filter(|p| p.alive) {
@@ -391,7 +411,10 @@ async fn trial(config: &Config, root: &Path, number: usize) -> anyhow::Result<Tr
     if config.warmup > 0 {
         check(&mut processes, last_index(&warmup)?, config.warmup).await?;
     }
+    // Drop the warmup's numbers so the measured phase reports only itself.
+    report_timings(&mut processes, "warmup").await?;
     let (writes, mut events) = measure_writes(&mut processes, leader_id, config).await?;
+    report_timings(&mut processes, "measured").await?;
     save(&root.join("write-samples.json"), &writes).await?;
     anyhow::ensure!(
         writes.summary.failures == 0,
