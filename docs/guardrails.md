@@ -9,15 +9,15 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 | Lint / static analysis | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Tests | `cargo test --workspace` |
 | Coverage report/floor | `cargo llvm-cov` via `cargo-llvm-cov` (floor: 80%) |
-| Dependency advisories | `cargo audit` |
+| Dependency advisories | `cargo audit`. CI runs it `--no-fetch` against the database the CI image clones at build time (`/opt/rustsec-advisory-db`): fetching into the mounted cache volume failed on the agent with `Device or resource busy`, and a database cloned during the image build is as fresh as the run |
 | License allowlist + bans | `cargo deny check` (`deny.toml`) |
 | Pre-commit hooks | `hk` (commit-msg + check/fix hooks) |
 | Commit message lint | `cog verify` (conventional commits, cocogitto) |
 | Combined dev gate | `mise run verify` (see `mise.toml`) |
 | Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap; skips `**/*_tests.rs`, `loomery-server`'s `main.rs` (the binary is a single file) and the `JetStream` adapter) |
 | Diagram syntax | `mise run docs-mermaid` (`tools/mermaid-check/`: every ```` ```mermaid ```` block in `docs/`, `README.md` and `workpad/` must parse) |
+| Documentation links | `mise run docs-links` (`tools/docs-links/`) — both run in the pipeline's docs step |
 | Lint policy | `[workspace.lints]` in `Cargo.toml`: deny `unwrap_used`, `expect_used`, `indexing_slicing`, `string_slice`, `arithmetic_side_effects`, `unchecked_time_subtraction`, `todo`, `unimplemented`, `panic`, `unconditional_panic`; warn on `missing_docs`. Enforced by `cargo clippy --workspace --all-targets -- -D warnings` |
-| Documentation links | `mise run docs-links` (`tools/docs-links/`: relative links resolve, `#anchors` match a heading in the target, every published document is reachable from `docs/README.md`, a benchmark run named in the prose exists in the committed results, and no published page links into `workpad/`) |
 
 ## The `cargo deny` policy (`deny.toml`)
 
@@ -52,8 +52,10 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
    feature is requested explicitly rather than inherited from a default.
 3. **`hk fix`** runs `cargo fmt` to auto-format.
 4. **CI** — [`.buildkite/pipeline.yml`](../.buildkite/pipeline.yml) runs verify,
-   tests, licenses, docs, quality (`mise run crap`), audit and the service
-   integration tests as separate steps. Every step runs inside the image built from
+   tests, licenses, docs (`docs-mermaid` **and** `docs-links`), quality
+   (`mise run crap`), audit and the service integration tests as separate steps. The
+   pipeline builds **every branch** (`branch_configuration: *`), so a pull request is
+   gated rather than only `main`. Every step runs inside the image built from
    [`.buildkite/Dockerfile`](../.buildkite/Dockerfile), which carries the
    toolchain `mise.lock` pins, `protobuf-compiler` for `tonic-prost-build` (the
    shell's `build.rs` compiles `proto/raft.proto`), `libclang-dev` for the

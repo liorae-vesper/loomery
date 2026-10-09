@@ -86,6 +86,16 @@ WORKDIR /app
 COPY mise.toml mise.lock ./
 RUN mise install
 
+# The RustSec advisory database, cloned once here rather than fetched by the
+# `audit` step at run time. Fetching it into the mounted cache volume failed on
+# the hosted agent with `I/O operation failed: Device or resource busy (os error
+# 16)` — libgit2's fetch is not happy on that mount — and the database is only as
+# fresh as this image anyway, which is built once per pipeline run. The `.git`
+# directory is dropped: `cargo audit --no-fetch` reads the files, and the history
+# is dead weight in a layer.
+RUN git clone --depth 1 https://github.com/RustSec/advisory-db.git /opt/rustsec-advisory-db \
+    && rm -rf /opt/rustsec-advisory-db/.git
+
 # rustup's default profile brings rustfmt and clippy, but cargo-llvm-cov (the
 # `quality` step) needs the llvm-tools component, which is not part of it, and
 # which cargo-llvm-cov otherwise prompts for and downloads mid-build. rustup

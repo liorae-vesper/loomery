@@ -97,8 +97,6 @@ steps:
             - "/cache/loomery-cargo/target:/ci-target"
             - "/cache/loomery-cargo/registry:/root/.cargo/registry"
             - "/cache/loomery-cargo/git:/root/.cargo/git"
-            - "/cache/loomery-cargo/advisory-db:/root/.cargo/advisory-db"
-            - "/cache/loomery-cargo/advisory-dbs:/root/.cargo/advisory-dbs"
           # The checkout is mounted into the container and root owns whatever
           # cargo writes there; hand it back to the agent user afterwards so the
           # agent can clean up.
@@ -158,8 +156,6 @@ steps:
             - "/cache/loomery-cargo/target:/ci-target"
             - "/cache/loomery-cargo/registry:/root/.cargo/registry"
             - "/cache/loomery-cargo/git:/root/.cargo/git"
-            - "/cache/loomery-cargo/advisory-db:/root/.cargo/advisory-db"
-            - "/cache/loomery-cargo/advisory-dbs:/root/.cargo/advisory-dbs"
 
   - label: ":scroll: Licenses"
     key: "licenses"
@@ -179,10 +175,10 @@ steps:
           volumes: *cargo-cache-volumes
           chown: true
 
-  - label: ":scroll: Docs (Mermaid diagrams)"
+  - label: ":scroll: Docs (Mermaid diagrams + links)"
     key: "docs"
     depends_on: "build-ci-image"
-    command: "mise run docs-mermaid"
+    command: "mise run docs-mermaid && mise run docs-links"
     plugins:
       - artifacts#v1.9.4:
           download: "loomery-ci.tar.gz"
@@ -216,7 +212,9 @@ steps:
   - label: ":shield: Audit"
     key: "audit"
     depends_on: "build-ci-image"
-    command: "mise run audit"
+    # `--no-fetch` against the database the image carries: the fetch is what failed
+    # here, and a database cloned during the image build is as fresh as the run.
+    command: "mise run audit -- --no-fetch --db /opt/rustsec-advisory-db"
     cache:
       <<: *cargo-cache
       name: "rust-audit-v1"

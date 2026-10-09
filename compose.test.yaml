@@ -28,8 +28,12 @@ services:
       - /data
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.0
-    # `--import-realm` picks up the mounted realm below on first boot.
+    # The realm is baked into this image (scripts/test-services/keycloak/Dockerfile)
+    # rather than bind-mounted, so the import cannot depend on a host path.
+    build:
+      context: ./scripts/test-services/keycloak
+    image: loomery-test-keycloak:26.0
+    # `--import-realm` picks up the realm baked in above on first boot.
     command: ["start-dev", "--import-realm", "--http-port=8080"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
@@ -37,5 +41,3 @@ services:
       KC_HEALTH_ENABLED: "true"
     ports:
       - "${KEYCLOAK_PORT:-8080}:8080"
-    volumes:
-      - ./scripts/test-services/keycloak:/opt/keycloak/data/import:ro

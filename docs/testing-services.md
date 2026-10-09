@@ -27,14 +27,19 @@ Ports are overridable so the stack can coexist with other local services:
 NATS_PORT=4223 NATS_MONITOR_PORT=8223 KEYCLOAK_PORT=8081 mise run svc-up
 ```
 
-The compose file is [`compose.test.yaml`](../compose.test.yaml); the realm
-import is [`scripts/test-services/keycloak/loomery-realm.json`](../scripts/test-services/keycloak/loomery-realm.json).
+The compose file is [`compose.test.yaml`](../compose.test.yaml). The realm lives at
+[`scripts/test-services/keycloak/loomery-realm.json`](../scripts/test-services/keycloak/loomery-realm.json)
+and is **baked into a small image** built from the Dockerfile beside it, rather than
+bind-mounted into Keycloak: a bind mount made the import depend on a host path the
+daemon resolves and on the container user reading it, and it failed silently — Keycloak
+booted, the realm never appeared, and readiness timed out on a 404. Edit the JSON and
+re-run the task; compose rebuilds the image.
 
 ## 2. What the services are configured with
 
 ### Keycloak
 
-`start-dev --import-realm`, with a realm `loomery` importing:
+`start-dev --import-realm`, with the realm baked into the image importing:
 
 | Item | Value |
 |---|---|
@@ -128,6 +133,13 @@ runs the integration tests, and always tears the stack down — see
 [`.buildkite/scripts/test-services.sh`](../.buildkite/scripts/test-services.sh).
 The step mounts the host Docker socket and joins the host network, so the stack
 the container starts is reachable at `127.0.0.1` exactly as above.
+
+Readiness is waited for in two steps, and a timeout dumps the stack's state and logs:
+`/realms/master` answers as soon as Keycloak serves HTTP, and `/realms/<realm>` only
+once the realm has been imported. That splits the two failures that used to look
+identical — "Keycloak never booted" and "Keycloak booted without the realm" — and the
+`Test services` step prints the containers' own logs before tearing them down, so a CI
+failure is diagnosable from the job log.
 
 ## 6. Stress profiles
 

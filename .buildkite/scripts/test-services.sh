@@ -23,6 +23,13 @@ export LOOMERY_TEST_KEYCLOAK_URL="${LOOMERY_TEST_KEYCLOAK_URL:-http://127.0.0.1:
 
 cleanup() {
     local status=$?
+    # Leave the stack's own state and logs in the job log when anything failed —
+    # the wait script dumps them for a readiness timeout, and this covers a failure
+    # later in the step (the integration suite, or a container that died mid-run).
+    if [ "$status" -ne 0 ]; then
+        docker compose -f compose.test.yaml ps || true
+        docker compose -f compose.test.yaml logs --no-color --tail 200 || true
+    fi
     docker compose -f compose.test.yaml down -v || true
     exit "$status"
 }
