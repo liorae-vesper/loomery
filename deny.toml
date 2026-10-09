@@ -68,17 +68,13 @@ deny = [
     { name = "sha1", reason = "Cryptographically weak hash function." },
 ]
 
-# Known, accepted duplicate: `syn` 2 and `syn` 3 are semver-incompatible (`^2` vs
-# `^3`) and both are genuinely required. Most of the tree has moved to `syn` 3, but
-# `syn` 2 is still pinned by eleven build and proc-macro crates that have not
-# followed: `bindgen` 0.72 (build-dep of `librocksdb-sys`), the prost/tonic 0.14
-# build stack (`prost-build`, `prost-derive`, `tonic-build`, `tonic-prost-build`,
-# `prettyplease`), `derive_more-impl` (via `openraft` 0.10's `derive_more`),
-# `pin-project-internal`, `tracing-attributes`, `curve25519-dalek-derive` and
-# `zeroize_derive`. None of these is a Windows-only copy — they are all on the host
-# target — and neither copy can be removed without an upstream major bump, so the
-# duplicate is recorded as accepted; `multiple-versions = "warn"` still reports any
-# *new* duplicate version.
+# Known, accepted duplicate: `syn` 2 is pulled in only for Windows targets
+# (`windows-implement`/`windows-interface` via chrono's `iana-time-zone`), while
+# everything else is on `syn` 3. Nothing in this workspace ships for Windows today,
+# so the second copy is not actionable.
+skip = [
+    { name = "syn", version = "=2.0.119" },
+]
 
 [sources]
 unknown-registry = "deny"  # Block dependencies from untrusted registries

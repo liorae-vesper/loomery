@@ -61,12 +61,7 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
    toolchain `mise.lock` pins, `protobuf-compiler` for `tonic-prost-build` (the
    shell's `build.rs` compiles `proto/raft.proto`), `libclang-dev` for the
    build-time `bindgen` inside `librocksdb-sys`, and the Docker CLI the
-   integration step drives the compose stack with. It also carries a prebuilt
-   RocksDB archive at `/opt/rocksdb`, handed to the steps through
-   `ROCKSDB_LIB_DIR` so `librocksdb-sys`'s build script links it instead of
-   compiling five minutes of C++, and `mr-boxington`, which mise enables for
-   every task through the Rust tool's `mr_boxington` option. No step installs
-   anything.
+   integration step drives the compose stack with. No step installs anything.
 5. **That image is how a change is checked before it lands** — build it once and
    run the same tasks inside it, so the local check and CI share one toolchain:
 

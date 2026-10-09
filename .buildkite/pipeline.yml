@@ -13,19 +13,12 @@
 #   2. The `test services` job drives a compose stack through the host Docker
 #      daemon, so that one step needs the socket, host networking and the
 #      checkout mounted at its host path (see the step's comments).
-# Hosted cache volumes persist dependencies between successful jobs, but they are
-# attached best-effort and committed only for a step that succeeds, so what a job
-# finds in one varies between builds: the verify step was fully warm at 50s in
-# builds #21–#23 and cold again at 373s and 407s in #24 and #25 on the same
-# pipeline. The five-minute RocksDB C++ compile that dominated those runs is
-# therefore built into the image instead (see .buildkite/Dockerfile), and what is
-# left here is a cargo target directory plus mr-boxington's store for everything
-# else. Rust steps still have separate named volumes so parallel writers and
-# coverage's compiler flags do not evict each other's artifacts. Cargo validates
-# cached artifacts against the toolchain, flags and dependency versions; lockfile
-# changes do not discard all unchanged dependencies. Bind mounts expose the host
-# caches inside the Docker containers, at stable paths independent of each
-# agent's checkout.
+# Hosted cache volumes persist dependencies between successful jobs. Rust
+# steps have separate named volumes so parallel writers and coverage's compiler
+# flags do not evict each other's artifacts. Cargo validates cached artifacts
+# against the toolchain, flags and dependency versions; lockfile changes do not
+# discard all unchanged dependencies. Bind mounts expose the host caches inside
+# the Docker containers, at stable paths independent of each agent's checkout.
 #
 # This file only runs if a step uploads it. The steps stored in the Buildkite
 # dashboard *are* the pipeline, and whichever you write there replaces this file
@@ -100,19 +93,8 @@ steps:
           load: "loomery-ci.tar.gz"
           environment: &cargo-cache-environment
             - "CARGO_TARGET_DIR=/ci-target"
-            # mr-boxington keeps its content-addressed store in the same volume
-            # as the target directory, so restoring a compiler action is a local
-            # link rather than a download. The image enables it for every mise
-            # task (mise.toml's `mr_boxington` option on the Rust tool); see the
-            # prebuild note in .buildkite/Dockerfile.
-            - "MBX_CACHE_DIR=/mbx-cache"
-            # Bound the store alone: `gc.max_size` never counts the target
-            # directory, and this leaves the 40g volume room for /ci-target, the
-            # registry and git.
-            - "MBX_GC_MAX_SIZE=20GiB"
           volumes: &cargo-cache-volumes
             - "/cache/loomery-cargo/target:/ci-target"
-            - "/cache/loomery-cargo/mbx:/mbx-cache"
             - "/cache/loomery-cargo/registry:/root/.cargo/registry"
             - "/cache/loomery-cargo/git:/root/.cargo/git"
           # The checkout is mounted into the container and root owns whatever
@@ -172,7 +154,6 @@ steps:
           volumes:
             - "/var/run/docker.sock:/var/run/docker.sock"
             - "/cache/loomery-cargo/target:/ci-target"
-            - "/cache/loomery-cargo/mbx:/mbx-cache"
             - "/cache/loomery-cargo/registry:/root/.cargo/registry"
             - "/cache/loomery-cargo/git:/root/.cargo/git"
 

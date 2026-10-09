@@ -9066,7 +9066,7 @@ third_party_libraries:
          limitations under the License.
 
 - package_name: itertools
-  package_version: 0.13.0
+  package_version: 0.14.0
   repository: https://github.com/rust-itertools/itertools
   license: Apache-2.0
   licenses:
