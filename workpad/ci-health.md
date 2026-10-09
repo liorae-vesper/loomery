@@ -1,22 +1,24 @@
-# Buildkite CI health
+# CI health
 
-Status: **build #22 ran the fixes and confirmed two of them on the agent; it also
-surfaced two failures nobody had seen.** Everything below is recorded, and the fixes for
-the new two are in the tree.
+Status: **the pipeline is GitHub Actions now**
+([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)). It replaced the Buildkite
+pipeline, and it has not run on GitHub yet — the first push to `main` is what proves it.
 
-What build #22 (`a524413`, the run after the CI commit) showed:
+## What a first run must prove
 
-| step | result |
-|---|---|
-| Build CI image | **passed** — including the advisory-database clone the audit fix depends on |
-| **Audit** | **passed** — the fix works on the agent (it failed every build before) |
-| Verify, Licenses | passed |
-| **Test services** | **the wait passed**: `nats is ready` → `keycloak is ready` → `the loomery realm is ready`. That is the point 11 of 11 builds failed at; the job then went on to compile and run the suite |
-| Docs (Mermaid + links) | **failed** — my own regression: the step gained `docs-links`, which is Python, and the image had no `python3` (`sh: 1: python3: not found`, status 127). Fixed by installing it |
-| Test | **failed** — a real latent race, not a regression: see below |
-| Quality (CRAP) | was still running when the run was read |
+1. **Every gate passes on a runner.** All seven run locally, and each is a `mise run`
+   task rather than a command line, but a GitHub-hosted runner is not this machine.
+2. **`publish-docs` deploys.** The repository's Pages source has to be set to
+   **GitHub Actions**, and the site's `base` is `/loomery/`
+   ([`config.mts`](../docs/.vitepress/config.mts)), which is where a project Pages site
+   is served from.
+3. **The caches warm and are then reused.** `jdx/mise-action` caches the installed
+   toolchains and `jdx/mr-boxington-action` the Cargo target tree and registry
+   downloads; a second run on unchanged inputs should be visibly faster.
+4. **`crap` stays stable.** It was flaky on Buildkite — the same commit passing and then
+   failing, most likely the coverage cache. The task is untouched and worth watching.
 
-## The race CI found in the Test step
+## A race only CI found
 
 `three_replicas_commit_and_recover_genesis` panicked on `change_membership` with
 
@@ -32,31 +34,6 @@ commits. It now waits for `last_applied == last_log_index` first, the same preco
 `change_membership`** — membership is set by the control plane — so this was test-only,
 and it is the kind of thing a local machine's timing hides.
 
-## What was wrong, and what changed
-
-| Failure | Cause found | Fix |
-|---|---|---|
-| `audit`: `couldn't fetch advisory database: … Device or resource busy (os error 16)` | The step fetched the RustSec database into a mounted cache volume; libgit2's fetch fails there | The CI image clones the database at build time; the step runs `mise run audit -- --no-fetch --db /opt/rustsec-advisory-db`. The two advisory volume mounts are gone |
-| `test services`: `keycloak did not become ready` in **11/11 builds** | The realm arrived through a bind mount of the checkout and failed **silently** — Keycloak booted, no realm, readiness timed out on a 404, and the job log said nothing else | The realm is baked into `loomery-test-keycloak:26.0`; readiness is two-stage (`/realms/master`, then `/realms/<realm>`) and a timeout dumps the stack's state and logs |
-| No PR was ever gated | `branch_configuration: main` | Set to `*` through the API and read back |
-
-## Verified locally, and what that does not cover
-
-- `cargo audit --no-fetch --db <clone>` — loads 1295 advisories, scans 371 crates; also
-  with `.git` removed, which is how the image carries it. **Not covered:** the image
-  build itself, and whether the agent's daemon builds it as CI does.
-- `mise run test-services` with the baked realm — the full step, 9 integration tests,
-  exit 0. **Not covered:** the agent, where the failure was.
-- The wait's failure path against a bogus realm — names that half, prints `compose ps`
-  and the Keycloak logs, exits 1.
-- `bk pipeline validate` on the edited pipeline; `docker compose config` on the edited
-  compose file.
-
-## What is left
-
-1. **A run on the next commit**: the two fixes above (python3, the membership wait) have
-   not been through the agent yet. The fixes they follow have.
-2. `crap` was flaky in CI before this work (same commit, pass and fail, most likely the
-   coverage cache). Untouched, and worth watching in the same run.
-3. `branch_configuration` is `*` now, but no branch other than `main` has been pushed
-   since, so the change is read back from the API rather than observed in a build.
+The lesson carries over unchanged: a green local run is not evidence that the suite is
+deterministic, only that this machine did not hit the window. Watch the first few runs on
+the runner for the same shape of failure timing a slower or faster machine exposes.

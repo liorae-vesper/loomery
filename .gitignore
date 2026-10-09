@@ -4,7 +4,6 @@ lcov.info
 benchmark-results/
 __pycache__/
 .pi/
-loomery-ci.tar*
 
 # The documentation site's toolchain and build output (docs/package.json).
 docs/node_modules/

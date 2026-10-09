@@ -11,11 +11,11 @@ locked = true
 "cargo:cargo-llvm-cov" = "0.9.1"
 cocogitto = "7.0.0"
 hk = "1.57.0"
-# mr-boxington (`mbx`) wraps cargo with a content-addressed compiler cache. The
-# CI image installs it, and the Rust tool's `mr_boxington` option below turns it
-# on for every `mise run` task, so a step restores compiler actions instead of
-# rebuilding whatever its cache volume lost — see .buildkite/pipeline.yml. The
-# option needs mise 2026.9.2 or newer; .buildkite/Dockerfile pins v2026.9.9.
+# mr-boxington (`mbx`) wraps cargo with a content-addressed compiler cache. mise
+# installs it, and the Rust tool's `mr_boxington` option below turns it on for
+# every `mise run` task, so CI restores compiler actions instead of rebuilding
+# from scratch — see .github/workflows/ci.yml. The option needs mise 2026.9.2 or
+# newer; `jdx/mise-action` installs a current mise.
 mr-boxington = "1.21.0"
 # The documentation check (`mise run docs-mermaid`) parses the Mermaid diagrams
 # with the same parser a renderer uses, which is a Node tool.
@@ -82,8 +82,13 @@ description = "Checks links, anchors, citations and site reachability (staging l
 run = "python3 tools/docs-links/check.py docs README.md workpad"
 
 [tasks.docs-site]
-description = "Builds the published VitePress site in docs/ (a dead link fails the build; CI checks the pages, it does not build the site)"
-run = "npm --prefix docs run build"
+description = "Builds the published VitePress site in docs/ (installs its dependencies first when they are missing)"
+run = """
+if [ ! -d docs/node_modules ]; then
+    npm ci --prefix docs --no-audit --no-fund
+fi
+npm --prefix docs run build
+"""
 
 [tasks.docs-site-publish]
 description = "Builds the site and publishes it to the gh-pages branch, which a static host can deploy from"

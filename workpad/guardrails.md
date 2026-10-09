@@ -52,38 +52,57 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
    that sees that; `--workspace --no-default-features` does not, because the masking
    feature is requested explicitly rather than inherited from a default.
 3. **`hk fix`** runs `cargo fmt` to auto-format.
-4. **CI** — [`.buildkite/pipeline.yml`](../.buildkite/pipeline.yml) runs verify,
+4. **CI** — [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs verify,
    tests, licenses, docs (`docs-mermaid` **and** `docs-links`), quality
-   (`mise run crap`), audit and the service integration tests as separate steps. The
-   pipeline builds **every branch** (`branch_configuration: *`), so a pull request is
-   gated rather than only `main`. Every step runs inside the image built from
-   [`.buildkite/Dockerfile`](../.buildkite/Dockerfile), which carries the
-   toolchain `mise.lock` pins, `protobuf-compiler` for `tonic-prost-build` (the
-   shell's `build.rs` compiles `proto/raft.proto`), `libclang-dev` for the
-   build-time `bindgen` inside `librocksdb-sys`, and the Docker CLI the
-   integration step drives the compose stack with. No step installs anything.
-5. **That image is how a change is checked before it lands** — build it once and
-   run the same tasks inside it, so the local check and CI share one toolchain:
+   (`mise run crap`), audit and the service integration tests as seven separate jobs.
+   It runs on every pull request and on pushes to `main`, so a pull request is gated
+   rather than only `main`. No job runs `cargo` directly: each calls a `mise run` task,
+   and `mise.toml` is the only place a cargo invocation lives. Cargo then goes through
+   mr-boxington (`rust` carries `mr_boxington = true`), and
+   [`jdx/mr-boxington-action`](https://github.com/jdx/mr-boxington-action) restores the
+   Cargo target tree and registry downloads across runs.
+   [`scripts/install-host-deps.sh`](../scripts/install-host-deps.sh) adds the system
+   packages the build needs and the runner lacks: `protobuf-compiler` for
+   `tonic-prost-build` (the shell's `build.rs` compiles `proto/raft.proto`),
+   `clang`/`libclang-dev` for the build-time `bindgen` inside `librocksdb-sys`, and
+   `zlib1g-dev` for RocksDB. A final `publish-docs` job builds the VitePress site and
+   deploys it to GitHub Pages, but only for a push to `main` that passed every gate.
+5. **Reproduce a gate locally the way CI runs it** — install the pinned toolchain and
+   run the same task, so the local check and CI share one configuration:
 
    ```sh
-   docker build --file .buildkite/Dockerfile --tag loomery-ci .
-   docker run --rm -v "$PWD:/workdir" -w /workdir -v loomery-ci-target:/target \
-     -e CARGO_TARGET_DIR=/target loomery-ci mise run verify
+   mise install
+   mise run verify
    ```
 
-   Swap the task for any one the pipeline calls (`mise run test`,
+   Swap the task for any one the workflow calls (`mise run test`,
    `mise run licenses-check`, `mise run docs-mermaid`, `mise run crap`,
-   `mise run audit`). The container
-   runs as root, exactly as the pipeline's steps do, so `CARGO_TARGET_DIR` points
-   at a named volume: build artifacts stay out of the working tree instead of
-   appearing in `target/` owned by root. To iterate on the pipeline itself,
-   `bk pipeline validate --file .buildkite/pipeline.yml` checks it locally,
-   without a Buildkite account.
+   `mise run audit`). Every `mise run` task reaches cargo through mr-boxington, so the
+   compiler cache is shared with the working tree. To check the workflow file itself,
+   run it in a container with [act](https://github.com/nektos/act):
 
-   The `test services` step runs the compose stack through the host Docker daemon
-   and the host network (see
-   [`.buildkite/scripts/test-services.sh`](../.buildkite/scripts/test-services.sh)),
-   so `mise run svc-up` must be running for it to pass when run by hand.
+   ```sh
+   act -n -P ubuntu-latest=catthehacker/ubuntu:act-latest       # plan only
+   act -j docs -P ubuntu-latest=catthehacker/ubuntu:act-latest  # run one job
+   ```
+
+   act 0.2.89 needs two flags that GitHub does not, and neither belongs in the
+   workflow — the runner supplies both:
+
+   * `--env ACTIONS_RUNTIME_TOKEN=act` — act does not inject the cache runtime token
+     the mr-boxington action needs.
+   * `--container-options "--network host"` — the `test-services` job publishes the
+     compose stack's ports on the host, which a bridged act container cannot reach at
+     `127.0.0.1`.
+
+   ```sh
+   act -j audit -P ubuntu-latest=catthehacker/ubuntu:act-latest --env ACTIONS_RUNTIME_TOKEN=act
+   act -j test-services -P ubuntu-latest=catthehacker/ubuntu:act-latest \
+     --env ACTIONS_RUNTIME_TOKEN=act --container-options "--network host"
+   ```
+
+   The `test services` job drives the compose stack through the host Docker daemon, so
+   `mise run svc-up` must be running for it to pass when run by hand.
 
 ## Working agreements
 

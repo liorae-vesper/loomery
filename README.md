@@ -166,38 +166,38 @@ associativity/determinism for the aggregate algebra.
 
 ## Continuous integration
 
-Buildkite runs six parallel steps (`.buildkite/pipeline.yml`), each driven by a
-mise task rather than hardcoded commands:
+GitHub Actions runs seven parallel gates
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), each driven by a mise
+task rather than hardcoded commands:
 
 - **verify** — `mise run verify`
 - **test** — `mise run test`
 - **test-services** — the Keycloak + NATS integration suite (`compose.test.yaml`)
 - **licenses** — `mise run licenses-check`
+- **docs** — `mise run docs-mermaid` and `mise run docs-links`
 - **quality** — `mise run crap` (coverage + CRAP gate)
 - **audit** — `mise run audit`
 
-Every step runs inside the image built from
-[`.buildkite/Dockerfile`](.buildkite/Dockerfile): the Rust toolchain and cargo
-tools pinned by `mise.lock` (installed with `mise install`), plus `protoc`,
-`libclang` and the Docker CLI the build and the integration suite need. Nothing
-is installed at run time, so the pipeline reads the same as
-`docker run … mise run <task>`.
+No job runs `cargo` directly — each calls `mise run <task>`, and the task in
+`mise.toml` is the only place a cargo invocation lives. Cargo then runs through
+[mr-boxington](https://mr-boxington.jdx.dev/), because the Rust tool in
+`mise.toml` carries `mr_boxington = true`. The toolchains come from
+`mise.toml` + `mise.lock` through
+[`jdx/mise-action`](https://github.com/jdx/mise-action), and
+[`jdx/mr-boxington-action`](https://github.com/jdx/mr-boxington-action) restores
+the Cargo target tree and the registry/git downloads from an earlier run, so a
+job recompiles only what changed. Both actions are pinned by major tag.
 
-The image build step uploads `loomery-ci.tar.gz` as a build artifact. Each
-parallel step downloads and loads that archive into its own Docker daemon,
-so hosted agents do not need to share local images or use a separate registry.
-Image tags include the Buildkite build ID to isolate concurrent builds.
+[`scripts/install-host-deps.sh`](scripts/install-host-deps.sh) installs the
+system packages the build needs that the runner image does not carry:
+`protobuf-compiler` for `build.rs`, `clang` and `libclang-dev` for the build-time
+bindgen in `librocksdb-sys`, and `zlib1g-dev` for RocksDB. Everything else — the
+Rust toolchain, the cargo tools and Node — is a mise tool.
 
-[Linux hosted cache volumes](https://buildkite.com/docs/agent/buildkite-hosted/cache-volumes)
-retain Cargo's registry sources, Git dependencies,
-security advisory databases and the complete build output (including RocksDB's
-native library). Each step has its own cache so parallel jobs and coverage flags
-do not overwrite one another. The image build also caches all Docker build
-layers, including the tools installed by mise. The first successful run warms
-each cache; later runs reuse dependencies whose versions and build settings
-still match. Failed jobs do not save their cache volumes.
-Increment the Rust cache names' `v1` suffix when changing native compilers or
-system libraries in the CI image, to force a fresh native build.
+The `publish-docs` job builds the VitePress site with `mise run docs-site` and
+deploys it to GitHub Pages after a push to `main` passes every gate; the site
+lives at <https://liorae-vesper.github.io/loomery/>. The repository's Pages
+source has to be set to **GitHub Actions** for it to deploy.
 
 ---
 

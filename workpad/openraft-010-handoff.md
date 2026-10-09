@@ -108,8 +108,8 @@ neither of them blocking:
 * **Lints:** no `unwrap`/`expect`/panicking indexing/`string_slice`/`arithmetic_side_effects`
   in production code.
 * **Performance probes and soaks run `--release`** — a debug build measures the compiler.
-* **CI is Buildkite now.** The local equivalent is
-  `docker run --rm -v "$PWD:/workdir" -w /workdir -v loomery-ci-target:/target -e CARGO_TARGET_DIR=/target loomery-ci sh -c "mise run verify && mise run test"`.
+* **CI is GitHub Actions now.** The local equivalent is
+  `mise run verify && mise run test` after `mise install`.
 * **Documentation in markdown is part of done.**
 * **Interrupt and ask** if a design decision is not specified, a new dependency is needed, or a
   gate fails for environmental reasons.

@@ -15,6 +15,13 @@ export default withMermaid({
   title: 'Loomery',
   description: 'An event-sourced backend for team collaboration, built in Rust.',
   lang: 'en',
+  // Served from https://liorae-vesper.github.io/loomery/, so every asset and
+  // page link is resolved under `/loomery/`. A Pages project site is a
+  // subpath, and without this the built HTML points at `/assets/...`, which
+  // 404s. `actions/configure-pages` does not know how to set this for
+  // VitePress, so it is set here, for both the CI publish and
+  // `scripts/publish-docs-site.sh`.
+  base: '/loomery/',
   lastUpdated: true,
   // A dead link fails the build rather than rendering as a silent 404.
   ignoreDeadLinks: false,

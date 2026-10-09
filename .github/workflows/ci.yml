@@ -1,0 +1,180 @@
+# Loomery CI — GitHub Actions.
+#
+# Seven gates run in parallel, each one through a mise task rather than a
+# hardcoded command line, so CI and mise.toml cannot drift:
+#
+#   verify        mise run verify
+#   test          mise run test
+#   test-services mise run test-services   (Keycloak + NATS, compose.test.yaml)
+#   licenses      mise run licenses-check
+#   docs          mise run docs-mermaid, then mise run docs-links
+#   quality       mise run crap            (coverage + CRAP gate)
+#   audit         mise run audit
+#
+# No step runs cargo directly: `mise run <task>` is the interface, and the task
+# in mise.toml is the only place a cargo invocation lives. Cargo itself runs
+# through mr-boxington, because mise.toml's `rust` tool carries
+# `mr_boxington = true`.
+#
+# Rust, the cargo tools and Node come from mise, pinned by the committed
+# `mise.toml` + `mise.lock`: `jdx/mise-action` installs them, and only
+# `mise run`/`mise exec` calls see the wrapped Cargo — a bare `cargo` on PATH
+# would bypass mr-boxington entirely.
+#
+# `jdx/mr-boxington-action` restores what the previous run built: its default
+# `github` backend caches the Cargo target tree and the registry/git downloads,
+# and it is what carries a build across runners. It is a separate action from
+# mise's own cache, which holds the installed toolchains.
+#
+# The system packages the build needs — `protoc` for `build.rs`, libclang for
+# the build-time bindgen in `librocksdb-sys`, zlib headers for RocksDB — are OS
+# packages rather than mise tools; `scripts/install-host-deps.sh` installs the
+# ones a GitHub-hosted runner does not already carry.
+#
+# The last job builds the VitePress site with `mise run docs-site` and deploys
+# it to GitHub Pages. That requires the repository's Pages source to be
+# "GitHub Actions", and it only runs for a push to `main` after the gates pass.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same ref cancels the run it supersedes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The steps every Rust job shares, anchored here and aliased below. YAML
+  # anchors are expanded before the workflow is evaluated, so an alias is
+  # identical to writing the steps out.
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - &checkout
+        uses: actions/checkout@v7
+      - &host-deps
+        name: Install host build dependencies
+        run: bash scripts/install-host-deps.sh
+      - &mise
+        uses: jdx/mise-action@v5
+      - &mbx
+        uses: jdx/mr-boxington-action@v1
+      - name: Run verify
+        run: mise run verify
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - *checkout
+      - *host-deps
+      - *mise
+      - *mbx
+      - name: Run tests
+        run: mise run test
+
+  test-services:
+    name: Test services (Keycloak + NATS)
+    runs-on: ubuntu-latest
+    steps:
+      - *checkout
+      - *host-deps
+      - *mise
+      - *mbx
+      - name: Run the Keycloak + NATS integration suite
+        # Starts the compose stack, waits for readiness, runs the suite. The
+        # URLs and ports default to the ones the stack publishes (see the task).
+        run: mise run test-services
+      - name: Stop the test services
+        if: always()
+        run: mise run svc-down
+
+  licenses:
+    name: Licenses
+    runs-on: ubuntu-latest
+    steps:
+      - *checkout
+      - *host-deps
+      - *mise
+      - *mbx
+      - name: Check the third-party license bundle
+        run: mise run licenses-check
+
+  docs:
+    name: Docs (Mermaid diagrams + links)
+    runs-on: ubuntu-latest
+    steps:
+      - *checkout
+      - *mise
+      # No host build deps and no mr-boxington action: these tasks parse the docs
+      # and never build Rust. Node (the Mermaid parser) comes from mise and
+      # installs its own dependencies; the runner carries Python for the links.
+      - name: Check the Mermaid diagrams
+        run: mise run docs-mermaid
+      - name: Check links, anchors and citations
+        run: mise run docs-links
+
+  quality:
+    name: Quality (coverage + CRAP)
+    runs-on: ubuntu-latest
+    steps:
+      - *checkout
+      - *host-deps
+      - *mise
+      - *mbx
+      - name: Compute the coverage and CRAP scores
+        # cargo-llvm-cov installs its own llvm-tools component on demand.
+        run: mise run crap
+
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    steps:
+      - *checkout
+      - *host-deps
+      - *mise
+      - *mbx
+      - name: Check dependencies for security advisories
+        # Fetches the RustSec advisory database into CARGO_HOME; unlike the
+        # Buildkite step there is no problem with a mounted volume to work around.
+        run: mise run audit
+
+  publish-docs:
+    name: Publish docs (GitHub Pages)
+    # Only a push to `main` publishes, and only once every gate is green.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [verify, test, test-services, licenses, docs, quality, audit]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Enough to publish to Pages through OIDC; no `contents: write` needed.
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    # Pages deployments are serialised and never cancel one another.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - *checkout
+      - *mise
+      - name: Build the documentation site
+        # The site's `base` is `/loomery/` (docs/.vitepress/config.mts), which is
+        # where a project Pages site is served from.
+        run: mise run docs-site
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/.vitepress/dist
+      - id: deploy
+        uses: actions/deploy-pages@v5

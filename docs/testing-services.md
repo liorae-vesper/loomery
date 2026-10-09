@@ -127,12 +127,13 @@ cargo test -p loomery-shell --features test-services --test test_services
 
 ## 5. CI
 
-The `Test services` step in `.buildkite/pipeline.yml` (`.buildkite/pipeline.yml`)
-starts the same compose stack from inside the CI image, waits for readiness,
-runs the integration tests, and always tears the stack down — see
-`.buildkite/scripts/test-services.sh` (`.buildkite/scripts/test-services.sh`).
-The step mounts the host Docker socket and joins the host network, so the stack
-the container starts is reachable at `127.0.0.1` exactly as above.
+The `test-services` job in `.github/workflows/ci.yml` (`.github/workflows/ci.yml`)
+runs `mise run test-services`, which starts the same compose stack, waits for
+readiness and runs the integration tests. A following step runs
+`mise run svc-down` with `if: always()`, so the stack is torn down on every exit
+path, including a readiness timeout. The job runs on the runner itself rather
+than in a container, so the ports the stack publishes are reachable at
+`127.0.0.1` exactly as above.
 
 Readiness is waited for in two steps, and a timeout dumps the stack's state and logs:
 `/realms/master` answers as soon as Keycloak serves HTTP, and `/realms/<realm>` only

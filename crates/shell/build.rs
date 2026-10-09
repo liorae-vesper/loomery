@@ -18,10 +18,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// `build_rocksdb()`, and the standard library's directive goes with it. The
 /// archive then links with every `std::` symbol undefined.
 ///
-/// The CI image builds that archive once so the ~5 minutes of C++ do not repeat
-/// in each step (see `.buildkite/Dockerfile`), so the directive has to come from
-/// here instead. It is deliberately conditional: with the vendored build, the
-/// directive is emitted twice for the same link.
+/// An environment that hands the build a prebuilt archive (by setting
+/// `ROCKSDB_LIB_DIR`) is the case this covers, and the directive has to come
+/// from here instead. GitHub Actions does not prebuild one, so the vendored
+/// build is used there and this emits nothing. It is deliberately conditional:
+/// with the vendored build, the directive is emitted twice for the same link.
 fn link_cxx_runtime_of_a_prebuilt_rocksdb() {
     println!("cargo:rerun-if-env-changed=ROCKSDB_LIB_DIR");
     if std::env::var_os("ROCKSDB_LIB_DIR").is_none() {
