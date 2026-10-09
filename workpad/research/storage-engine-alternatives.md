@@ -4,7 +4,7 @@
 
 # Storage Engine Alternatives — Research
 
-> Decision D2 has landed on RocksDB. Recommendations and alternatives below are retained as research provenance. Current storage behavior and recovery modes are documented in [the configuration guide](../raft-configuration.md) and [checkpoint policy](checkpoint-policy.md).
+> Decision D2 has landed on RocksDB. Recommendations and alternatives below are retained as research provenance. Current storage behavior and recovery modes are documented in [the configuration guide](../../docs/raft-configuration.md) and [checkpoint policy](checkpoint-policy.md).
 
 Evaluates per-node embedded storage options for Loomery: the hand-rolled
 **segment files + in-memory index** design vs sled, Redb, RocksDB, SQLite, and

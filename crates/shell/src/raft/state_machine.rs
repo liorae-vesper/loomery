@@ -563,7 +563,7 @@ impl MemStateMachine {
     /// record, the state and the applied marker move together or not at all. Recovery
     /// replays the difference, which trades an fsync per apply for one fsync-window
     /// of replay — 9.5% of throughput on the batched path, measured in
-    /// `docs/benchmarks/deployment-scale.md`. Restoring `set_sync(true)` here buys
+    /// `workpad/benchmarks/deployment-scale.md`. Restoring `set_sync(true)` here buys
     /// back the shorter replay and nothing else; the tests that pin the recovery
     /// repair are `raft/interruption_tests.rs`.
     async fn write_applied(&self, batch: Vec<AppliedEvent>) -> Result<(), io::Error> {

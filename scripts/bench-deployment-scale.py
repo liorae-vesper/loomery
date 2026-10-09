@@ -34,7 +34,7 @@ from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-BASE_CONFIG = REPO / "docs/benchmarks/consensus.json"
+BASE_CONFIG = REPO / "workpad/benchmarks/consensus.json"
 EXAMPLE = "consensus_bench"
 RESULTS = REPO / "benchmark-results"
 

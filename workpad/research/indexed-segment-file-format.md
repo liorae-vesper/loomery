@@ -4,7 +4,7 @@
 
 # Indexed Segment File Format
 
-> This is an alternative storage-format proposal, not the implemented backend. Loomery currently uses RocksDB; see [the configuration guide](../raft-configuration.md) and [storage alternatives](storage-engine-alternatives.md).
+> This is an alternative storage-format proposal, not the implemented backend. Loomery currently uses RocksDB; see [the configuration guide](../../docs/raft-configuration.md) and [storage alternatives](storage-engine-alternatives.md).
 
 A zero-extra-file index footer embedded in sealed segment files, enabling fast
 recovery and selective lazy loading for the Loomery storage engine

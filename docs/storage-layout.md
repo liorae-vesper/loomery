@@ -1,8 +1,8 @@
 # Storage layout
 
 **Status: steps 1 and 2 implemented, step 3 not.** This is the layout
-[D2](design.md#d2--storage-engine)'s amendment and
-[D13](design.md#d13--history-is-append-only-checkpoints-carry-state) describe.
+D2 (`workpad/design.md#d2--storage-engine`)'s amendment and
+D13 (`workpad/design.md#d13--history-is-append-only-checkpoints-carry-state`) describe.
 
 **Step 1** — the families and the append-only `events` family — is in the code:
 every database is opened as `default`/`raft_log`/`state`/`events`/`projections`,
@@ -16,14 +16,14 @@ dedup entries the window added or evicted, and the applied index), in the same
 synchronous batch as its events, and recovery reads that state back per aggregate
 instead of from a whole-state record. The quadratic cost that motivated all of this
 is gone: the soak went from 17 to ~1,190 commands per second at 2,000 commands
-([measured](benchmarks/persistence-hardening.md#after-step-2-the-deltas)).
+(measured (`workpad/benchmarks/persistence-hardening.md#after-step-2-the-deltas`)).
 
 **Step 3** — reads answering from the record and the projections instead of the
 in-memory list of every event — is not, so the history list is still kept in RAM.
 Where the code differs from the target, the difference is marked **today**.
 
 The two steps that build this are in
-[D13's order of work](design.md#d13--history-is-append-only-checkpoints-carry-state):
+D13's order of work (`workpad/design.md#d13--history-is-append-only-checkpoints-carry-state`):
 families and the `events` family first, then deltas and state-only recovery.
 
 ## One database per group
@@ -57,7 +57,7 @@ into a naming convention. Not the default.
 | `raft_log` | the Raft log and its bookkeeping | `l{index:016x}` big-endian → `Entry`; `vote`; `committed`; `purged` (the purge floor) |
 | `state` | the fold, and the small indexes the fold maintains | `agg:{aggregate_id}` → `(id, aggregate state)`; `meta:applied` → applied `LogId`; `meta:membership` → last applied membership; `dedup:{causation_key}` → `(key, fingerprint, first log index)`; `snapshot` → the latest Raft snapshot record |
 | `events` | **the append-only record** | `e:{log_index:016x}:{pos:02x}` → `Event` (a batched entry holds several events, hence `pos`) |
-| `projections` | read models ([D9](design.md#d9--storage-of-cold-read-model-state)) | projection-specific; dropped and rebuilt at will |
+| `projections` | read models (D9 (`workpad/design.md#d9--storage-of-cold-read-model-state`)) | projection-specific; dropped and rebuilt at will |
 
 Big-endian keys are what make a lexicographic range scan equal a numeric one: `l`
 and `e` both iterate in log order, which is what history reads and Raft recovery
@@ -104,7 +104,7 @@ layout has no archive-on-purge step.
 That is what removed the quadratic cost the layout was designed around: the same
 soak that measured 17 commands per second at 2,000 (because each apply rewrote the
 whole history) now measures ~1,190, and checkpoint mode matches snapshot mode at
-every size ([measurements](benchmarks/persistence-hardening.md)).
+every size (measurements (`workpad/benchmarks/persistence-hardening.md`)).
 
 ## Recovery
 
@@ -201,7 +201,7 @@ compress well (LZ4, as today); `state` is small JSON values and needs little.
 |---|---|
 | history of a workspace or organization | a range scan over `events` (today: a filter over the in-memory list) |
 | read-your-writes (`X-Min-Index`) | `meta:applied` from `state`, as today |
-| board/list queries | `projections` ([D9](design.md#d9--storage-of-cold-read-model-state)) |
+| board/list queries | `projections` (D9 (`workpad/design.md#d9--storage-of-cold-read-model-state`)) |
 | "find anything" | the tantivy index — see [search.md](search.md) |
 | authorization | the in-memory membership index, folded from events |
 
@@ -224,12 +224,12 @@ Each step lands with the evidence its contract change requires:
 
 ## See also
 
-- [design.md](design.md) — [D2](design.md#d2--storage-engine) (storage engine and
-  this amendment), [D13](design.md#d13--history-is-append-only-checkpoints-carry-state)
-  (append-only record), [D9](design.md#d9--storage-of-cold-read-model-state)
-  (projections), [D11](design.md#d11--outbox-subjects-stream-naming-and-dedup-identity)
+- design.md (`workpad/design.md`) — D2 (`workpad/design.md#d2--storage-engine`) (storage engine and
+  this amendment), D13 (`workpad/design.md#d13--history-is-append-only-checkpoints-carry-state`)
+  (append-only record), D9 (`workpad/design.md#d9--storage-of-cold-read-model-state`)
+  (projections), D11 (`workpad/design.md#d11--outbox-subjects-stream-naming-and-dedup-identity`)
   (the outbox reads the same applied index)
 - [search.md](search.md) — the index beside this database
-- [checkpoint-policy.md](research/checkpoint-policy.md) — why checkpoints are awaited
-- [persistence-hardening.md](benchmarks/persistence-hardening.md) — the measurements
+- checkpoint-policy.md (`workpad/research/checkpoint-policy.md`) — why checkpoints are awaited
+- persistence-hardening.md (`workpad/benchmarks/persistence-hardening.md`) — the measurements
   that motivate the layout

@@ -14,7 +14,7 @@ spec.loader.exec_module(matrix)
 
 class MatrixTests(unittest.TestCase):
     def test_only_the_selected_dimensions_change_and_each_round_covers_all_arms(self):
-        base = json.loads((Path(__file__).resolve().parents[2] / "docs/benchmarks/batch-matrix.json").read_text())
+        base = json.loads((Path(__file__).resolve().parents[2] / "workpad/benchmarks/batch-matrix.json").read_text())
         original = copy.deepcopy(base)
         result = matrix.plan(base, [8, 16, 32, 64, 128], [128], ["checkpoint", "snapshot"], 42)
         self.assertEqual(base, original)

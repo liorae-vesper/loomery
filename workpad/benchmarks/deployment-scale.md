@@ -550,7 +550,7 @@ durability boundary in *both* persistence modes. Losing the apply batch to a pow
 leaves the replica behind its log and consistent with itself, because the record, the
 state and the applied marker are one `WriteBatch`; recovery replays the difference.
 What it costs is that replay: one fsync-window of applies instead of the shorter
-catch-up a synced checkpoint bought. [raft-configuration.md](../raft-configuration.md)
+catch-up a synced checkpoint bought. [raft-configuration.md](../../docs/raft-configuration.md)
 states the model, and `raft/interruption_tests.rs` pins it: a lost apply is repaired by
 replay, and a store whose record has no marker is refused rather than guessed at.
 

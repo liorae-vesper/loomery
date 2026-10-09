@@ -74,8 +74,8 @@ loomery/
 │   ├── genesis/       # loomery-genesis — the deterministic bootstrap script
 │   ├── server/        # loomery-server — the runtime entry point (config + wiring)
 │   └── shell/         # loomery-shell — Raft, tonic, RocksDB, gateway and workers
-├── docs/              # published documentation (index: docs/README.md)
-├── workpad/           # working notes: handoffs and in-progress designs, not published
+├── docs/              # the published documentation site (VitePress; index: docs/index.md)
+├── workpad/           # the engineering record: decisions, benchmarks, research — staged
 ├── THIRDPARTY.yml     # bundled third-party license texts (docs/third-party-licenses.md)
 ├── deny.toml          # cargo-deny policy (licenses, advisories, bans)
 ├── hk.pkl             # pre-commit hooks (commit message lint + quality gates)
@@ -200,13 +200,18 @@ system libraries in the CI image, to force a fresh native build.
 
 ## Documentation
 
-Start with the [documentation index](docs/README.md). It groups current
-references, tutorials, research and benchmarks. The main entry points are:
+The published documentation is a VitePress site in `docs/`, built with
+`mise run docs-site` and entered at [its home page](docs/index.md):
 
-- [Design and roadmap](docs/design.md)
-- [Shell reference](docs/shell.md) and [Raft configuration](docs/raft-configuration.md)
-- [Current work and next steps](docs/CONTINUE.md)
-- [Consensus benchmarks](docs/benchmarks/README.md)
+- [Architecture at a glance](docs/architecture.md) and the [domain model](docs/domain-model.md)
+- [Configuration](docs/configuration.md) and [Raft configuration](docs/raft-configuration.md)
+- [Shell reference](docs/shell.md), [runtime host](docs/host.md) and [search](docs/search.md)
+- The [tutorials](docs/tutorials/shell-group.md), in order
+
+The engineering record — the decisions register, the implementation walkthrough,
+the benchmark notes and the research behind them — is staged in
+[`workpad/`](workpad/documentation-index.md). It is not published, and no page of
+the site links to it.
 
 ---
 

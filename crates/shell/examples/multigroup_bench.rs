@@ -13,7 +13,7 @@
 //! ```
 //!
 //! Results, methodology and limits are recorded in
-//! `docs/benchmarks/multigroup.md`. This is an **in-process, in-memory** probe:
+//! `workpad/benchmarks/multigroup.md`. This is an **in-process, in-memory** probe:
 //! it measures the shell's group/port overhead, not disk or network capacity.
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 

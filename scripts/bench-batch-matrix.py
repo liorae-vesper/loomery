@@ -118,7 +118,7 @@ def save_summary(root, result):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=Path("docs/benchmarks/batch-matrix.json"))
+    parser.add_argument("--config", type=Path, default=Path("workpad/benchmarks/batch-matrix.json"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--batch-sizes", nargs="+", type=positive, default=[8, 16, 32, 64, 128])
     parser.add_argument("--concurrencies", nargs="+", type=positive)

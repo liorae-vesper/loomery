@@ -20,7 +20,7 @@ use tokio::{
 pub fn arguments(args: &[String]) -> anyhow::Result<Option<(Config, PathBuf)>> {
     if args.iter().any(|s| s == "--help") {
         println!(
-            "consensus_bench [--config FILE.json] [--output NEW_DIRECTORY]\nSeparate replica processes; release builds recommended. See docs/benchmarks.md."
+            "consensus_bench [--config FILE.json] [--output NEW_DIRECTORY]\nSeparate replica processes; release builds recommended. See workpad/benchmarks/README.md."
         );
         return Ok(None);
     }

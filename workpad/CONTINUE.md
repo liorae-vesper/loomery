@@ -11,7 +11,7 @@ workspace with a deterministic core and an imperative Tokio/OpenRaft shell.
   aggregates are implemented (organization, user, workspace, membership +
   organization assignment, task) with transition-matrix, invariant and replay
   property tests, plus the invitation and tenant-placement aggregates; see
-  [domain-model.md](domain-model.md).
+  [domain-model.md](../docs/domain-model.md).
 - Deterministic genesis script and async bootstrap worker. The worker re-reads
   applied events before retrying an unknown outcome, using derived causation
   keys to avoid duplicate provisioning.
@@ -45,14 +45,14 @@ workspace with a deterministic core and an imperative Tokio/OpenRaft shell.
   See [failure injection](benchmarks/failure-injection.md).
 - Control plane: tenant placement records, the `organization_id → group` router
   projection, and a tenant-creation controller with startup/retry reconciliation
-  ([control-plane.md](control-plane.md)).
+  ([control-plane.md](../docs/control-plane.md)).
 - Gateway: identity + admin claim, argon2 edge pre-compute, a command plane with
   causation minting and `409` on key reuse, and the `X-Min-Index`
-  read-your-writes gate over axum ([gateway.md](gateway.md)).
+  read-your-writes gate over axum ([gateway.md](../docs/gateway.md)).
 - Outbox and sagas: committed events publish with the D11 dedup identity and a
   resumable cursor; `SagaRunner` consumes with ack/retry classification and the
   invitation acceptance saga provisions assignment + membership replay-safely
-  ([outbox-and-sagas.md](outbox-and-sagas.md)).
+  ([outbox-and-sagas.md](../docs/outbox-and-sagas.md)).
 - Phase-1 end-to-end acceptance in the default suite: onboarding, invitation and
   consistency (dedup replay, key reuse conflict, RYW, admin claim).
 - Persistence hardening: a 300-command history survives restart in both modes
@@ -60,7 +60,7 @@ workspace with a deterministic core and an imperative Tokio/OpenRaft shell.
   co-resident multi-group probe records read/write capacity
   ([multigroup.md](benchmarks/multigroup.md)).
 
-See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
+See [shell.md](../docs/shell.md), [raft-configuration.md](../docs/raft-configuration.md),
 [checkpoint policy](research/checkpoint-policy.md) and
 [benchmark results](benchmarks/checkpoint-spike.md) for details.
 
@@ -113,8 +113,8 @@ See [shell.md](shell.md), [raft-configuration.md](raft-configuration.md),
 0. Runtime follow-ups: multi-node control groups and placements (the runbook
    work), and a read model behind the (now scoped) reads — today they filter the
    applied log, which is `O(history)` per read. The decided shape of that work is
-   recorded: [storage-layout.md](storage-layout.md) (column families, the `events`
-   family, deltas and state-only recovery) and [search.md](search.md) (the tantivy
+   recorded: [storage-layout.md](../docs/storage-layout.md) (column families, the `events`
+   family, deltas and state-only recovery) and [search.md](../docs/search.md) (the tantivy
    index beside the database). Steps 1 and 2 have landed: the families and the
    append-only `events` family behind a layout marker that fails closed, and the
    state deltas — an apply now writes only what it changed, which removed the

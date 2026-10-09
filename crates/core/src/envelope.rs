@@ -6,7 +6,7 @@
 //! event that leaves it is an [`Event`]. Both carry identity, scoping
 //! (organization/workspace), the [`Actor`], dedup keys, and a versioned
 //! [`Payload`]. Version-guarded by `envelope_version` + `payload_version`;
-//! see `docs/design.md` §6.
+//! see `workpad/design.md` §6.
 
 use crate::actor::Actor;
 use crate::id::Id;

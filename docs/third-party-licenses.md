@@ -91,7 +91,7 @@ verifier for `wasm32`, pulled in through reqwest — is licensed under the
 Community Data License Agreement – Permissive – Version 2.0. Section 2.1
 requires the agreement text to travel with redistributed data; `THIRDPARTY.yml`
 contains it verbatim, so a release that ships the bundle (together with
-[`LICENSE`](../LICENSE)) satisfies the condition.
+`LICENSE` (`LICENSE`)) satisfies the condition.
 
 The license is permissive — use, modify and share, with no restrictions on
 Results — and it is not OSI-approved because it is a *data* license rather than

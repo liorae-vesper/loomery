@@ -49,7 +49,7 @@ non-negotiable principles:
 
 For a picture of how the built pieces fit together — crate graph, the write and
 read paths, authorization, onboarding, group internals, host wiring and
-deployment — see [architecture.md](architecture.md).
+deployment — see [architecture.md](../docs/architecture.md).
 
 Loomery follows Gary Bernhardt's **Functional Core, Imperative Shell**. All
 business logic lives in pure, deterministic functions; side effects (storage,
@@ -187,7 +187,7 @@ core receives values through the command envelope. Tracked in
 ## 4. Shell layout — Rust/Tokio/OpenRaft counterparts
 
 The built shell (port, genesis worker, networked persistent Raft groups) is documented in
-[`shell.md`](shell.md); the table below is the planned full layout.
+[`shell.md`](../docs/shell.md); the table below is the planned full layout.
 
 | Concept | Rust counterpart |
 |---|---|
@@ -239,8 +239,8 @@ dependencies, completion); CompletionSaga + TaskCompletedDerivation +
 BlockedStatusProjector; replay-equivalence test (same log → identical state on
 N replicas).
 
-The read-model half is shaped by [storage-layout.md](storage-layout.md) (the
-`projections` family) and [search.md](search.md) (the index beside it), both
+The read-model half is shaped by [storage-layout.md](../docs/storage-layout.md) (the
+`projections` family) and [search.md](../docs/search.md) (the index beside it), both
 rebuilt from the append-only record.
 
 ### Phase 3 — Notifications & delivery
@@ -254,7 +254,7 @@ Documentation aggregate; document processing pipeline; **tantivy** FTS engine
 tenant-scale brute-force KNN (or `pgvector`, [D7](#d7--vector-store-phase-4)).
 
 The FTS engine is no longer a Phase-4 question: [D6](#d6--fts-engine) is decided
-(tantivy, one index per tenant) and its design is [search.md](search.md), because
+(tantivy, one index per tenant) and its design is [search.md](../docs/search.md), because
 "find anything" is [principle 11](#1-what-loomery-is) rather than a knowledge-base
 feature.
 
@@ -362,7 +362,7 @@ flight at once.
 Batching defaults to disabled. Upgrade every replica before enabling the new
 batch entry format; old-binary downgrade after batched logs is unsupported.
 Snapshot/retention settings count entries, so their command coverage increases
-with batching. See [configuration](raft-configuration.md#opt-in-command-batching)
+with batching. See [configuration](../docs/raft-configuration.md#opt-in-command-batching)
 and [paired measurements](benchmarks/batching.md).
 
 Findings:
@@ -450,11 +450,11 @@ it is wrong.
 
 The full layout — families, key formats, the atomic batch, recovery, snapshots and
 purge, the record/derived split, and the tests each step owes — is
-[storage-layout.md](storage-layout.md).
+[storage-layout.md](../docs/storage-layout.md).
 
 The reasoning and upstream contracts are recorded in
 [checkpoint-policy.md](research/checkpoint-policy.md). Configuration and startup
-examples are in [raft-configuration.md](raft-configuration.md).
+examples are in [raft-configuration.md](../docs/raft-configuration.md).
 
 ### D3 — Envelope/payload encoding
 Options: `bincode` (compact, fast, not human-readable) vs **serde_json**
@@ -498,7 +498,7 @@ permissions, is in
 [read-model-store-options.md](research/read-model-store-options.md#search-is-the-cornerstone).
 The decided design — what is findable (entities, not history), the schema sketch,
 where the scope filter sits, the outbox-driven update with `as_of` disclosed, how
-the index is rebuilt, and what stays out of scope — is [search.md](search.md).
+the index is rebuilt, and what stays out of scope — is [search.md](../docs/search.md).
 **Status: DECIDED — tantivy, one index per tenant beside the database, indexed
 from the outbox asynchronously**
 
@@ -708,7 +708,7 @@ keep.
 six aggregates carry unit, transition-matrix, invariant and replay property
 tests (`cargo test -p loomery-core`, 143 tests). The coverage/CRAP floor is
 enforced by `mise run crap` in CI. The frozen command/event taxonomy is
-recorded in [`domain-model.md`](domain-model.md).
+recorded in [`domain-model.md`](../docs/domain-model.md).
 
 ### Shell (Phases 1–7)
 - [x] Phase 1 control plane *(orchestration, router, RYW, gateway, outbox and sagas landed; OIDC and NATS have runtime adapters, and `loomery-server` wires them)*
@@ -750,7 +750,7 @@ recorded in [`domain-model.md`](domain-model.md).
   - [x] Runtime host: `shell::host::Host` (control group, tenant groups, router,
         command plane, outbox workers with a persisted cursor per group, saga
         runner, graceful shutdown) behind one `HostConfig`, with
-        `loomery-server` as the entry point — see [`host.md`](host.md)
+        `loomery-server` as the entry point — see [`host.md`](../docs/host.md)
   - [x] Provider-agnostic OIDC: discovery, JWKS caching and **local** JWT
         validation (ring-backed `jsonwebtoken`), configurable subject/groups/admin
         claims, exercised offline against a throwaway provider and live against

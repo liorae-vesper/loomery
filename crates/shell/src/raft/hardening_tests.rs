@@ -10,7 +10,7 @@
 //! same database — with the dedup window still intact afterwards.
 //!
 //! Findings and the gaps left open are recorded in
-//! `docs/benchmarks/persistence-hardening.md`.
+//! `workpad/benchmarks/persistence-hardening.md`.
 
 use super::test_disk;
 
@@ -109,7 +109,7 @@ async fn history_survives_snapshot_and_restart(mode: StatePersistence, commands:
 
     // A durable checkpoint exists in checkpoint mode and the committed log is
     // durable in both; snapshot build/install/purge are covered by the OpenRaft
-    // storage suites (see `docs/benchmarks/persistence-hardening.md`).
+    // storage suites (see `workpad/benchmarks/persistence-hardening.md`).
     let applied = group
         .raft()
         .metrics()
@@ -203,7 +203,7 @@ fn soak_commands() -> Option<u64> {
 /// The modes the soak runs, so a long run can skip the one that cannot afford it.
 ///
 /// Checkpoint mode serializes the whole state on every apply, so its cost is
-/// quadratic in the history (measured in `docs/benchmarks/persistence-hardening.md`);
+/// quadratic in the history (measured in `workpad/benchmarks/persistence-hardening.md`);
 /// `LOOMERY_TEST_SOAK_MODE=snapshot` runs the mode that scales instead.
 fn soak_modes() -> Vec<StatePersistence> {
     match std::env::var("LOOMERY_TEST_SOAK_MODE").as_deref() {
@@ -229,7 +229,7 @@ fn directory_size(path: &std::path::Path) -> u64 {
 /// What the short probe cannot answer is *cost*: how apply throughput holds up as
 /// the history grows, what a snapshot of it costs, how long recovery takes, and
 /// how large the database gets. The numbers are recorded in
-/// `docs/benchmarks/persistence-hardening.md`.
+/// `workpad/benchmarks/persistence-hardening.md`.
 async fn soak(mode: StatePersistence, commands: u64) {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().to_path_buf();

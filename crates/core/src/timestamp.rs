@@ -4,7 +4,7 @@
 //!
 //! [`Timestamp`] is a millisecond-since-epoch value. The pure core never
 //! reads the clock — timestamps arrive through the command envelope — so
-//! replays and replicated applies stay deterministic (D5, `docs/design.md`).
+//! replays and replicated applies stay deterministic (D5, `workpad/design.md`).
 
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;

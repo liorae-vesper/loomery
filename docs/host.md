@@ -4,7 +4,7 @@ The wiring described here is drawn in
 [architecture.md](architecture.md#the-runtime-host).
 
 `loomery-server` is Loomery's entry point: it reads one configuration, builds the
-real adapters, and hands them to [`loomery_shell::host::Host`], which owns the
+real adapters, and hands them to `loomery_shell::host::Host`, which owns the
 wiring. Everything the earlier phases built — the control plane, the Raft groups,
 the gateway, the outbox and the saga runner — is assembled here into a process
 that serves traffic.
@@ -101,7 +101,7 @@ configuring no provider stops startup rather than serving unauthenticated.
 
 Consensus, transport, storage and proposal settings, shared by every group the
 host runs: see [Raft configuration](raft-configuration.md) and
-[implementation.md](implementation.md).
+implementation.md (`workpad/implementation.md`).
 
 ## On disk today, and where it is going
 
@@ -168,7 +168,7 @@ in hand.
 `invitation.accept` is the single write open to non-members: the invitee is a
 stranger until the acceptance (and the saga that follows) makes them a member.
 The role tables live in one place
-([`required_workspace_role`](../crates/shell/src/gateway/identity.rs)), and the
+(`required_workspace_role` (`crates/shell/src/gateway/identity.rs`)), and the
 membership index that answers them is derived from the applied events.
 
 ## Known gaps
@@ -190,6 +190,6 @@ Stated rather than hidden, each with the work that closes it:
   It is also the mode that scales: checkpoint mode serializes the whole state on
   every apply, so its cost is quadratic in the history (~17 commands/s at 2,000
   commands, against ~1,319/s for snapshot). See
-  [persistence hardening](benchmarks/persistence-hardening.md).
+  persistence hardening (`workpad/benchmarks/persistence-hardening.md`).
 
-[`loomery_shell::host::Host`]: ../crates/shell/src/host.rs
+

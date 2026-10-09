@@ -4,7 +4,7 @@
 consensus, storage, peer networking and the genesis worker. It remains a library:
 the gateway, control-plane, outbox and saga modules exist, but no process is
 deployed yet.
-[implementation.md](implementation.md) traces build, startup and storage/network
+implementation.md (`workpad/implementation.md`) traces build, startup and storage/network
 wiring with a complete example. For a walkthrough,
 read the [group port](tutorials/shell-group.md),
 [genesis worker](tutorials/genesis-worker.md) and
@@ -50,7 +50,7 @@ one durable Raft entry while preserving individual outcomes. Batching defaults
 to disabled; all replicas must support batch entries before enabling it.
 Commands in a batch share a Raft read-barrier index. See
 [configuration](raft-configuration.md#opt-in-command-batching) and
-[benchmarks](benchmarks/batching.md).
+benchmarks (`workpad/benchmarks/batching.md`).
 
 - `committed_events` reads locally applied state without a consensus round trip.
   It does not establish a linearizable read or enforce a session minimum index.
@@ -135,8 +135,8 @@ serialized dedup window. Legacy missing versions map to v1; unsupported versions
 fail. Snapshot copying/serialization still hold a state read lock; serialization
 runs on the blocking pool.
 
-See [checkpoint-policy.md](research/checkpoint-policy.md) for recovery contracts
-and [the paired spike](benchmarks/checkpoint-spike.md) for measured tradeoffs.
+See checkpoint-policy.md (`workpad/research/checkpoint-policy.md`) for recovery contracts
+and the paired spike (`workpad/benchmarks/checkpoint-spike.md`) for measured tradeoffs.
 Full-history checkpoints grow with history. Large-state snapshot contention and
 interrupted-write failure testing remain work before changing the default.
 
@@ -145,12 +145,12 @@ interrupted-write failure testing remain work before changing the default.
 Both RocksDB modes and the in-memory store pass OpenRaft's storage suite.
 Acceptance tests cover three-node replication, snapshot transfer, restart/dedup,
 TLS/mTLS and immutable mode protection. The
-[controlled benchmark](benchmarks/README.md) exercises real replica processes,
+controlled benchmark (`workpad/benchmarks/README.md`) exercises real replica processes,
 leader failures and whole-cluster recovery.
 
 The gateway, tenant router/control group, RYW middleware, outbox and saga
 runner are implemented ([gateway.md](gateway.md), [control-plane.md](control-plane.md),
 [outbox-and-sagas.md](outbox-and-sagas.md)); the OIDC and NATS bindings are
 deployment wiring, and observability is still to come. The authoritative roadmap
-is [design.md §8](design.md#8-progress-tracker); next work is summarized in
-[CONTINUE.md](CONTINUE.md).
+is design.md §8 (`workpad/design.md#8-progress-tracker`); next work is summarized in
+CONTINUE.md (`workpad/CONTINUE.md`).

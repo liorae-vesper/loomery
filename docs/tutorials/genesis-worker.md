@@ -8,7 +8,7 @@ It is split in two halves:
 | Stages | What they need | Verified? |
 |---|---|---|
 | **1–5** (the algorithm) | nothing but the crates in this repo | yes — the code below is extracted from a crate that compiles and passes its tests with this workspace's lint set |
-| **6–7** (async + OpenRaft) | the Phase-1 OpenRaft spike | yes — stage 6 and the stage-7 adapter are implemented in `crates/shell/src/raft` (in-memory baseline; persistent groups are covered in the [shell reference](../shell.md)), re-checked against the pinned OpenRaft crate (0.9.25 when written, 0.10.0-alpha.36 now — see [openraft-010-migration.md](../research/openraft-010-migration.md)) and held to `openraft::testing::log::Suite` |
+| **6–7** (async + OpenRaft) | the Phase-1 OpenRaft spike | yes — stage 6 and the stage-7 adapter are implemented in `crates/shell/src/raft` (in-memory baseline; persistent groups are covered in the [shell reference](../shell.md)), re-checked against the pinned OpenRaft crate (0.9.25 when written, 0.10.0-alpha.36 now — see openraft-010-migration.md (`workpad/research/openraft-010-migration.md`)) and held to `openraft::testing::log::Suite` |
 
 If you only want the algorithm, stop after stage 5: it is the whole decision
 surface, and it is testable without a cluster.
@@ -47,7 +47,7 @@ Bootstrap{org,      │  loop {                                                �
 The loop is the only new logic. It rests on three invariants:
 
 1. **The worker decides nothing.** It asks
-   [`Bootstrap`](../../crates/genesis/src/script.rs) what the next command is and
+   `Bootstrap` (`crates/genesis/src/script.rs`) what the next command is and
    submits it. No ids, no timestamps, no payloads are built here.
 2. **Progress is read from the log, never remembered.** After any restart the
    worker re-reads the group's committed events and asks the *script* which

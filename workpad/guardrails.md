@@ -16,7 +16,8 @@ codebase formatted, lint-clean, type-safe, tested, and dependency-safe.
 | Combined dev gate | `mise run verify` (see `mise.toml`) |
 | Complexity gate | `mise run crap` (coverage-based CRAP scores via cargo-crap; skips `**/*_tests.rs`, `loomery-server`'s `main.rs` (the binary is a single file) and the `JetStream` adapter) |
 | Diagram syntax | `mise run docs-mermaid` (`tools/mermaid-check/`: every ```` ```mermaid ```` block in `docs/`, `README.md` and `workpad/` must parse) |
-| Documentation links | `mise run docs-links` (`tools/docs-links/`) — both run in the pipeline's docs step |
+| Documentation links | `mise run docs-links` (`tools/docs-links/`): links, anchors, run citations and site reachability. A broken link or a page missing from the site's navigation fails in `docs/`; in `workpad/` it is reported as a warning, because the staging tree is allowed to be mid-edit |
+| Documentation site | `mise run docs-site` (VitePress in `docs/`, navigation in `docs/.vitepress/config.mts`): a dead link or a missing page fails the build |
 | Lint policy | `[workspace.lints]` in `Cargo.toml`: deny `unwrap_used`, `expect_used`, `indexing_slicing`, `string_slice`, `arithmetic_side_effects`, `unchecked_time_subtraction`, `todo`, `unimplemented`, `panic`, `unconditional_panic`; warn on `missing_docs`. Enforced by `cargo clippy --workspace --all-targets -- -D warnings` |
 
 ## The `cargo deny` policy (`deny.toml`)
@@ -97,12 +98,13 @@ Not enforced by a hook, so they are stated once, here rather than in a note:
   not to land one.
 - **The default test suite stays self-contained**: fakes and in-process services.
   Real NATS, OIDC and JetStream stay behind the `nats`, `oidc` and `test-services`
-  features ([testing-services.md](testing-services.md)).
+  features ([testing-services.md](../docs/testing-services.md)).
 - **Probes and soaks run `--release`.** A debug build measures the compiler.
 - **Documentation is part of done.** A change to behaviour, configuration or a
-  measurement updates the document that describes it, and working notes are
-  promoted into `docs/` rather than left in `workpad/` — which is staging, not an
-  archive, and whose rules are in that directory's own README.
+  measurement updates the document that describes it. Published pages live in `docs/`,
+  the VitePress site, and a new page is added to its navigation; the engineering record
+  (decisions, benchmarks, research) stays in `workpad/`, which is staging rather than an
+  archive and whose rules are in that directory's own README.
 - **Raise it, don't guess**: if a design decision is unspecified, a new dependency
   is needed, or a gate fails for environmental reasons, say so before implementing.
 

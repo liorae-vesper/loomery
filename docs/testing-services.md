@@ -6,8 +6,8 @@ real thing:
 
 | Service | Purpose | Shell seam |
 |---|---|---|
-| **NATS JetStream** | the outbox's broker: durable, deduplicating delivery | [`outbox::Publisher`](../crates/shell/src/outbox/mod.rs) |
-| **Keycloak** | OIDC tokens and the `groups` → admin claim | [`gateway::Authenticator`](../crates/shell/src/gateway/identity.rs) |
+| **NATS JetStream** | the outbox's broker: durable, deduplicating delivery | `outbox::Publisher` (`crates/shell/src/outbox/mod.rs`) |
+| **Keycloak** | OIDC tokens and the `groups` → admin claim | `gateway::Authenticator` (`crates/shell/src/gateway/identity.rs`) |
 
 The adapters live behind the `test-services` cargo feature, and the integration
 tests require the env vars below, so nothing here runs in `mise run test`.
@@ -27,8 +27,8 @@ Ports are overridable so the stack can coexist with other local services:
 NATS_PORT=4223 NATS_MONITOR_PORT=8223 KEYCLOAK_PORT=8081 mise run svc-up
 ```
 
-The compose file is [`compose.test.yaml`](../compose.test.yaml). The realm lives at
-[`scripts/test-services/keycloak/loomery-realm.json`](../scripts/test-services/keycloak/loomery-realm.json)
+The compose file is `compose.test.yaml` (`compose.test.yaml`). The realm lives at
+`scripts/test-services/keycloak/loomery-realm.json` (`scripts/test-services/keycloak/loomery-realm.json`)
 and is **baked into a small image** built from the Dockerfile beside it, rather than
 bind-mounted into Keycloak: a bind mount made the import depend on a host path the
 daemon resolves and on the container user reading it, and it failed silently — Keycloak
@@ -48,7 +48,7 @@ re-run the task; compose rebuilds the image.
 | user `admin` | password `admin`, member of `/admins` |
 | client scope `loomery-groups` | maps group membership to the `groups` claim (token **and** userinfo) |
 
-The gateway's [Keycloak authenticator](../crates/shell/src/gateway/keycloak.rs)
+The gateway's Keycloak authenticator (`crates/shell/src/gateway/keycloak.rs`)
 calls the realm's `userinfo` endpoint with the bearer token, maps `sub` to the
 user id, and sets `is_admin` when `groups` contains `admins`
 (`with_admin_group` changes the group).
@@ -127,10 +127,10 @@ cargo test -p loomery-shell --features test-services --test test_services
 
 ## 5. CI
 
-The `Test services` step in [`.buildkite/pipeline.yml`](../.buildkite/pipeline.yml)
+The `Test services` step in `.buildkite/pipeline.yml` (`.buildkite/pipeline.yml`)
 starts the same compose stack from inside the CI image, waits for readiness,
 runs the integration tests, and always tears the stack down — see
-[`.buildkite/scripts/test-services.sh`](../.buildkite/scripts/test-services.sh).
+`.buildkite/scripts/test-services.sh` (`.buildkite/scripts/test-services.sh`).
 The step mounts the host Docker socket and joins the host network, so the stack
 the container starts is reachable at `127.0.0.1` exactly as above.
 
@@ -143,7 +143,7 @@ failure is diagnosable from the job log.
 
 ## 6. Stress profiles
 
-[`benchmarks/services-stress.md`](benchmarks/services-stress.md) documents three
+`benchmarks/services-stress.md` (`workpad/benchmarks/services-stress.md`) documents three
 load profiles over the same adapters (`mise run bench-services-stress`):
 concurrent authentication, Raft → outbox → JetStream with a crash replay, and the
 whole command plane with a real Keycloak authentication per command. Each profile

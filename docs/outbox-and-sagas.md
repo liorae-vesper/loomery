@@ -41,7 +41,7 @@ default test suite is self-contained.
 
 ## 2. Sagas (`crates/shell/src/saga`)
 
-A [`Consumer`](../crates/shell/src/saga/mod.rs) has a durable cursor: `next`
+A `Consumer` (`crates/shell/src/saga/mod.rs`) has a durable cursor: `next`
 **peeks** the next unacked message (a real broker redelivers), `ack` removes it.
 [`SagaRunner`] processes one message at a time:
 

@@ -25,7 +25,7 @@
 //!   cargo run --release -p loomery-shell --features test-services --example services_stress
 //! ```
 //!
-//! Method, knobs, measured results and limits: `docs/benchmarks/services-stress.md`.
+//! Method, knobs, measured results and limits: `workpad/benchmarks/services-stress.md`.
 //! `scripts/bench-services-stress.py` (`mise run bench-services-stress`) runs the
 //! scenarios in release mode and collects the JSON.
 #![allow(clippy::cast_precision_loss)] // Presentation statistics only; raw samples stay in microseconds.
@@ -35,7 +35,7 @@ fn main() {
     eprintln!(
         "services_stress needs the Keycloak and NATS adapters: \
          cargo run --features test-services --example services_stress \
-         (see docs/benchmarks/services-stress.md)"
+         (see workpad/benchmarks/services-stress.md)"
     );
     std::process::exit(2);
 }

@@ -6,7 +6,7 @@
 //! deliberately free of I/O, wall-clock reads, and randomness: identities
 //! and timestamps are injected through the command envelope by the shell.
 //!
-//! See the architecture, contracts and decisions in `docs/design.md` at the
+//! See the architecture, contracts and decisions in `workpad/design.md` at the
 //! repository root.
 
 // Strict lints (unwrap/expect/panicking slicing/overflowing math) are denied in

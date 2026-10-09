@@ -5,7 +5,7 @@
 //! Every command and event is attributable to an [`Actor`]: a user (an
 //! [`Id`]), the system itself, or a saga (the workflow runner, e.g.
 //! `InvitationSaga`). The [`EventEnvelope`](crate::envelope::Event)
-//! carries the actor of every event (§6 of `docs/design.md`).
+//! carries the actor of every event (§6 of `workpad/design.md`).
 
 use crate::id::Id;
 use serde::{Deserialize, Serialize};

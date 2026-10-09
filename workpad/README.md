@@ -6,14 +6,18 @@ tree.
 
 ## The rule
 
-`docs/` holds what a reader of the project should find: how it works, what was
-decided, what was measured, and why. Everything else starts here. When a note is
-refined enough to still be true a year from now, move it into `docs/` — or fold it
-into an existing doc there — **and then delete it from here**. A note that was
-promoted and a note that turned out to be wrong both leave. Nothing here is an
-archive and nothing here is user-facing.
+`docs/` is the published site: what a reader of the project should find — how it works,
+what was decided, how to run and configure it. Everything else starts here. When a note
+is refined enough to still be true a year from now, move it into `docs/` as a page of the
+site (and add it to the site's navigation), or fold it into a page that is already there
+— **and then delete it from here**. A note that was promoted and a note that turned out
+to be wrong both leave. Nothing here is an archive and nothing here is user-facing.
 
-    workpad/handoff.md  ->  docs/research/<subject>.md  ->  (workpad copy deleted)
+    workpad/<subject>.md  ->  docs/<page>.md  ->  (workpad copy deleted)
+
+The engineering material that is *not* user-facing stays here by design: the decisions
+register, the implementation walkthrough, the benchmark record and the research notes.
+Those are for maintainers, and the site does not link to them.
 
 ## What belongs here
 
@@ -28,7 +32,7 @@ archive and nothing here is user-facing.
 ## What does not
 
 - **Anything user-facing.** If a reader of the project needs it, it belongs in
-  `docs/`; the [documentation index](../docs/README.md) says where each kind goes.
+  `docs/`; the [engineering record](documentation-index.md) says where each kind goes.
 - **Raw benchmark output.** `benchmark-results/` is the gitignored home for node
   databases and per-trial samples. A workpad note records the *numbers and the
   command*; the data itself stays out of the repository.
@@ -39,8 +43,9 @@ archive and nothing here is user-facing.
 A workpad note may link into `docs/`. A `docs/` page must never link back here,
 because a published page cannot depend on a file that is expected to be deleted.
 `mise run docs-links` enforces that direction, along with the usual link, anchor
-and run-citation checks — a file here needs no place in the documentation index,
-but its links still have to resolve.
+and run-citation checks. A broken link in `docs/` fails it; a broken one here is
+reported as a warning, because this tree is allowed to be mid-edit. A file here
+needs no place in the site's navigation.
 
 ## Handoff template
 

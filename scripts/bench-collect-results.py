@@ -5,7 +5,7 @@
 `benchmark-results/` is gitignored — it holds node databases and per-trial raw
 samples, which do not belong in the repository — so the medians a benchmark note
 quotes would otherwise be reproducible only on the machine that ran them. This turns
-the runs into `docs/benchmarks/results/deployment-path.json`: for every run, the
+the runs into `workpad/benchmarks/results/deployment-path.json`: for every run, the
 config overrides it used, the medians per point, the harness's own verification
 counts, and the environment it ran on. Each entry names the directory it came from, so
 a reader can re-run the sweep (`mise run bench-deployment-scale`) and regenerate it.
@@ -23,7 +23,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 RESULTS = REPO / "benchmark-results"
-OUT = REPO / "docs/benchmarks/results/deployment-path.json"
+OUT = REPO / "workpad/benchmarks/results/deployment-path.json"
 MEDIAN_KEYS = ("throughput_per_second", "p50_us", "p95_us", "p99_us",
                "events_verified", "commands_per_log_index", "distinct_log_indices")
 

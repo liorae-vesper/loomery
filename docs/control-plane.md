@@ -3,7 +3,7 @@
 The control plane is the part of the shell that answers *"which group owns this
 organization, and is it ready?"*. It is not a separate service: it is a Raft
 group — the **control group** — plus a projection of it. One group per
-organization holds that organization's domain events ([`design.md`](design.md)
+organization holds that organization's domain events (`design.md` (`workpad/design.md`)
 principle 3); the control group holds the *placement* of every such group.
 
 ```text
@@ -35,7 +35,7 @@ empty or oversized replica sets, and duplicate node ids. `tenant.tombstone`
 works from `Registering` or `Active`; a retired tenant keeps its record so a
 delayed worker cannot resurrect it.
 
-The plan is a normal [`AggregatePlan`](../crates/core/src/aggregate.rs):
+The plan is a normal `AggregatePlan` (`crates/core/src/aggregate.rs`):
 deterministic, payload-typed, unit + transition-matrix + invariant + replay
 property tested.
 
@@ -81,7 +81,7 @@ tenant**, and a failed genesis leaves no route.
 ### Host wiring (not the controller's job)
 
 The controller starts from an already booted, initialized tenant group. A host
-owns the rest, as [`implementation.md`](implementation.md) describes:
+owns the rest, as `implementation.md` (`workpad/implementation.md`) describes:
 
 - `RaftGroup::boot_persistent(node_id, group_id, path, config)` per replica;
 - register each handle with the shared `TonicTransport`;
@@ -103,7 +103,7 @@ A reconciliation loop is therefore: read `incomplete()`, have the host reopen
 each tenant's databases (same paths, recovered membership), call `resume()`,
 and let `provision`'s fence decide when the tenant is safe to route.
 
-[`bootstrap_for(organization_id, tenant)`](../crates/shell/src/control/controller.rs)
+`bootstrap_for(organization_id, tenant)` (`crates/shell/src/control/controller.rs`)
 rebuilds that loop's missing input — the `Bootstrap` — from the record, using
 `Timestamp::now()` because the time affects no derived identity (D12). The host
 runs the loop at boot and every 30 s (`shell::host::Host::reconcile`); a record
@@ -120,7 +120,7 @@ that names no leader is reported, not guessed at.
 
 ## Reference
 
-- [`crates/core/src/tenant.rs`](../crates/core/src/tenant.rs) — the aggregate
-- [`crates/shell/src/control/`](../crates/shell/src/control) — router, controller, reconciliation
-- [`crates/shell/src/raft/state_machine.rs`](../crates/shell/src/raft/state_machine.rs) — dispatch + `tenants()`
-- [`design.md`](design.md) §4, §8 — the planned shell layout and tracker
+- `crates/core/src/tenant.rs` (`crates/core/src/tenant.rs`) — the aggregate
+- `crates/shell/src/control/` (`crates/shell/src/control`) — router, controller, reconciliation
+- `crates/shell/src/raft/state_machine.rs` (`crates/shell/src/raft/state_machine.rs`) — dispatch + `tenants()`
+- `design.md` (`workpad/design.md`) §4, §8 — the planned shell layout and tracker

@@ -7,7 +7,7 @@ TLS and both recovery modes are now implemented; see the
 > **The code has since moved to OpenRaft 0.10.0-alpha.36.** The API tables and
 excerpts below describe the crate as it was read during the walkthrough (0.9.25);
 they are kept as the record of how the spike was built. What changed, and what it
-cost, is in [openraft-010-migration.md](../research/openraft-010-migration.md).
+cost, is in openraft-010-migration.md (`workpad/research/openraft-010-migration.md`).
 
 
 Design §5, Phase 1, item 1: keep the consensus machinery behind
@@ -20,7 +20,7 @@ its events back.
    `initialize` as a one-node cluster, one `client_write` → the response comes
    back applied. Tests green, no network.
 2. **The port:** a `GroupOps` adapter over that handle, so
-   [`bootstrap::run`](../../crates/shell/src/bootstrap.rs) drives genesis on a
+   `bootstrap::run` (`crates/shell/src/bootstrap.rs`) drives genesis on a
    real group, and the tests from `genesis-worker.md` §9 pass against it.
 3. **Multi-node:** `RaftNetworkFactory`/`RaftNetwork` over tonic, a second node
    joining, then leader failover. Only after 1 and 2 are boring.
@@ -132,7 +132,7 @@ Implement `RaftLogReader` + `RaftLogStorage<TypeConfig>` over
   never panic — this code runs inside the Raft core.
 
 The `MemStore` example referenced by
-[`docs/research/openraft-storage.md`](../research/openraft-storage.md) §5 is the
+`docs/research/openraft-storage.md` (`workpad/research/openraft-storage.md`) §5 is the
 shape to copy for the in-memory version (`read_index`, `log_state`, a `VecDeque`
 of entries, the flush sender).
 
@@ -156,7 +156,7 @@ where
   membership half matters for restarts and snapshots.
 * The apply body is where the **pure core** runs (`AggregatePlan::process` /
   `apply`). Keep it deterministic: no clock, no randomness. The dedup registry
-  ([`dedup::Registry`](../../crates/core/src/dedup.rs)) is *folded state*, so a
+  (`dedup::Registry` (`crates/core/src/dedup.rs`)) is *folded state*, so a
   replay rebuilds it — which is what makes the "committed but not yet recorded"
   window survivable.
 * Keep the committed events where

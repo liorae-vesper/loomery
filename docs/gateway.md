@@ -8,9 +8,9 @@ the system. Every request goes through one pipeline:
            (token)          (admin-only)   (argon2)        (keys)   (Router)  (GroupOps)
 ```
 
-The framework-agnostic half ([`CommandPlane`](../crates/shell/src/gateway/command.rs))
+The framework-agnostic half (`CommandPlane` (`crates/shell/src/gateway/command.rs`))
 is pure where it can be, so the identity and pre-compute rules are testable
-without a cluster; the axum adapter ([`http`](../crates/shell/src/gateway/http.rs))
+without a cluster; the axum adapter (`http` (`crates/shell/src/gateway/http.rs`))
 only parses input and maps errors onto status codes.
 
 ## 1. Identity (`identity.rs`)
@@ -114,7 +114,7 @@ cluster.
    the command names* must satisfy the requirement, and the command must name one:
    a scoped command without a scope is refused rather than treated as unscoped.
    The table is one place
-   ([`required_workspace_role`](../crates/shell/src/gateway/identity.rs)):
+   (`required_workspace_role` (`crates/shell/src/gateway/identity.rs`)):
 
    | Command | Required role |
    |---|---|

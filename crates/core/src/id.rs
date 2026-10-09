@@ -5,7 +5,7 @@
 //! [`Id`] is the canonical identifier for aggregates, organizations,
 //! workspaces and every other entity: the 36-character hyphenated UUID
 //! string, which is also the serde wire form (a bare `JSON` string, D4 in
-//! `docs/design.md`).
+//! `workpad/design.md`).
 //!
 //! The UUID *version* is not part of the type's contract, because ids come in
 //! two populations (D12) and mixing them up is the one way to duplicate state:
@@ -29,7 +29,7 @@ use uuid::{Uuid, Variant};
 ///
 /// Canonical form is the hyphenated 36-character lowercase UUID string, which
 /// is also the serde wire form (a plain `JSON` string, see D4 in
-/// `docs/design.md`).
+/// `workpad/design.md`).
 ///
 /// **Determinism rule:** the pure core never generates ids. [`Id::new`] is
 /// shell-side (or a test helper); the core receives ids injected through the

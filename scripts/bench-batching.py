@@ -27,7 +27,7 @@ def summarize(directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=Path("docs/benchmarks/consensus.json"))
+    parser.add_argument("--config", type=Path, default=Path("workpad/benchmarks/consensus.json"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--batch-commands", type=int, default=8)
     parser.add_argument("--summarize", action="store_true")

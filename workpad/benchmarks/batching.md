@@ -84,7 +84,7 @@ machines, large histories or sustained compaction/stall behavior.
 
 Batching defaults to disabled. Upgrade every replica before enabling it;
 older binaries cannot decode the batch entry variant. See
-[configuration and writer usage](../raft-configuration.md#opt-in-command-batching).
+[configuration and writer usage](../../docs/raft-configuration.md#opt-in-command-batching).
 
 For larger batch limits at fixed concurrency, see the
 [configurable 8/16/32/64/128 matrix](batch-matrix.md).

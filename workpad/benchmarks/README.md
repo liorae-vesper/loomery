@@ -89,7 +89,7 @@ configuration and rejects typos. Effective configuration is saved in full.
 | `group.storage` | RocksDB cache, memtable, background-job and file limits |
 
 For TLS or mTLS, supply the `server_tls` and `client_tls` settings documented in
-[raft-configuration.md](../raft-configuration.md). The local benchmark requires
+[raft-configuration.md](../../docs/raft-configuration.md). The local benchmark requires
 both, or neither. It advertises loopback IP addresses: either issue certificates
 with a `127.0.0.1` IP SAN, or set `client_tls.server_name` to a verified DNS SAN
 such as `localhost`. Certificate files must be accessible to every replica.

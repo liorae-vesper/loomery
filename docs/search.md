@@ -1,7 +1,7 @@
 # Search — "find anything" within a tenant
 
-**Status: decided ([D6](design.md#d6--fts-engine), [D9](design.md#d9--storage-of-cold-read-model-state)),
-not implemented.** Search is [principle 11](design.md#1-what-loomery-is) of the
+**Status: decided (D6 (`workpad/design.md#d6--fts-engine`), D9 (`workpad/design.md#d9--storage-of-cold-read-model-state`)),
+not implemented.** Search is principle 11 (`workpad/design.md#1-what-loomery-is`) of the
 design: a first-class read path, not a report. The decisions on this page: tantivy,
 one index per tenant; entities only (no history); updated from the outbox with
 `as_of` disclosed.
@@ -35,7 +35,7 @@ flowchart LR
 | The history that produced them | **not indexed — decided**; "what happened" is answered by scanning `events` | an event index is cheap to add later, because the record is complete and ordered |
 | Free text | ✅ title/summary/body fields, BM25-ranked | — |
 | Fields | ✅ workspace, project, status, assignee, labels, dates | — |
-| Vectors (semantic search) | ❌ ([D7](design.md#d7--vector-store-phase-4), Phase 4) | `sqlite-vec`, `hnswlib-rs` or PG — unchanged by this decision |
+| Vectors (semantic search) | ❌ (D7 (`workpad/design.md#d7--vector-store-phase-4`), Phase 4) | `sqlite-vec`, `hnswlib-rs` or PG — unchanged by this decision |
 
 "Find anything" is about the tenant's *current* content: the entities a caller may
 read. History is not indexed. That keeps the index a projection of current state —
@@ -127,9 +127,9 @@ dependency this design does not need while the index can live beside the data.
 
 - [storage-layout.md](storage-layout.md) — the database this index sits beside, and
   the `events` family it is built from
-- [design.md](design.md) — principle 11,
-  [D6](design.md#d6--fts-engine) (the engine),
-  [D9](design.md#d9--storage-of-cold-read-model-state) (the projection store),
-  [D7](design.md#d7--vector-store-phase-4) (vectors, Phase 4)
-- [read-model-store-options.md](research/read-model-store-options.md) — why tantivy
+- design.md (`workpad/design.md`) — principle 11,
+  D6 (`workpad/design.md#d6--fts-engine`) (the engine),
+  D9 (`workpad/design.md#d9--storage-of-cold-read-model-state`) (the projection store),
+  D7 (`workpad/design.md#d7--vector-store-phase-4`) (vectors, Phase 4)
+- read-model-store-options.md (`workpad/research/read-model-store-options.md`) — why tantivy
   and not FTS5, and why the store is a column family

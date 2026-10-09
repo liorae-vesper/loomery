@@ -52,7 +52,7 @@ section 6: the number you configure is a ceiling, not a promise.
 
 Then we stopped measuring the write path and measured a *history*. Applying `task.create`
 commands to one single-node group, 200 → 10,000 commands, both persistence modes
-([persistence hardening](../docs/benchmarks/persistence-hardening.md)):
+([persistence hardening](benchmarks/persistence-hardening.md)):
 
 | Mode | 200 | 1,000 | 2,000 | 10,000 |
 |---|---:|---:|---:|---:|
@@ -145,7 +145,7 @@ With the per-command cost understood, the lever from section 1 was worth buildin
 several commands into one Raft entry, above Raft, keeping the synchronous append path and the
 acknowledgement policy unchanged
 ([command batching](../docs/raft-configuration.md),
-[measured](../docs/benchmarks/batching.md)). Eight commands per entry against fresh
+[measured](benchmarks/batching.md)). Eight commands per entry against fresh
 unbatched runs:
 
 | Persistence | Unbatched | Batches of 8 | Gain |
@@ -313,9 +313,9 @@ crate.
 ## Where the numbers come from
 
 Every figure above is from a committed note, in the order the post uses them:
-[checkpoint versus snapshot](../docs/benchmarks/checkpoint-spike.md) →
-[the storage investigation](../docs/research/consensus-storage-performance.md) →
-[persistence hardening](../docs/benchmarks/persistence-hardening.md) →
+[checkpoint versus snapshot](benchmarks/checkpoint-spike.md) →
+[the storage investigation](research/consensus-storage-performance.md) →
+[persistence hardening](benchmarks/persistence-hardening.md) →
 [storage layout](../docs/storage-layout.md) →
-[command batching](../docs/benchmarks/batching.md) →
-[deployment path at scale](../docs/benchmarks/deployment-scale.md#after-openraft-010).
+[command batching](benchmarks/batching.md) →
+[deployment path at scale](benchmarks/deployment-scale.md#after-openraft-010).

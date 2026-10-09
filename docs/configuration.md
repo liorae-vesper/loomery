@@ -4,7 +4,7 @@ One file configures a host, and one shape configures every group it runs. This i
 single reference: every field, its default, what it does — and then how the parts
 constrain each other, in the order they are applied. Behaviour and measurements are in
 [host.md](host.md), [raft-configuration.md](raft-configuration.md) and
-[benchmarks/](benchmarks/README.md); this document is the map of the knobs themselves.
+benchmarks/ (`workpad/benchmarks/README.md`); this document is the map of the knobs themselves.
 
 ## The shape
 
@@ -115,7 +115,7 @@ rather than what we chose.
 
 | Field | Default | What it governs |
 |---|---|---|
-| `heartbeat_interval` | `50` | Leader heartbeat period, ms. Also the `hard_ttl` OpenRaft derives its own reply deadlines from — which is why a stream must never use it as a per-response bound (see [the wedge](benchmarks/deployment-scale.md#the-sweep-that-wedged-and-why)) |
+| `heartbeat_interval` | `50` | Leader heartbeat period, ms. Also the `hard_ttl` OpenRaft derives its own reply deadlines from — which is why a stream must never use it as a per-response bound (see the wedge (`workpad/benchmarks/deployment-scale.md#the-sweep-that-wedged-and-why`)) |
 | `election_timeout_min` / `election_timeout_max` | `150` / `300` | Randomized election window, ms |
 | `enable_tick` / `enable_heartbeat` / `enable_elect` | `true` | The three background loops |
 | `install_snapshot_timeout` | `200` | Per-chunk deadline 0.9 applied to snapshot transfer, ms |
@@ -259,7 +259,7 @@ applies and the replica replays the difference on restart. Nothing can come back
 the marker and the record are one batch — and a store whose record has no marker is
 refused rather than guessed at. [raft-configuration.md](raft-configuration.md#what-is-synchronised-and-what-that-buys)
 states the model; the trade is worth **+34%** on the default deployment path
-([measured](benchmarks/deployment-scale.md#the-per-command-cost-two-fsyncs-per-batch)).
+(measured (`workpad/benchmarks/deployment-scale.md#the-per-command-cost-two-fsyncs-per-batch`)).
 
 **Snapshots, purge and retention.** `snapshot_policy` decides when a snapshot is built;
 `max_in_snapshot_log_to_keep` and `purge_batch_size` decide what is dropped behind it.
@@ -273,7 +273,7 @@ the dominant lever, and it is not a server setting: 1,225 w/s at 8 in flight aga
 concurrency supplies the depth; at 8 in flight, turning batching on is a wash
 (1,231 w/s against 1,225) because a batch of 8 commands does not cost 8× a batch of one
 to write. Storage buffers and background jobs trade memory and CPU for compaction
-throughput. [deployment-scale.md](benchmarks/deployment-scale.md) has the numbers and
+throughput. deployment-scale.md (`workpad/benchmarks/deployment-scale.md`) has the numbers and
 the caveats, including which of them are inside the trial-to-trial spread.
 
 ## Deliberately not configurable

@@ -4,7 +4,7 @@
 
 # OpenRaft vs the Alternatives — Research
 
-> Decision D1 has landed: OpenRaft over tonic gRPC. This note preserves the original comparison; current interfaces and limitations are documented in [the shell reference](../shell.md) and [design D1](../design.md#d1--consensus).
+> Decision D1 has landed: OpenRaft over tonic gRPC. This note preserves the original comparison; current interfaces and limitations are documented in [the shell reference](../../docs/shell.md) and [design D1](../design.md#d1--consensus).
 
 Loomery is a multi-tenant event-sourced backend: **one consensus group per
 organization + a control group**, running inside a single Rust process per

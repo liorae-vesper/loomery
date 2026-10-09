@@ -117,7 +117,7 @@ callbacks cannot share one database's WAL sync either. Useful grouping requires
 verified pipelined Raft I/O, explicit command batching, or a deliberate shared
 database layout. The latter changes isolation, tuning and recovery and is not
 an incidental storage flag. The later
-[command-batching implementation](../raft-configuration.md#opt-in-command-batching)
+[command-batching implementation](../../docs/raft-configuration.md#opt-in-command-batching)
 chooses explicit batching above Raft: several commands share one entry, retaining
 the synchronous append/callback path. It introduces no grouped WAL worker or
 weakened acknowledgment policy. See [the paired results](../benchmarks/batching.md).
@@ -237,5 +237,5 @@ reproduced in this investigation.
    are a separate mechanism; this investigation did not measure stall counters.
 
 Disabling WAL or synchronization would change the tested guarantee and is not
-the optimization proposed here. Preserve the [immutable recovery mode](../raft-configuration.md)
+the optimization proposed here. Preserve the [immutable recovery mode](../../docs/raft-configuration.md)
 for existing deployments while comparing implementations.

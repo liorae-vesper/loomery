@@ -112,7 +112,7 @@ pub struct Execution {
 ///
 /// Implementations are plain data transformers: no I/O, no wall clock, no
 /// randomness (determinism is what makes replicated apply identical on
-/// every `OpenRaft` replica — `docs/design.md` §2.1). Methods are **static**:
+/// every `OpenRaft` replica — `workpad/design.md` §2.1). Methods are **static**:
 /// the type is the plan, so implementors hold no instance data.
 pub trait AggregatePlan<State, ErrorCode> {
     /// Validates `command` against `state` and produces the events to append.

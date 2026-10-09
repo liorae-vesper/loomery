@@ -380,9 +380,9 @@ tenant group, which is why the Organization aggregate exists there.
 
 ## Reference
 
-- Contract: [`crates/core/src/aggregate.rs`](../crates/core/src/aggregate.rs)
-- Versioning/upcast: [`crates/core/src/versioning.rs`](../crates/core/src/versioning.rs)
-- Errors: [`crates/core/src/error.rs`](../crates/core/src/error.rs)
-- Frozen genesis names: [`crates/genesis/src/script.rs`](../crates/genesis/src/script.rs)
-- Identity model: [`design.md`](design.md) D12
-- Envelope and versioning: [`design.md`](design.md) §6
+- Contract: `crates/core/src/aggregate.rs` (`crates/core/src/aggregate.rs`)
+- Versioning/upcast: `crates/core/src/versioning.rs` (`crates/core/src/versioning.rs`)
+- Errors: `crates/core/src/error.rs` (`crates/core/src/error.rs`)
+- Frozen genesis names: `crates/genesis/src/script.rs` (`crates/genesis/src/script.rs`)
+- Identity model: `design.md` (`workpad/design.md`) D12
+- Envelope and versioning: `design.md` (`workpad/design.md`) §6

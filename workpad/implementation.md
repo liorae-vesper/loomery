@@ -2,7 +2,7 @@
 
 This guide traces the current code: how the crates build, how a replica starts,
 and how Raft calls the storage, network and domain layers. For option details,
-use [raft-configuration.md](raft-configuration.md). For the wider architecture
+use [raft-configuration.md](../docs/raft-configuration.md). For the wider architecture
 and planned components, use [design.md](design.md).
 
 ## 1. What the crates build
@@ -17,8 +17,8 @@ The [workspace manifest](../Cargo.toml) discovers `crates/*`, shares package
 settings and enforces lints. The shell is a library, not a complete application
 server. The embedding application owns its Tokio runtime, listeners, group
 lifecycle and shutdown. The gateway, control-plane router, outbox and sagas are
-implemented in the shell library ([`gateway.md`](gateway.md),
-[`control-plane.md`](control-plane.md), [`outbox-and-sagas.md`](outbox-and-sagas.md));
+implemented in the shell library ([`gateway.md`](../docs/gateway.md),
+[`control-plane.md`](../docs/control-plane.md), [`outbox-and-sagas.md`](../docs/outbox-and-sagas.md));
 the host still owns the HTTP server, the broker connection and its group
 registry.
 
@@ -222,7 +222,7 @@ helper: it uses memory and a no-op network, and initializes its single voter.
 
 The APIs above can create and register groups at runtime. The tenant-creation
 controller, placement records and router **are** implemented
-([`shell::control`](../crates/shell/src/control), [`control-plane.md`](control-plane.md));
+([`shell::control`](../crates/shell/src/control), [`control-plane.md`](../docs/control-plane.md));
 the host still owns replica booting, transport registration and the periodic
 reconciliation sweep. The following is the host orchestration around them:
 
@@ -275,7 +275,7 @@ The intended sequence is:
 2. Resolve in-flight requests and any required committed outbox delivery or
    archival before stopping the group. The desired deletion/retention policy
    must define what happens to pending integration work; the outbox and saga
-   runner exist ([`outbox-and-sagas.md`](outbox-and-sagas.md)) but the NATS
+   runner exist ([`outbox-and-sagas.md`](../docs/outbox-and-sagas.md)) but the NATS
    binding is deployment wiring. Cross-group coordination uses that choreography
    model, not an atomic transaction spanning the control and tenant groups.
 3. On **every replica host**, remove the group from the host's application
@@ -374,7 +374,7 @@ With TLS, use HTTPS membership URIs and configured peer CA/name verification.
 Server TLS is loaded when `serve` starts; outbound material is checked at boot
 and loaded when clients are created. A server client-CA bundle requires client
 certificates for mTLS. The listener explicitly sets TCP_NODELAY and keepalive
-on accepted sockets. See [TLS configuration](raft-configuration.md) for paths,
+on accepted sockets. See [TLS configuration](../docs/raft-configuration.md) for paths,
 identities and rotation limits.
 
 ## 7. What a write does
@@ -395,7 +395,7 @@ identities and dedup/rejection outcomes. A rejected command does not roll back
 its siblings. Direct `raft().client_write` calls bypass the queue; sequential
 bootstrap steps remain sequential.
 
-See [batch configuration](raft-configuration.md#opt-in-command-batching) and
+See [batch configuration](../docs/raft-configuration.md#opt-in-command-batching) and
 [measured gains](benchmarks/batching.md). Every replica must understand batch
 entries before enabling the option; batching defaults to disabled.
 
@@ -417,7 +417,7 @@ Neither mode acknowledges local writes first and replicates them later.
 The port maps `Applied` to appended/replayed success or domain rejection.
 A replay returns the original intent's index; it is not another domain event.
 Timeouts and leadership movement can leave an unknown outcome, so callers
-re-read before retrying. The [genesis worker](tutorials/genesis-worker.md) follows
+re-read before retrying. The [genesis worker](../docs/tutorials/genesis-worker.md) follows
 that rule to resume provisioning without duplicating completed steps.
 
 `committed_events` reads the local state machine directly. It does not ask a

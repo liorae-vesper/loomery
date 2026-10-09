@@ -1,7 +1,7 @@
 # Architecture at a glance
 
 How the pieces built so far fit together, in diagrams. Everything here is
-implemented and covered by the gates; the [design tracker](design.md) says what is
+implemented and covered by the gates; the design tracker (`workpad/design.md`) says what is
 planned, and [host.md](host.md) documents the runtime gaps that remain.
 
 Every diagram here is parsed by `mise run docs-mermaid` (the same parser a
@@ -329,4 +329,4 @@ not implemented:
 | Read models | Reads filter the applied log — `O(history)` per read, and a workspace's own events are matched by aggregate id. |
 | Tracing | No OpenTelemetry; the host reports through `eprintln!`. |
 | Snapshot-recovery hardening | The heavy restart paths are covered by tests, but interrupted snapshot build/purge injection is not. |
-| Phases 2–7 | Work core (projects, comments, dependencies, follow), read APIs with keyset pagination, search, notifications. See the [design tracker](design.md). |
+| Phases 2–7 | Work core (projects, comments, dependencies, follow), read APIs with keyset pagination, search, notifications. See the design tracker (`workpad/design.md`). |

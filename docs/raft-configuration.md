@@ -19,7 +19,7 @@ and resource settings before opening storage. Apply changed settings on restart.
 
 ## Startup and membership
 
-```rust,ignore
+```rust ignore
 use loomery_shell::{config::GroupConfig, raft::{RaftGroup, transport::TonicTransport}};
 use openraft::BasicNode;
 use std::{collections::BTreeMap, path::Path};
@@ -112,7 +112,7 @@ stop producing batches by setting the count back to 1; existing batches still
 replay normally. The immutable checkpoint/snapshot recovery-mode protection
 remains enforced independently of these tuning settings.
 
-See [the batching benchmark](benchmarks/batching.md) for measurements and
+See the batching benchmark (`workpad/benchmarks/batching.md`) for measurements and
 `mise run bench-batching -- --output benchmark-results/batching-comparison`
 for a controlled comparison.
 
@@ -129,7 +129,7 @@ at most half of `max_message_bytes`. Replication itself is openraft's default
 sequential `stream_append` — one request, one response — because a bidirectional
 `StreamAppend` measured within a few percent of it in both directions; the design
 record is in
-[the migration note](research/openraft-010-migration.md#pipelined-append-leg-5-built-measured-removed).
+the migration note (`workpad/research/openraft-010-migration.md#pipelined-append-leg-5-built-measured-removed`).
 
 The limits themselves are ceilings rather than promises, and how they combine with
 concurrency — including what an inert limit looks like in `batch_stats()` — is in
@@ -158,14 +158,14 @@ sync. A power cut can therefore lose the last window of applies, and the replica
 comes back behind its log and replays the difference; it cannot come back torn,
 because the marker is written in the same batch as the record it describes. The
 trade is one fsync per apply instead of two: 9.5% of throughput on the batched
-path ([measured](benchmarks/deployment-scale.md#the-per-command-cost-two-fsyncs-per-batch)).
+path (measured (`workpad/benchmarks/deployment-scale.md#the-per-command-cost-two-fsyncs-per-batch`)).
 Snapshot mode has always worked this way, persisting no per-apply state at all.
 Snapshot persistence and purge stay synchronised.
 
 The initial durable state machine awaits a complete applied-state checkpoint
 (including applied events and dedup) after each apply batch. Raft snapshots are separate and follow
 `raft.snapshot_policy` (default: every 5000 logs since the last snapshot).
-See [checkpoint-policy.md](research/checkpoint-policy.md) for the difference
+See checkpoint-policy.md (`workpad/research/checkpoint-policy.md`) for the difference
 between background scheduling and durable synchronization. This favors simple
 recovery but serialization and write cost grow with group history. Incremental
 state persistence and event archival remain future work; benchmark expected
@@ -258,5 +258,5 @@ per-database protection, not a cluster-wide control-plane setting.
 
 There is no force-switch option or automatic migration. Use fresh database
 paths for comparisons; changing the configuration on an existing deployment
-fails startup. See [the persistence spike](benchmarks/checkpoint-spike.md) before
+fails startup. See the persistence spike (`workpad/benchmarks/checkpoint-spike.md`) before
 selecting snapshot mode.

@@ -1,7 +1,7 @@
 # The group port — the shell's consensus boundary
 
 Every part of the shell that writes to a Raft group, or reads back what it
-committed, goes through one small trait: [`GroupOps`](../../crates/shell/src/group.rs).
+committed, goes through one small trait: `GroupOps` (`crates/shell/src/group.rs`).
 Genesis is only the first client of it — the gateway command plane and the saga
 runner use the same port, which is why it is generic.
 
@@ -62,7 +62,7 @@ committed?"* and *"append this, and tell me what happened."*
 
 | Caller | How it uses the port |
 |---|---|
-| **Genesis worker** ([`bootstrap`](../../crates/shell/src/bootstrap.rs)) | derives progress from `committed_events` (matching the script's own causation keys), then proposes the next step |
+| **Genesis worker** (`bootstrap` (`crates/shell/src/bootstrap.rs`)) | derives progress from `committed_events` (matching the script's own causation keys), then proposes the next step |
 | **Gateway command plane** | `propose`s a client command; on `Replayed` it must also compare the recorded *intent fingerprint* and answer `409` if a reused key carried a different request |
 | **Saga runner** | proposes follow-up commands and watches `committed_events` for the events it is waiting on |
 

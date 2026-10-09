@@ -11,13 +11,13 @@
 //!   nothing may be installed, recovery must still work, and a retry must succeed.
 //!   This is the "abandoned build" path: the design relies on the builder being
 //!   idempotent and keyed by `last_applied_index`
-//!   (`docs/research/checkpoint-policy.md`), which these tests now exercise under
+//!   (`workpad/research/checkpoint-policy.md`), which these tests now exercise under
 //!   injection rather than assume.
 //! * a **purge** whose batch fails: the covered entries and the purge floor move
 //!   together or not at all, because they are one synchronous WAL batch. A crash
 //!   cannot land between them, so the failing-write case is what there is to test.
 //!
-//! Findings are recorded in `docs/benchmarks/persistence-hardening.md`.
+//! Findings are recorded in `workpad/benchmarks/persistence-hardening.md`.
 
 use std::collections::BTreeMap;
 use std::time::Duration;

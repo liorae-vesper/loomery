@@ -9,7 +9,7 @@
 //! [`default_workspace_id`], [`command_id`]), so a worker resumed after a crash
 //! proposes exactly the commands the crashed attempt proposed, including in the
 //! window where an event is committed but its dedup entry is not recorded yet.
-//! D12 in `docs/design.md` is the reasoning.
+//! D12 in `workpad/design.md` is the reasoning.
 //!
 //! # Layout
 //!
@@ -32,7 +32,7 @@
 //! ```
 //!
 //! Scaffold: the worker loop around this (Raft client, crash-resume wiring) is
-//! Phase 1 — see `docs/design.md` §5 and `docs/CONTINUE.md`.
+//! Phase 1 — see `workpad/design.md` §5 and `workpad/CONTINUE.md`.
 
 // Strict lints (unwrap/expect/panicking slicing/overflowing math) are denied in
 // production code — test code may use them freely, via a single crate-level

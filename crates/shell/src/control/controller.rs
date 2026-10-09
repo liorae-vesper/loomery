@@ -20,7 +20,7 @@
 //!
 //! Booting the replica processes, registering them with the transport and
 //! initializing membership are **host** concerns (see
-//! `docs/implementation.md`); this controller starts from an already booted,
+//! `workpad/implementation.md`); this controller starts from an already booted,
 //! initialized tenant group.
 
 #[cfg(test)]

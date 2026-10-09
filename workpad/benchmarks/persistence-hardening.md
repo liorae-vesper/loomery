@@ -78,7 +78,7 @@ its own.
 ## After step 1: the families
 
 Splitting the database into column families and appending every apply's events to
-an `events` family ([storage-layout.md](../storage-layout.md)) is deliberately
+an `events` family ([storage-layout.md](../../docs/storage-layout.md)) is deliberately
 additive: it makes the record durable on its own account — so purging the Raft log
 can no longer lose history — without changing how state is written. The same soak,
 1,000 commands on one machine, before and after:
@@ -151,7 +151,7 @@ and that the two things that were limiting it are now named.
 
 ## After step 2: the deltas
 
-Step 2 ([storage-layout.md](../storage-layout.md)) makes an apply persist **only
+Step 2 ([storage-layout.md](../../docs/storage-layout.md)) makes an apply persist **only
 what it changed** — the aggregate states its events touch, the dedup entries the
 window added or evicted, and the applied index — in the same synchronous batch as
 its events, and makes recovery read that state back per aggregate instead of from a
