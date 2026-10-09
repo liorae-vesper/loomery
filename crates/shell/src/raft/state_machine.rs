@@ -336,11 +336,11 @@ pub struct AppliedEvent {
 /// The per-stream state of an aggregate, tagged by its plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum AggregateState {
-    /// The organization aggregate (genesis ①).
+    /// The organization aggregate (genesis 1).
     Organization(OrganizationState),
     /// The workspace aggregate (genesis ②).
     Workspace(WorkspaceState),
-    /// The workspace-membership aggregate (genesis ③).
+    /// The workspace-membership aggregate (genesis 3).
     Membership(WorkspaceMembershipState),
     /// The control-plane user aggregate.
     User(UserState),
@@ -761,7 +761,7 @@ impl MemStateMachine {
     /// Whether `user_id` belongs to `organization_id`.
     ///
     /// Membership has two sources: the organization assignment the invitation saga
-    /// writes, and a role in one of the organization's workspaces — genesis ③
+    /// writes, and a role in one of the organization's workspaces — genesis 3
     /// gives the owner theirs, `membership.add_member` gives later members theirs.
     /// Both are folded into the index as events are applied.
     pub async fn is_organization_member(&self, organization_id: &Id, user_id: &Id) -> bool {

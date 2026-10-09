@@ -201,7 +201,7 @@ The built shell (port, genesis worker, networked persistent Raft groups) is docu
 | Worker lifecycle / idle groups | Heartbeat/election behavior follows OpenRaft configuration; scheduled snapshots are separate from awaited state checkpoints |
 | Gateway, edge pre-compute (argon2) | **axum** HTTP server; hash before the command enters consensus |
 | Saga runner | Tokio tasks consuming NATS JetStream with retry classification; timers via `tokio::time` |
-| Bootstrap worker | Genesis script ①②③, emits as `actor = Saga { user_id: None, name: "control-plane:Bootstrap" }`, deterministic `uuid_v5`-style causation |
+| Bootstrap worker | Genesis script ①2③, emits as `actor = Saga { user_id: None, name: "control-plane:Bootstrap" }`, deterministic `uuid_v5`-style causation |
 | Read-Your-Writes (`X-Min-Index`, 50 ms hold) | axum middleware; follower catch-up wait on `RaftMetrics`, then leader redirection |
 | OIDC auto-provision, system-admin claim | axum middleware; `ADMIN_GROUP` env |
 | Observability | `tracing` + `tracing-opentelemetry` + OTLP exporter (Phase 7) |
@@ -227,7 +227,7 @@ pre-compute hooks; OIDC auto-provision + system-admin claim; Invitation domain
 + acceptance saga; NATS outbox tailer first slice via `async-nats`; saga-runner
 seed.
 
-**Gate (E2E onboarding):** register org → genesis ①②③ → workspace + Owner;
+**Gate (E2E onboarding):** register org → genesis ①2③ → workspace + Owner;
 invite by email → accept → provisioned → can log in and read the board;
 crash mid-provisioning resumes with no duplicate genesis; duplicate
 `causation_id` dedup-hits with RYW honored; admin-only commands enforced.
@@ -695,7 +695,7 @@ keep.
       model-based and metadata-retention properties)
 - [x] `loomery_core::org::Organization` — `assign_leader` (①), `rename`, `archive`
 - [x] `loomery_core::user::User` — `provision`, `update_profile`, `deactivate`
-- [x] `loomery_core::workspace::Workspace` — `create` (②), `rename`, `archive`
+- [x] `loomery_core::workspace::Workspace` — `create` (2), `rename`, `archive`
 - [x] `loomery_core::task::Task` — `create`, `rename`, `complete`, `reopen` (Phase-0 slice)
 - [x] `loomery_core::membership` — `WorkspaceMembership` (`add_owner` ③,
       `add_member`, `change_role`, `remove_member`) and `OrganizationAssignment`
@@ -729,7 +729,7 @@ recorded in [`domain-model.md`](../docs/domain-model.md).
         incomplete}` — register → genesis → activate → route, idempotent by
         derived keys, with the route fenced behind genesis
   - [x] RYW `X-Min-Index` hold (gateway)
-  - [x] Genesis script (`crates/genesis`): the deterministic ①②③ plan —
+  - [x] Genesis script (`crates/genesis`): the deterministic ①2③ plan —
         derived keys/ids, commands, and progress read back from the committed
         events by causation key
   - [x] Genesis bootstrap worker: the async loop around the script

@@ -201,7 +201,7 @@ impl GroupOps for RaftGroup {
 }
 ```
 
-* Use `client_write`, **not** `client_write_ff`: genesis must know ① committed
+* Use `client_write`, **not** `client_write_ff`: genesis must know 1 committed
   before proposing ②.
 * `classify` maps `RaftError::APIError(ClientWriteError::ForwardToLeader(_))` and
   transport errors to *retryable*; the caller's contract (see

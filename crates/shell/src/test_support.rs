@@ -66,7 +66,7 @@ pub(crate) async fn assign_member(
 }
 
 /// Gives `user_id` `role` in `workspace_id`, exactly as the invitation flow and
-/// genesis ③ do: the stream id is derived from the business tuple (D12).
+/// genesis 3 do: the stream id is derived from the business tuple (D12).
 pub(crate) async fn join_workspace(
     group: &mut crate::raft::RaftGroup,
     organization_id: &loomery_core::id::Id,

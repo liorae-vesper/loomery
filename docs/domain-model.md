@@ -79,7 +79,7 @@ Each aggregate gets, at minimum:
 
 ## 2. Organization
 
-The organization's tenant-scoped facts. Genesis ① lands here (the leader); the
+The organization's tenant-scoped facts. Genesis 1 lands here (the leader); the
 control plane's *registry* of organizations is a separate concern handled in the
 control-plane part.
 
@@ -93,7 +93,7 @@ control-plane part.
 ```rust
 pub struct OrganizationState {
     pub name: Option<String>,          // None until renamed
-    pub leader_user_id: Option<Id>,    // None until genesis ①
+    pub leader_user_id: Option<Id>,    // None until genesis 1
     pub archived: bool,
 }
 ```

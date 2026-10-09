@@ -145,12 +145,12 @@ mod tests {
         assert!(run(&mut group, &bootstrap_value()).await.is_err());
         assert_eq!(committed(&group, Step::AssignLeader), 1);
 
-        // Resuming proposes ② — not a second ①.
+        // Resuming proposes 2 — not a second 1.
         let outcome = run(&mut group, &bootstrap_value()).await.unwrap();
         assert_eq!(
             outcome.appended,
             [Step::CreateWorkspace, Step::AddOwner],
-            "the resumed run must not repeat ①"
+            "the resumed run must not repeat 1"
         );
         for step in Step::ALL {
             assert_eq!(committed(&group, step), 1, "{step:?}");

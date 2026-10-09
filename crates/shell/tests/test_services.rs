@@ -247,7 +247,7 @@ async fn assign_member(group: &mut RaftGroup, organization_id: &Id, user_id: &Id
     group.propose(command).await.expect("assign the member");
 }
 
-/// Gives `user_id` `role` in `workspace_id`, as genesis ③ and the invitation
+/// Gives `user_id` `role` in `workspace_id`, as genesis 3 and the invitation
 /// flow do.
 async fn join_workspace(
     group: &mut RaftGroup,
@@ -831,7 +831,7 @@ async fn a_host_publishes_committed_events_to_the_real_broker() {
 
     host.provision_with(loomery_shell::gateway::ProvisionRequest {
         organization_id: organization_id.clone(),
-        // The owner *is* the caller: genesis ③ makes them a member, so the write
+        // The owner *is* the caller: genesis 3 makes them a member, so the write
         // below is authorized.
         leader_user_id: member_id.clone(),
         group_id: Some(group.clone()),

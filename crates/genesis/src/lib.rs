@@ -2,8 +2,8 @@
 
 //! The genesis script — the deterministic first deployment of a tenant group.
 //!
-//! A group is born with three commands committed in order (① assign leader →
-//! ② create default workspace → ③ add Owner), attributed to the control-plane
+//! A group is born with three commands committed in order (1 assign leader →
+//! 2 create default workspace → 3 add Owner), attributed to the control-plane
 //! bootstrap saga. Nothing here reads a clock or generates randomness: every
 //! identity is *derived* (`UUIDv5` — [`step_key`], [`bootstrap_correlation_key`],
 //! [`default_workspace_id`], [`command_id`]), so a worker resumed after a crash

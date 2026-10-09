@@ -2,7 +2,7 @@
 
 //! End-to-end onboarding acceptance (`design.md` §5, Phase 1 gate).
 //!
-//! **register org → genesis ①②③ → workspace + Owner**, with no duplicate
+//! **register org → genesis 123 → workspace + Owner**, with no duplicate
 //! genesis when the same provisioning is retried. Written against the real
 //! shell building blocks (control group, controller, tenant group, genesis
 //! worker), not a fake.
@@ -56,7 +56,7 @@ async fn onboarding_is_born_with_a_workspace_and_an_owner() {
         })
         .collect();
 
-    // 1. exactly three genesis events, in ①②③ order.
+    // 1. exactly three genesis events, in 1②3 order.
     assert_eq!(genesis.len(), 3);
     let types: Vec<&str> = genesis
         .iter()

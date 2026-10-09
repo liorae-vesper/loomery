@@ -36,14 +36,14 @@ const ENVELOPE_VERSION: Version = 1;
 /// The payload version of every genesis command.
 const PAYLOAD_VERSION: Version = 1;
 
-/// ① The creator takes leadership of the organization.
+/// 1 The creator takes leadership of the organization.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssignLeader {
     /// The user who becomes the organization's leader.
     pub user_id: Id,
 }
 
-/// ② The organization's default workspace.
+/// 2 The organization's default workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateWorkspace {
     /// The id the workspace must be created with — derived, not minted, so a
@@ -53,7 +53,7 @@ pub struct CreateWorkspace {
     pub name: String,
 }
 
-/// ③ The creator joins that workspace as its Owner.
+/// 3 The creator joins that workspace as its Owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddOwner {
     /// The user who becomes the workspace Owner.
@@ -98,11 +98,11 @@ impl Step {
 /// derives it from the events themselves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Progress {
-    /// ① has been committed.
+    /// 1 has been committed.
     pub assigned_leader: bool,
-    /// ② has been committed.
+    /// 2 has been committed.
     pub created_workspace: bool,
-    /// ③ has been committed.
+    /// 3 has been committed.
     pub added_owner: bool,
 }
 
@@ -223,18 +223,18 @@ impl Bootstrap {
     /// The aggregate the step's command targets.
     fn aggregate_id(&self, step: Step) -> Id {
         match step {
-            // ① is an event on the organization aggregate itself.
+            // 1 is an event on the organization aggregate itself.
             Step::AssignLeader => self.organization_id.clone(),
-            // ② creates the workspace: the aggregate *is* the new workspace.
+            // 2 creates the workspace: the aggregate *is* the new workspace.
             Step::CreateWorkspace => default_workspace_id(&self.organization_id),
-            // ③ is the Owner membership entity of the leader.
+            // 3 is the Owner membership entity of the leader.
             Step::AddOwner => owner_membership_id(&self.organization_id, &self.leader_user_id),
         }
     }
 
     /// The workspace the step's command is scoped to, if any.
     ///
-    /// ① runs before a workspace exists; ② and ③ are scoped to the workspace
+    /// ① runs before a workspace exists; 2 and 3 are scoped to the workspace
     /// they create and populate.
     fn workspace_scope(&self, step: Step) -> Option<Id> {
         match step {
@@ -483,12 +483,12 @@ mod tests {
     fn a_resumed_bootstrap_continues_where_it_stopped() {
         let bootstrap = bootstrap();
 
-        // Crash after ① committed: the resume proposes ②, not a second ①.
+        // Crash after ① committed: the resume proposes 2, not a second ①.
         let progress = bootstrap.progress(&committing(&[Step::AssignLeader]));
         let next = bootstrap.next_command(progress).unwrap().unwrap();
         assert_eq!(next.command_type, Step::CreateWorkspace.command_type());
 
-        // Crash after ②: ③ follows.
+        // Crash after 2: 3 follows.
         let progress =
             bootstrap.progress(&committing(&[Step::AssignLeader, Step::CreateWorkspace]));
         let next = bootstrap.next_command(progress).unwrap().unwrap();

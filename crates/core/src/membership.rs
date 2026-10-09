@@ -15,7 +15,7 @@
 //! They are deliberately separate streams: a workspace membership can be
 //! removed while the organization assignment stays (and vice versa).
 //!
-//! Genesis ③ (`membership.add_owner` → `membership.owner_added`) is the frozen
+//! Genesis 3 (`membership.add_owner` → `membership.owner_added`) is the frozen
 //! wire contract and is kept exactly as it was; the additional commands
 //! (`add_member`, `change_role`, `remove_member`) carry the role explicitly.
 //! Removal is a compensating event (append-only): it clears the role and never
@@ -60,10 +60,10 @@ pub fn workspace_membership_id(organization_id: &Id, workspace_id: &Id, user_id:
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// The `command_type` of genesis ③ — part of the control-plane wire contract.
+/// The `command_type` of genesis 3 — part of the control-plane wire contract.
 pub const ADD_OWNER: &str = "membership.add_owner";
 
-/// The `event_type` genesis ③ must produce — part of the wire contract.
+/// The `event_type` genesis 3 must produce — part of the wire contract.
 pub const OWNER_ADDED: &str = "membership.owner_added";
 
 /// `membership.add_member` — add a member with an explicit role.
@@ -440,7 +440,7 @@ fn unassign_member(
     Ok(execution(command, ORG_MEMBER_REMOVED, data))
 }
 
-/// Genesis ③: add the workspace's Owner. Re-adding an existing member is a
+/// Genesis 3: add the workspace's Owner. Re-adding an existing member is a
 /// different intent and is rejected.
 fn add_owner(
     state: &WorkspaceMembershipState,

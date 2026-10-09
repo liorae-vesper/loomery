@@ -2,7 +2,7 @@
 
 //! The workspace aggregate.
 //!
-//! A collaboration space inside an organization. Genesis ② creates the default
+//! A collaboration space inside an organization. Genesis 2 creates the default
 //! one with a **derived** id (`default_workspace_id(org)`), so a resumed
 //! bootstrap cannot create a second; later workspaces are created with a minted
 //! id carried in the command payload.
@@ -20,10 +20,10 @@ use crate::id::Id;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// The `command_type` of genesis ② — part of the control-plane wire contract.
+/// The `command_type` of genesis 2 — part of the control-plane wire contract.
 pub const CREATE: &str = "workspace.create";
 
-/// The `event_type` genesis ② must produce — part of the wire contract.
+/// The `event_type` genesis 2 must produce — part of the wire contract.
 pub const CREATED: &str = "workspace.created";
 
 /// `workspace.rename` — replace the workspace's display name.

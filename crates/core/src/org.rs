@@ -2,7 +2,7 @@
 
 //! The organization aggregate.
 //!
-//! Tenant-scoped facts about an organization: its name, its leader (genesis ①)
+//! Tenant-scoped facts about an organization: its name, its leader (genesis 1)
 //! and whether it has been archived. The control plane's *registry* of
 //! organizations is a separate concern; this plan is the domain state machine
 //! that a tenant group folds.
@@ -23,10 +23,10 @@ use crate::id::Id;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// The `command_type` of genesis ① — part of the control-plane wire contract.
+/// The `command_type` of genesis 1 — part of the control-plane wire contract.
 pub const ASSIGN_LEADER: &str = "organization.assign_leader";
 
-/// The `event_type` genesis ① must produce — part of the wire contract.
+/// The `event_type` genesis 1 must produce — part of the wire contract.
 pub const LEADER_ASSIGNED: &str = "organization.leader_assigned";
 
 /// `organization.rename` — replace the organization's display name.
@@ -89,7 +89,7 @@ pub struct Archived {}
 pub struct OrganizationState {
     /// The organization's display name, once it has been renamed.
     pub name: Option<String>,
-    /// The user holding leadership, once ① has been applied.
+    /// The user holding leadership, once 1 has been applied.
     pub leader_user_id: Option<Id>,
     /// Whether the organization has been archived. Monotonic: never unset.
     pub archived: bool,
@@ -169,7 +169,7 @@ impl AggregatePlan<OrganizationState, OrganizationCode> for Organization {
     }
 }
 
-/// Genesis ①: grant leadership. Re-assignment is allowed (last write wins);
+/// Genesis 1: grant leadership. Re-assignment is allowed (last write wins);
 /// an archived organization refuses it.
 fn assign_leader(
     state: &OrganizationState,

@@ -1,7 +1,7 @@
 # Tutorial — implementing the genesis bootstrap worker
 
 This tutorial takes you from "the genesis script exists" to "a group is born
-with ①②③ committed, and a crash mid-provisioning cannot duplicate them".
+with 1②3 committed, and a crash mid-provisioning cannot duplicate them".
 
 It is split in two halves:
 
@@ -66,7 +66,7 @@ The loop is the only new logic. It rests on three invariants:
 | `Progress::{next, is_done, is_complete}` | the sequential cursor: `next()` is the only step that may run |
 | `Bootstrap::command(step) -> Result<Command, genesis::Error>` | the ready-to-propose envelope |
 | `Bootstrap::next_command(progress)` | convenience for callers that only need the command |
-| `Step::{ALL, slug, command_type, event_type}` | ①②③, their wire names |
+| `Step::{ALL, slug, command_type, event_type}` | 1②3, their wire names |
 | `step_key`, `bootstrap_correlation_key`, `command_id`, `default_workspace_id`, `owner_membership_id` | the derivations (frozen by golden tests) |
 
 ---
@@ -395,7 +395,7 @@ mod tests {
     use loomery_genesis::Step;
 
     /// The append succeeded, the worker never heard back: resuming must
-    /// propose ② — not a second ①.
+    /// propose ② — not a second 1.
     #[test]
     fn a_lost_response_does_not_duplicate_the_step() {
         let mut group = FakeGroup {
@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(
             outcome.appended,
             [Step::CreateWorkspace, Step::AddOwner],
-            "the resumed run must not repeat ①"
+            "the resumed run must not repeat 1"
         );
         for step in Step::ALL {
             assert_eq!(committed(&group, step), 1, "{step:?}");
@@ -455,7 +455,7 @@ The rest of the suite — each is a handful of lines:
 | `the_happy_path_commits_the_three_steps_in_order` | `appended == Step::ALL` and the three `command_type`s, in order |
 | `every_step_is_committed_exactly_once` | exactly one event per step key after a clean run |
 | `a_completed_group_appends_nothing` | re-running a finished group is a no-op |
-| `a_worker_started_mid_script_picks_up_the_remaining_steps` | ①② pre-seeded → only ③ is proposed |
+| `a_worker_started_mid_script_picks_up_the_remaining_steps` | ①② pre-seeded → only 3 is proposed |
 | `a_failed_propose_reports_the_step` | errors carry the step (`Error::Propose { step, .. }`) |
 
 **Verify**
@@ -742,7 +742,7 @@ the single most useful dashboard panel for this phase: it should sit at zero.
 
 The Phase-1 gate in `docs/design.md` §5 says:
 
-> register org → genesis ①②③ → workspace + Owner; crash mid-provisioning resumes
+> register org → genesis ①②3 → workspace + Owner; crash mid-provisioning resumes
 > with no duplicate genesis.
 
 Make that a test, not a claim. The assertions that prove it:

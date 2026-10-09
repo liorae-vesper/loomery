@@ -6,7 +6,7 @@
 //!
 //! 1. **Record the placement** in the control group (`tenant.register`), so a
 //!    crash mid-provisioning leaves a reconcilable record;
-//! 2. **Run genesis** on the tenant group (bootstrap ①②③);
+//! 2. **Run genesis** on the tenant group (bootstrap 123);
 //! 3. **Activate** the tenant in the control group (`tenant.activate`) — only
 //!    once genesis committed;
 //! 4. **Publish the route** by projecting the control group's records into the
@@ -421,7 +421,7 @@ mod tests {
         let router = Router::new();
         let bootstrap = bootstrap_value();
 
-        // A previous controller recorded the placement and committed only ①.
+        // A previous controller recorded the placement and committed only 1.
         control
             .propose(control_command(
                 &bootstrap.organization_id,
@@ -445,7 +445,7 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].0, bootstrap.organization_id);
 
-        // Resuming picks up ②③ and activates; nothing is re-initialized.
+        // Resuming picks up ②3 and activates; nothing is re-initialized.
         let genesis = resume(&mut control, &mut tenant, &router, &bootstrap)
             .await
             .unwrap();

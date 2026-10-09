@@ -256,7 +256,7 @@ impl CommandPlane {
     /// Whether `identity` may touch `organization_id`'s group.
     ///
     /// The rule is one line of policy: an administrator may, everyone else must be
-    /// assigned to the organization (the genesis leader is assigned by ①, invited
+    /// assigned to the organization (the genesis leader is assigned by 1, invited
     /// users by the acceptance saga). It is deliberately *not* finer-grained —
     /// per-workspace roles are the read-model work.
     ///

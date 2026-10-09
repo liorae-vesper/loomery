@@ -12,7 +12,7 @@ principle 3); the control group holds the *placement* of every such group.
                       │  tenant.*   ▼
                       │           Router { organization_id → group }
                       ▼
-                 tenant group ──► genesis ①②③ ──► active
+                 tenant group ──► genesis 123 ──► active
 ```
 
 ## 1. The tenant record (`loomery_core::tenant`)
@@ -68,7 +68,7 @@ provision(control, tenant, router, group_id, replicas, &bootstrap) -> Genesis
 
 1. **Record the placement** in the control group (`tenant.register`) *before*
    touching the tenant group, so a crash is reconcilable from the control log.
-2. **Run genesis** on the tenant group (`bootstrap::run`, ①②③).
+2. **Run genesis** on the tenant group (`bootstrap::run`, 1②3).
 3. **Activate** the tenant (`tenant.activate`) — only after genesis committed.
 4. **Publish the route** by projecting the control records into the router.
 

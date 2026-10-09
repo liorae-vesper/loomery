@@ -9,7 +9,7 @@
 //!
 //! Four jobs, four derivations:
 //!
-//! - [`step_key`] — the *intent* of one command (①, ② or ③); a retry is a replay.
+//! - [`step_key`] — the *intent* of one command (1, 2 or 3); a retry is a replay.
 //! - [`bootstrap_correlation_key`] — the *workflow*, shared by all three steps.
 //! - [`default_workspace_id`] / [`owner_membership_id`] — the *entities* the
 //!   workflow creates.
@@ -58,11 +58,11 @@ pub fn bootstrap_actor() -> Actor {
 /// The genesis steps, in commit order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Step {
-    /// ① Grant the organization's creator leadership.
+    /// 1 Grant the organization's creator leadership.
     AssignLeader,
-    /// ② Create the organization's default workspace.
+    /// 2 Create the organization's default workspace.
     CreateWorkspace,
-    /// ③ Add the creator as Owner of that workspace.
+    /// 3 Add the creator as Owner of that workspace.
     AddOwner,
 }
 
@@ -148,7 +148,7 @@ pub fn default_workspace_key(organization_id: &Id) -> Key {
     )
 }
 
-/// The id of the Owner membership ③ creates for `user_id`.
+/// The id of the Owner membership 3 creates for `user_id`.
 ///
 /// Derived like the workspace id: "the Owner membership of user U in this
 /// organization" is a function of the workflow, so every resumer derives the
@@ -289,7 +289,7 @@ mod tests {
         let organization = org();
         let correlation = bootstrap_correlation_key(&organization);
 
-        // The workflow's identity is stable across attempts and shared by ①②③.
+        // The workflow's identity is stable across attempts and shared by 123.
         assert_eq!(correlation, bootstrap_correlation_key(&organization));
         // Another organization is another workflow.
         assert_ne!(correlation, bootstrap_correlation_key(&other_org()));

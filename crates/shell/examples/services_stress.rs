@@ -314,7 +314,7 @@ mod stress {
         Ok(())
     }
 
-    /// Gives `user_id` `role` in `workspace_id`, as genesis ③ and the invitation
+    /// Gives `user_id` `role` in `workspace_id`, as genesis 3 and the invitation
     /// flow do.
     async fn join_workspace(
         group: &mut RaftGroup,

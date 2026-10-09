@@ -342,7 +342,7 @@ mod tests {
         let events = group.committed_events(&organization_id).await.unwrap();
         let genesis = genesis_events(&events, &organization_id);
 
-        // 1. exactly three genesis events, in ①②③ order.
+        // 1. exactly three genesis events, in 1②3 order.
         assert_eq!(
             genesis
                 .iter()
@@ -381,7 +381,7 @@ mod tests {
         let organization_id = organization();
         let bootstrap = bootstrap_value();
 
-        // A previous attempt committed ① and died before ②. (The first
+        // A previous attempt committed 1 and died before ②. (The first
         // client write lands after the initialization membership entry, so the
         // index is 2, not 1.)
         let first = group
@@ -390,7 +390,7 @@ mod tests {
             .unwrap();
         assert_eq!(first, ProposeOutcome::Appended { first_log_index: 2 });
 
-        // The resume proposes ② and ③ — never a second ①.
+        // The resume proposes ② and 3 — never a second ①.
         let outcome = bootstrap::run(&mut group, &bootstrap).await.unwrap();
         assert_eq!(outcome.appended, [Step::CreateWorkspace, Step::AddOwner]);
 
