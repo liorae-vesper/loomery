@@ -179,9 +179,12 @@ mise task rather than hardcoded commands:
 Every step runs inside the image built from
 [`.buildkite/Dockerfile`](.buildkite/Dockerfile): the Rust toolchain and cargo
 tools pinned by `mise.lock` (installed with `mise install`), plus `protoc`,
-`libclang` and the Docker CLI the build and the integration suite need. Nothing
-is installed at run time, so the pipeline reads the same as
-`docker run … mise run <task>`.
+`libclang` and the Docker CLI the build and the integration suite need. It also
+carries the RocksDB archive that `librocksdb-sys` links instead of compiling
+(`ROCKSDB_LIB_DIR` — see the prebuild note in the Dockerfile) and
+`mr-boxington`, which mise enables for every task through the Rust tool's
+`mr_boxington` option. Nothing is installed at run time, so the pipeline reads
+the same as `docker run … mise run <task>`.
 
 The image build step uploads `loomery-ci.tar.gz` as a build artifact. Each
 parallel step downloads and loads that archive into its own Docker daemon,
@@ -189,15 +192,21 @@ so hosted agents do not need to share local images or use a separate registry.
 Image tags include the Buildkite build ID to isolate concurrent builds.
 
 [Linux hosted cache volumes](https://buildkite.com/docs/agent/buildkite-hosted/cache-volumes)
-retain Cargo's registry sources, Git dependencies,
-security advisory databases and the complete build output (including RocksDB's
-native library). Each step has its own cache so parallel jobs and coverage flags
-do not overwrite one another. The image build also caches all Docker build
-layers, including the tools installed by mise. The first successful run warms
-each cache; later runs reuse dependencies whose versions and build settings
-still match. Failed jobs do not save their cache volumes.
-Increment the Rust cache names' `v1` suffix when changing native compilers or
-system libraries in the CI image, to force a fresh native build.
+retain Cargo's target directory, registry sources, Git dependencies and
+mr-boxington's compiler-action store. Each step has its own cache so parallel
+jobs and coverage flags do not overwrite one another. The image build also
+caches all Docker build layers, including the tools installed by mise. The first
+successful run warms each cache; later runs reuse dependencies whose versions
+and build settings still match. Failed jobs do not save their cache volumes.
+
+Volumes are attached best-effort and saved only by a step that succeeds, so what
+a job finds in one varies between builds. That is why the five-minute RocksDB
+C++ build is in the image rather than in a cache, and why mr-boxington's store
+earns its place: it restores compiler actions that Cargo's fingerprints no
+longer match. Increment the Rust cache names' `v1` suffix when changing native
+compilers or system libraries in the CI image, to force a fresh native build —
+the linked test binaries embed the RocksDB archive statically, and Cargo does
+not relink one whose dependencies' fingerprints are unchanged.
 
 ---
 
