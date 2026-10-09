@@ -8,9 +8,12 @@ deterministic core** and an **imperative shell**, with consensus provided by
 [OpenRaft](https://github.com/openraft/openraft) on the [Tokio](https://tokio.rs)
 async runtime.
 
-> **Status: early development.** The pure core (`crates/core`) is in progress;
-> the shell has OpenRaft consensus, tonic networking and RocksDB persistence.
-> The gateway, control plane and outbox remain planned.
+> **Status: early development.** The deterministic core, the consensus shell and the
+> runtime host are in place: OpenRaft consensus over tonic, RocksDB persistence, the
+> gateway and control plane, the outbox and sagas, and a Phase-1 end-to-end acceptance
+> suite. Reads still answer from the applied log rather than from durable projections,
+> and the search index is not built. [CONTINUE.md](workpad/CONTINUE.md) records what is
+> done and what is next.
 
 ---
 
@@ -87,7 +90,7 @@ The core crate currently provides `Id` (canonical UUID: minted `v7` or derived
 `v5`), `Key` (derived `UUIDv5` identity — causation keys, event ids, intent
 fingerprints), `Timestamp`, `Actor`, `Event`/`Command`, `DomainError`, the
 `AggregatePlan` trait (`prepare`/`apply`), the `Registry` idempotency window,
-and versioning/upcast machinery. See D12 in `docs/design.md` for the identity
+and versioning/upcast machinery. See D12 in `workpad/design.md` for the identity
 model. The genesis crate builds on it: the bootstrap's three commands with
 derived identity, plus crash-resume progress read back from the log.
 
