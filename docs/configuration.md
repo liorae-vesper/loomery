@@ -191,6 +191,31 @@ Validation: the three limits positive; and if batching is on, `max_batch_bytes` 
 at least `max_batch_commands` (every command is at least one byte, so a smaller budget
 makes the count unreachable).
 
+## Environment overrides
+
+`HostConfig::load` parses the file and *then* applies a fixed set of `LOOMERY_*`
+variables over it, so a host can vary a field or two without a separate file. The file
+wins for everything else; precedence is file first, environment second.
+
+| Variable | Overrides |
+|---|---|
+| `LOOMERY_CONFIG` | the path to load — read by the server before anything else, so it is the one variable that does not need a file |
+| `LOOMERY_NODE_ID` | `node_id` (must parse as a number) |
+| `LOOMERY_DATA_DIR` | `data_dir` |
+| `LOOMERY_HTTP_BIND` | `http.bind` |
+| `LOOMERY_NATS_URL` | `nats.url` |
+| `LOOMERY_OIDC_ISSUER` | `oidc.issuer` |
+| `LOOMERY_OIDC_JWKS_URI` | `oidc.jwks_uri` |
+| `LOOMERY_OIDC_AUDIENCE` | `oidc.audience` |
+| `LOOMERY_OIDC_ADMIN_GROUP` | `oidc.admin_group` |
+
+The broker and identity variables **create their section when it is absent**, which is
+the point of them: `LOOMERY_NATS_URL=…` alone turns the outbox and saga workers on, and
+`LOOMERY_OIDC_ISSUER=…` alone is enough for the gateway to serve. This is deliberately
+a short list — the fields a deployment varies *per host* — and not a generic mapping: a
+field that is not here cannot be set from the environment, and the rest belong in the
+file, where they are visible and validated together.
+
 ## How it comes together
 
 **Boot order.** `HostConfig::validate` runs first, then each group is validated
@@ -264,3 +289,12 @@ silently wrong:
 - **`deny_unknown_fields`.** A typo in a key is an error, not a default.
 - **The tenant-scoping rules** (D11 subject and dedup identity): derived, not chosen.
 - **The batch statistics.** Published whether or not anyone reads them.
+
+## Deliberately out of scope
+
+Two things are configuration, but not *deployment* configuration, and this document
+does not cover them: the **benchmark harness's own config**
+(`examples/consensus_bench` — points, duration, concurrency, trials), which is
+measurement tooling; and the **test and benchmark environment variables**
+(`LOOMERY_TEST_*`, `LOOMERY_APPLY_TIMINGS`), which are read by test and example paths
+rather than by the runtime.
