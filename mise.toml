@@ -85,6 +85,10 @@ run = "python3 tools/docs-links/check.py docs README.md workpad"
 description = "Builds the published VitePress site in docs/ (a dead link fails the build; CI checks the pages, it does not build the site)"
 run = "npm --prefix docs run build"
 
+[tasks.docs-site-publish]
+description = "Builds the site and publishes it to the gh-pages branch, which a static host can deploy from"
+run = "sh scripts/publish-docs-site.sh"
+
 [tasks.docs-mermaid-render]
 description = "Renders the docs' Mermaid diagrams to tools/mermaid-check/out for review"
 run = "sh tools/mermaid-check/check.sh --render docs"
